@@ -1,0 +1,29 @@
+from app.shared.domain.exceptions.base import BaseAppException
+
+
+class AuthTokenExpiredException(BaseAppException):
+    code = "AUTH_TOKEN_EXPIRED"
+
+
+class AuthTokenInvalidException(BaseAppException):
+    code = "AUTH_TOKEN_INVALID"
+
+
+class AuthInvalidCredentialsException(BaseAppException):
+    code = "AUTH_INVALID_CREDENTIALS"
+
+
+class Auth2FACodeInvalidException(BaseAppException):
+    code = "AUTH_2FA_CODE_INVALID"
+
+
+class OAuthStateInvalidException(BaseAppException):
+    code = "AUTH_OAUTH_STATE_INVALID"
+
+
+class RefreshTokenInvalidException(BaseAppException):
+    code = "AUTH_REFRESH_TOKEN_INVALID"
+
+
+class RefreshTokenRevokedException(BaseAppException):
+    code = "AUTH_REFRESH_TOKEN_REVOKED"

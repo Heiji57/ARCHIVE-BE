@@ -1,0 +1,45 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Type checking / linting
+.mypy_cache/
+.ruff_cache/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Alembic
+migrations/versions/*.pyc
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

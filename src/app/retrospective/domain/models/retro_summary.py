@@ -1,0 +1,37 @@
+from dataclasses import dataclass
+from datetime import date
+
+from app.retrospective.domain.exceptions.exceptions import (
+    SummaryAlreadyInProgressException,
+    SummaryInvalidStateException,
+)
+from app.retrospective.domain.models.value_objects import (
+    SummaryContent,
+    SummaryStatus,
+    SummaryType,
+)
+from app.shared.domain.models.base import BaseEntity
+
+
+@dataclass(kw_only=True)
+class RetroSummary(BaseEntity):
+    user_id: str
+    summary_type: SummaryType
+    period_start: date
+    period_end: date
+    status: SummaryStatus
+    content: SummaryContent | None  # None — pending / in_progress / failed
+
+    def mark_in_progress(self) -> None:
+        if self.status == SummaryStatus.IN_PROGRESS:
+            raise SummaryAlreadyInProgressException()
+        if self.status == SummaryStatus.COMPLETED:
+            raise SummaryInvalidStateException("Already completed summary cannot restart.")
+        self.status = SummaryStatus.IN_PROGRESS
+
+    def complete(self, content: SummaryContent) -> None:
+        self.status = SummaryStatus.COMPLETED
+        self.content = content
+
+    def fail(self) -> None:
+        self.status = SummaryStatus.FAILED
