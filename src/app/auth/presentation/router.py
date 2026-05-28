@@ -1,5 +1,5 @@
+from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, Request, Response, status
-from dishka.integrations.fastapi import FromDishka
 
 from app.auth.application.dtos.commands import (
     LoginCommand,
@@ -27,7 +27,7 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
 
 _REFRESH_COOKIE = "refresh_token"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7일
@@ -130,8 +130,8 @@ async def login(
 async def refresh_token(
     request: Request,
     response: Response,
+    use_case: FromDishka[RefreshTokenUseCase],
     raw_refresh: str = Depends(extract_refresh_token),
-    use_case: FromDishka[RefreshTokenUseCase] = ...,  # type: ignore[assignment]
 ) -> ApiResponse[TokenResponse]:
     result = await use_case.execute(
         raw_refresh_token=raw_refresh,
@@ -148,9 +148,9 @@ async def refresh_token(
 )
 async def logout(
     response: Response,
+    use_case: FromDishka[LogoutUseCase],
     current_user: UserContext = Depends(get_current_user),
     raw_refresh: str = Depends(extract_refresh_token),
-    use_case: FromDishka[LogoutUseCase] = ...,  # type: ignore[assignment]
 ) -> ApiResponse[None]:
     await use_case.execute(user_id=current_user.id, raw_refresh_token=raw_refresh)
     _clear_refresh_cookie(response)
@@ -163,8 +163,8 @@ async def logout(
     response_model=ApiResponse[UserResponse],
 )
 async def get_me(
+    use_case: FromDishka[GetMeUseCase],
     current_user: UserContext = Depends(get_current_user),
-    use_case: FromDishka[GetMeUseCase] = ...,  # type: ignore[assignment]
 ) -> ApiResponse[UserResponse]:
     user = await use_case.execute(current_user.id)
     return ApiResponse.ok(UserResponse.from_entity(user))
@@ -177,8 +177,8 @@ async def get_me(
 )
 async def update_profile(
     body: UpdateProfileRequest,
+    use_case: FromDishka[UpdateProfileUseCase],
     current_user: UserContext = Depends(get_current_user),
-    use_case: FromDishka[UpdateProfileUseCase] = ...,  # type: ignore[assignment]
 ) -> ApiResponse[UserResponse]:
     user = await use_case.execute(
         UpdateProfileCommand(user_id=current_user.id, display_name=body.display_name)

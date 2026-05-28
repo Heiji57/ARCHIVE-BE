@@ -4,22 +4,32 @@ from dishka import Provider, Scope, provide
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.login import LoginUseCase
 from app.auth.application.use_cases.logout import LogoutUseCase
 from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
 from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
-from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
-from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileUseCase
+from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
 from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
 from app.notification.domain.repositories.repository import INotificationRepository
 from app.notification.infrastructure.persistence.repositories.notification_repo import NotificationRepository
+from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
+from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
+from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
+from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
+from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository, IRetroSummaryRepository
 from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import JournalEntryRepository
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import RetroSummaryRepository
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
+from app.todo.application.use_cases.create_todo import CreateTodoUseCase
+from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
+from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
+from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
+from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
 from app.user.domain.repositories.repository import IUserRepository
@@ -66,7 +76,6 @@ class RequestProvider(Provider):
     async def db_session(
         self, factory: async_sessionmaker[AsyncSession]
     ) -> AsyncGenerator[AsyncSession, None]:
-        # begin() = 성공 시 자동 커밋, 예외 시 자동 롤백
         async with factory.begin() as session:
             yield session
 
@@ -142,3 +151,57 @@ class RequestProvider(Provider):
     @provide
     def update_profile_use_case(self, user_repo: IUserRepository) -> UpdateProfileUseCase:
         return UpdateProfileUseCase(user_repo)
+
+    # ── Todo Use Cases ────────────────────────────────────────────────────────
+
+    @provide
+    def create_todo_use_case(self, todo_repo: ITodoRepository) -> CreateTodoUseCase:
+        return CreateTodoUseCase(todo_repo)
+
+    @provide
+    def update_todo_use_case(self, todo_repo: ITodoRepository) -> UpdateTodoUseCase:
+        return UpdateTodoUseCase(todo_repo)
+
+    @provide
+    def delete_todo_use_case(self, todo_repo: ITodoRepository) -> DeleteTodoUseCase:
+        return DeleteTodoUseCase(todo_repo)
+
+    @provide
+    def get_todos_by_date_use_case(self, todo_repo: ITodoRepository) -> GetTodosByDateUseCase:
+        return GetTodosByDateUseCase(todo_repo)
+
+    @provide
+    def get_todos_by_range_use_case(self, todo_repo: ITodoRepository) -> GetTodosByRangeUseCase:
+        return GetTodosByRangeUseCase(todo_repo)
+
+    # ── Journal Entry Use Cases ───────────────────────────────────────────────
+
+    @provide
+    def create_entry_use_case(
+        self, entry_repo: IJournalEntryRepository
+    ) -> CreateEntryUseCase:
+        return CreateEntryUseCase(entry_repo)
+
+    @provide
+    def upsert_entry_use_case(
+        self, entry_repo: IJournalEntryRepository
+    ) -> UpsertEntryUseCase:
+        return UpsertEntryUseCase(entry_repo)
+
+    @provide
+    def get_entry_use_case(
+        self, entry_repo: IJournalEntryRepository
+    ) -> GetEntryUseCase:
+        return GetEntryUseCase(entry_repo)
+
+    @provide
+    def get_entries_use_case(
+        self, entry_repo: IJournalEntryRepository
+    ) -> GetEntriesUseCase:
+        return GetEntriesUseCase(entry_repo)
+
+    @provide
+    def delete_entry_use_case(
+        self, entry_repo: IJournalEntryRepository
+    ) -> DeleteEntryUseCase:
+        return DeleteEntryUseCase(entry_repo)

@@ -24,6 +24,11 @@ class IJournalEntryRepository(ABC):
     ) -> list[JournalEntry]: ...
 
     @abstractmethod
+    async def find_by_retro_type(
+        self, user_id: str, retro_type: str
+    ) -> list[JournalEntry]: ...
+
+    @abstractmethod
     async def find_by_full_text(
         self, user_id: str, query: str, page: int, size: int
     ) -> tuple[list[JournalEntry], int]: ...

@@ -15,6 +15,7 @@ class JournalEntryModel(Base):
     date_key: Mapped[str] = mapped_column(String(10), nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    retro_type: Mapped[str] = mapped_column(String(20), nullable=False, server_default="daily")
     content_tsv: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

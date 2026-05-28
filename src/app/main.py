@@ -9,17 +9,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.auth.presentation.router import router as auth_router
+from app.retrospective.presentation.router import router as entry_router
 from app.shared.domain.exceptions.base import BaseAppException
+from app.todo.presentation.router import router as todo_router
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.container.providers import AppProvider, RequestProvider
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    container = make_async_container(AppProvider(), RequestProvider())
-    setup_dishka(container, app=app)
     yield
-    await container.close()
+    # dishka가 app.state.dishka_container에 컨테이너를 저장함
+    await app.state.dishka_container.close()
 
 
 def create_app() -> FastAPI:
@@ -31,6 +32,10 @@ def create_app() -> FastAPI:
         docs_url="/docs" if settings.is_development else None,
         redoc_url="/redoc" if settings.is_development else None,
     )
+
+    # setup_dishka는 앱 시작 전(create_app 단계)에 호출해야 미들웨어 등록 가능
+    container = make_async_container(AppProvider(), RequestProvider())
+    setup_dishka(container, app=app)
 
     app.add_middleware(
         CORSMiddleware,
@@ -51,6 +56,8 @@ def create_app() -> FastAPI:
         return await _handler(request, exc)
 
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(todo_router, prefix="/api/v1")
+    app.include_router(entry_router, prefix="/api/v1")
     return app
 
 

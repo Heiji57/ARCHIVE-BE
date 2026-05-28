@@ -2,6 +2,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+class RetroType(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
 class SummaryType(StrEnum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"

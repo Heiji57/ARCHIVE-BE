@@ -24,6 +24,18 @@ class TodoRepository(ITodoRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def find_by_date_range(self, user_id: str, from_date: str, to_date: str) -> list[Todo]:
+        result = await self._session.execute(
+            select(TodoModel)
+            .where(
+                TodoModel.user_id == user_id,
+                TodoModel.date_key >= from_date,
+                TodoModel.date_key <= to_date,
+            )
+            .order_by(TodoModel.date_key, TodoModel.created_at)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     async def find_by_date_key(self, user_id: str, date_key: str) -> list[Todo]:
         result = await self._session.execute(
             select(TodoModel)

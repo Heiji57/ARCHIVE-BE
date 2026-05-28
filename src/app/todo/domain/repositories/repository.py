@@ -14,6 +14,11 @@ class ITodoRepository(ABC):
     async def find_by_date_key(self, user_id: str, date_key: str) -> list[Todo]: ...
 
     @abstractmethod
+    async def find_by_date_range(
+        self, user_id: str, from_date: str, to_date: str
+    ) -> list[Todo]: ...
+
+    @abstractmethod
     async def find_by_full_text(
         self, user_id: str, query: str, page: int, size: int
     ) -> tuple[list[Todo], int]: ...
