@@ -29,12 +29,6 @@ class RegisterRequest(BaseModel):
             raise ValueError("Password must be at least 8 characters.")
         return v
 
-    @field_validator("password_confirm")
-    @classmethod
-    def passwords_match(cls, v: str, info: object) -> str:
-        from pydantic import model_validator  # noqa: F401
-        return v
-
     def validate_passwords_match(self) -> None:
         if self.password != self.password_confirm:
             raise ValueError("Passwords do not match.")
@@ -43,3 +37,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class UpdateProfileRequest(BaseModel):
+    display_name: str | None = None
