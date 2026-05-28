@@ -28,11 +28,12 @@ class JournalEntryRepository(IJournalEntryRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
-    async def find_by_date_key(self, user_id: str, date_key: str) -> JournalEntry | None:
+    async def find_by_date_key(self, user_id: str, date_key: str, retro_type: str) -> JournalEntry | None:
         result = await self._session.execute(
             select(JournalEntryModel).where(
                 JournalEntryModel.user_id == user_id,
                 JournalEntryModel.date_key == date_key,
+                JournalEntryModel.retro_type == retro_type,
             )
         )
         model = result.scalar_one_or_none()

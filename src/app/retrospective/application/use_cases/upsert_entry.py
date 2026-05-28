@@ -21,6 +21,7 @@ class UpsertEntryUseCase:
             existing.content = cmd.content
             existing.retro_type = RetroType(cmd.retro_type)
             existing.date_key = cmd.date_key
+            existing.updated_at = datetime.now(timezone.utc)
             return await self._entry_repo.save(existing)
 
         now = datetime.now(timezone.utc)

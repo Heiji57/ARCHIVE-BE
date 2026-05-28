@@ -15,7 +15,7 @@ class IJournalEntryRepository(ABC):
 
     @abstractmethod
     async def find_by_date_key(
-        self, user_id: str, date_key: str
+        self, user_id: str, date_key: str, retro_type: str
     ) -> JournalEntry | None: ...
 
     @abstractmethod

@@ -1,5 +1,8 @@
+import json
+
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.auth.application.dtos.commands import (
     LoginCommand,
@@ -8,6 +11,8 @@ from app.auth.application.dtos.commands import (
     VerifyEmailCodeCommand,
 )
 from app.auth.application.use_cases.get_me import GetMeUseCase
+from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
+from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
 from app.auth.application.use_cases.login import LoginUseCase
 from app.auth.application.use_cases.logout import LogoutUseCase
 from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
@@ -15,6 +20,7 @@ from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
+from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.presentation.requests.requests import (
     LoginRequest,
     RegisterRequest,
@@ -24,7 +30,9 @@ from app.auth.presentation.requests.requests import (
 )
 from app.auth.presentation.responses.responses import PreAuthTokenResponse, TokenResponse, UserResponse
 from app.shared.domain.context.user_context import UserContext
+from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
+from app.shared.infrastructure.config.settings import get_settings
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
@@ -46,6 +54,44 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 
 def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key=_REFRESH_COOKIE, httponly=True, secure=True, samesite="lax")
+
+
+def _oauth_success_html(access_token: str, frontend_origin: str) -> str:
+    message = json.dumps({"type": "oauth_success", "access_token": access_token})
+    origin = json.dumps(frontend_origin)
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>OAuth</title></head>
+<body>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({message}, {origin});
+    window.close();
+  }} else {{
+    window.location.href = {origin};
+  }}
+</script>
+</body>
+</html>"""
+
+
+def _oauth_error_html(error_code: str, frontend_origin: str) -> str:
+    message = json.dumps({"type": "oauth_error", "error": error_code})
+    origin = json.dumps(frontend_origin)
+    return f"""<!DOCTYPE html>
+<html>
+<head><title>OAuth Error</title></head>
+<body>
+<script>
+  if (window.opener) {{
+    window.opener.postMessage({message}, {origin});
+    window.close();
+  }} else {{
+    window.location.href = {origin};
+  }}
+</script>
+</body>
+</html>"""
 
 
 @router.post(
@@ -184,3 +230,50 @@ async def update_profile(
         UpdateProfileCommand(user_id=current_user.id, display_name=body.display_name)
     )
     return ApiResponse.ok(UserResponse.from_entity(user))
+
+
+@router.get("/oauth/{provider}/authorize")
+async def oauth_authorize(
+    provider: OAuthProvider,
+    use_case: FromDishka[InitiateOAuthUseCase],
+) -> RedirectResponse:
+    redirect_url = await use_case.execute(provider)
+    return RedirectResponse(url=redirect_url, status_code=status.HTTP_302_FOUND)
+
+
+@router.get("/oauth/{provider}/callback")
+async def oauth_callback(
+    provider: OAuthProvider,
+    request: Request,
+    use_case: FromDishka[HandleOAuthCallbackUseCase],
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+) -> HTMLResponse:
+    frontend_origin = get_settings().frontend_url
+
+    if error or not code or not state:
+        return HTMLResponse(content=_oauth_error_html(error or "missing_params", frontend_origin))
+
+    try:
+        result = await use_case.execute(
+            provider=provider,
+            code=code,
+            state=state,
+            device_info=request.headers.get("user-agent"),
+        )
+    except BaseAppException as e:
+        return HTMLResponse(content=_oauth_error_html(e.code, frontend_origin))
+    except Exception:
+        return HTMLResponse(content=_oauth_error_html("INTERNAL_ERROR", frontend_origin))
+
+    html_response = HTMLResponse(content=_oauth_success_html(result["access_token"], frontend_origin))
+    html_response.set_cookie(
+        key=_REFRESH_COOKIE,
+        value=result["refresh_token"],
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=_COOKIE_MAX_AGE,
+    )
+    return html_response

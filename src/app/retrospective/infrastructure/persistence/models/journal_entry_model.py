@@ -21,7 +21,7 @@ class JournalEntryModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "date_key", name="uq_journal_entries_user_date"),
+        UniqueConstraint("user_id", "date_key", "retro_type", name="uq_journal_entries_user_date_retro_type"),
         Index("ix_journal_entries_content_tsv", "content_tsv", postgresql_using="gin"),
         Index("ix_journal_entries_user_id_date_key", "user_id", "date_key"),
     )

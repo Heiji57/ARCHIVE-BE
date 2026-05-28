@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from app.retrospective.application.dtos.commands import CreateEntryCommand
+from app.retrospective.domain.exceptions.exceptions import JournalEntryAlreadyExistsException
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.value_objects import RetroType
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
@@ -12,6 +13,10 @@ class CreateEntryUseCase:
         self._entry_repo = entry_repo
 
     async def execute(self, cmd: CreateEntryCommand) -> JournalEntry:
+        existing = await self._entry_repo.find_by_date_key(cmd.user_id, cmd.date_key, cmd.retro_type)
+        if existing:
+            raise JournalEntryAlreadyExistsException()
+
         now = datetime.now(timezone.utc)
         entry = JournalEntry(
             id=generate_id("entry"),

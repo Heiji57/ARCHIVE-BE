@@ -5,6 +5,8 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.auth.application.use_cases.get_me import GetMeUseCase
+from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
+from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
 from app.auth.application.use_cases.login import LoginUseCase
 from app.auth.application.use_cases.logout import LogoutUseCase
 from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
@@ -12,8 +14,15 @@ from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
+from app.auth.domain.models.value_objects import OAuthProvider
+from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
+from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
+from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
+from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
+from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
+from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import OAuthConnectionRepository
 from app.notification.domain.repositories.repository import INotificationRepository
 from app.notification.infrastructure.persistence.repositories.notification_repo import NotificationRepository
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
@@ -66,6 +75,18 @@ class AppProvider(Provider):
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
         return EmailVerificationCache(redis, config.auth)
 
+    @provide
+    def oauth_state_cache(self, config: AppConfig) -> OAuthStateCache:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return OAuthStateCache(redis)
+
+    @provide
+    def oauth_client_registry(self, config: AppConfig) -> OAuthClientRegistry:
+        return OAuthClientRegistry({
+            OAuthProvider.GITHUB: GitHubOAuthClient(config.github_oauth),
+            OAuthProvider.GOOGLE: GoogleOAuthClient(config.google_oauth),
+        })
+
 
 class RequestProvider(Provider):
     """REQUEST scope — 요청마다 생성·소멸하는 의존성."""
@@ -100,6 +121,10 @@ class RequestProvider(Provider):
     @provide
     def notification_repo(self, session: AsyncSession) -> INotificationRepository:
         return NotificationRepository(session)
+
+    @provide
+    def oauth_connection_repo(self, session: AsyncSession) -> IOAuthConnectionRepository:
+        return OAuthConnectionRepository(session)
 
     # ── Auth Use Cases ────────────────────────────────────────────────────────
 
@@ -151,6 +176,25 @@ class RequestProvider(Provider):
     @provide
     def update_profile_use_case(self, user_repo: IUserRepository) -> UpdateProfileUseCase:
         return UpdateProfileUseCase(user_repo)
+
+    @provide
+    def initiate_oauth_use_case(
+        self, registry: OAuthClientRegistry, state_cache: OAuthStateCache
+    ) -> InitiateOAuthUseCase:
+        return InitiateOAuthUseCase(registry, state_cache)
+
+    @provide
+    def handle_oauth_callback_use_case(
+        self,
+        registry: OAuthClientRegistry,
+        state_cache: OAuthStateCache,
+        oauth_connection_repo: IOAuthConnectionRepository,
+        user_repo: IUserRepository,
+        auth_token_cache: AuthTokenCache,
+    ) -> HandleOAuthCallbackUseCase:
+        return HandleOAuthCallbackUseCase(
+            registry, state_cache, oauth_connection_repo, user_repo, auth_token_cache
+        )
 
     # ── Todo Use Cases ────────────────────────────────────────────────────────
 
