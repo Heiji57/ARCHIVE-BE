@@ -1,7 +1,9 @@
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.notification.domain.models.notification import Notification
+from app.notification.domain.models.value_objects import NotificationCategory, NotificationType
 from app.notification.domain.repositories.repository import INotificationRepository
 from app.notification.infrastructure.persistence.models.notification_model import NotificationModel
 
@@ -39,10 +41,30 @@ class NotificationRepository(INotificationRepository):
             .values(is_read=True)
         )
 
+    async def delete(self, id: str, user_id: str) -> None:
+        await self._session.execute(
+            sa_delete(NotificationModel)
+            .where(NotificationModel.id == id, NotificationModel.user_id == user_id)
+        )
+
+    async def delete_read(self, user_id: str) -> None:
+        await self._session.execute(
+            sa_delete(NotificationModel)
+            .where(NotificationModel.user_id == user_id, NotificationModel.is_read.is_(True))
+        )
+
+    async def delete_all(self, user_id: str) -> None:
+        await self._session.execute(
+            sa_delete(NotificationModel).where(NotificationModel.user_id == user_id)
+        )
+
     def _to_model(self, entity: Notification) -> NotificationModel:
         return NotificationModel(
             id=entity.id,
             user_id=entity.user_id,
+            type=entity.type.value,
+            category=entity.category.value,
+            title=entity.title,
             message=entity.message,
             is_read=entity.is_read,
             created_at=entity.created_at,
@@ -53,6 +75,9 @@ class NotificationRepository(INotificationRepository):
         return Notification(
             id=model.id,
             user_id=model.user_id,
+            type=NotificationType(model.type),
+            category=NotificationCategory(model.category),
+            title=model.title,
             message=model.message,
             is_read=model.is_read,
             created_at=model.created_at,

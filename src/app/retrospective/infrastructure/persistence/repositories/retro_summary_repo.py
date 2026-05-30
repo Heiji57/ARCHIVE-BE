@@ -55,6 +55,22 @@ class RetroSummaryRepository(IRetroSummaryRepository):
         )
         return [self._to_entity(m) for m in result.scalars()]
 
+    async def find_completed_in_range(
+        self, user_id: str, summary_type: SummaryType, from_date: date, to_date: date
+    ) -> list[RetroSummary]:
+        result = await self._session.execute(
+            select(RetroSummaryModel)
+            .where(
+                RetroSummaryModel.user_id == user_id,
+                RetroSummaryModel.summary_type == summary_type.value,
+                RetroSummaryModel.status == SummaryStatus.COMPLETED.value,
+                RetroSummaryModel.period_start >= from_date,
+                RetroSummaryModel.period_start <= to_date,
+            )
+            .order_by(RetroSummaryModel.period_start.asc())
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     def _to_model(self, entity: RetroSummary) -> RetroSummaryModel:
         return RetroSummaryModel(
             id=entity.id,

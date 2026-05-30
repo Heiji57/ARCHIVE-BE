@@ -56,3 +56,8 @@ class IRetroSummaryRepository(ABC):
     async def find_all_by_type(
         self, user_id: str, summary_type: SummaryType
     ) -> list[RetroSummary]: ...
+
+    @abstractmethod
+    async def find_completed_in_range(
+        self, user_id: str, summary_type: SummaryType, from_date: date, to_date: date
+    ) -> list[RetroSummary]: ...

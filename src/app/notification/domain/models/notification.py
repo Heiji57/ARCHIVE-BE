@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from app.notification.domain.models.value_objects import NotificationCategory, NotificationType
 from app.shared.domain.models.base import BaseEntity
 from app.shared.domain.utils.id import generate_id
 
@@ -8,6 +9,9 @@ from app.shared.domain.utils.id import generate_id
 @dataclass(kw_only=True)
 class Notification(BaseEntity):
     user_id: str
+    type: NotificationType
+    category: NotificationCategory
+    title: str
     message: str
     is_read: bool = False
 
@@ -15,11 +19,21 @@ class Notification(BaseEntity):
         self.is_read = True
 
     @classmethod
-    def create(cls, user_id: str, message: str) -> "Notification":
+    def create(
+        cls,
+        user_id: str,
+        type: NotificationType,
+        category: NotificationCategory,
+        title: str,
+        message: str,
+    ) -> "Notification":
         now = datetime.now(timezone.utc)
         return cls(
             id=generate_id("notf"),
             user_id=user_id,
+            type=type,
+            category=category,
+            title=title,
             message=message,
             is_read=False,
             created_at=now,

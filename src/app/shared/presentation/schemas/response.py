@@ -18,6 +18,10 @@ class ApiResponse(BaseModel, Generic[T]):
     def created(cls, data: T) -> "ApiResponse[T]":
         return cls(status="success", code="CREATED", data=data)
 
+    @classmethod
+    def accepted(cls, data: T) -> "ApiResponse[T]":
+        return cls(status="accepted", code="ACCEPTED", data=data)
+
 
 class PaginatedData(BaseModel, Generic[T]):
     items: list[T]

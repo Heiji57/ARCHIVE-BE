@@ -10,6 +10,10 @@ asyncpg>=0.30.0
 # Cache / Queue
 redis>=5.2.0
 celery[redis]>=5.4.0
+celery-aio-pool>=0.1.0
+
+# SSE
+sse-starlette>=2.1.0
 
 # IoC Container
 dishka>=0.14.0

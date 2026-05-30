@@ -23,12 +23,25 @@ from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
 from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
 from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
 from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import OAuthConnectionRepository
+from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
+from app.settings.application.use_cases.get_settings import GetSettingsUseCase
+from app.settings.application.use_cases.update_settings import UpdateSettingsUseCase
+from app.settings.domain.repositories.repository import IUserSettingsRepository
+from app.settings.infrastructure.persistence.repositories.user_settings_repo import UserSettingsRepository
+from app.notification.application.use_cases.delete_notification import DeleteNotificationUseCase
+from app.notification.application.use_cases.delete_notifications import DeleteNotificationsUseCase
+from app.notification.application.use_cases.get_notifications import GetNotificationsUseCase
+from app.notification.application.use_cases.mark_all_as_read import MarkAllAsReadUseCase
+from app.notification.application.use_cases.mark_as_read import MarkAsReadUseCase
 from app.notification.domain.repositories.repository import INotificationRepository
 from app.notification.infrastructure.persistence.repositories.notification_repo import NotificationRepository
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
+from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
+from app.retrospective.application.use_cases.get_summary import GetSummaryUseCase
+from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository, IRetroSummaryRepository
 from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import JournalEntryRepository
@@ -123,8 +136,56 @@ class RequestProvider(Provider):
         return NotificationRepository(session)
 
     @provide
+    def user_settings_repo(self, session: AsyncSession) -> IUserSettingsRepository:
+        return UserSettingsRepository(session)
+
+    @provide
     def oauth_connection_repo(self, session: AsyncSession) -> IOAuthConnectionRepository:
         return OAuthConnectionRepository(session)
+
+    # ── Notification Use Cases ────────────────────────────────────────────────
+
+    @provide
+    def create_notification_use_case(
+        self, repo: INotificationRepository
+    ) -> CreateNotificationUseCase:
+        return CreateNotificationUseCase(repo)
+
+    @provide
+    def get_notifications_use_case(
+        self, repo: INotificationRepository
+    ) -> GetNotificationsUseCase:
+        return GetNotificationsUseCase(repo)
+
+    @provide
+    def mark_as_read_use_case(self, repo: INotificationRepository) -> MarkAsReadUseCase:
+        return MarkAsReadUseCase(repo)
+
+    @provide
+    def mark_all_as_read_use_case(self, repo: INotificationRepository) -> MarkAllAsReadUseCase:
+        return MarkAllAsReadUseCase(repo)
+
+    @provide
+    def delete_notification_use_case(
+        self, repo: INotificationRepository
+    ) -> DeleteNotificationUseCase:
+        return DeleteNotificationUseCase(repo)
+
+    @provide
+    def delete_notifications_use_case(
+        self, repo: INotificationRepository
+    ) -> DeleteNotificationsUseCase:
+        return DeleteNotificationsUseCase(repo)
+
+    # ── Settings Use Cases ────────────────────────────────────────────────────
+
+    @provide
+    def get_settings_use_case(self, repo: IUserSettingsRepository) -> GetSettingsUseCase:
+        return GetSettingsUseCase(repo)
+
+    @provide
+    def update_settings_use_case(self, repo: IUserSettingsRepository) -> UpdateSettingsUseCase:
+        return UpdateSettingsUseCase(repo)
 
     # ── Auth Use Cases ────────────────────────────────────────────────────────
 
@@ -249,3 +310,23 @@ class RequestProvider(Provider):
         self, entry_repo: IJournalEntryRepository
     ) -> DeleteEntryUseCase:
         return DeleteEntryUseCase(entry_repo)
+
+    # ── Summary Use Cases ─────────────────────────────────────────────────────
+
+    @provide
+    def request_summary_use_case(
+        self, summary_repo: IRetroSummaryRepository
+    ) -> RequestSummaryUseCase:
+        return RequestSummaryUseCase(summary_repo)
+
+    @provide
+    def get_summary_use_case(
+        self, summary_repo: IRetroSummaryRepository
+    ) -> GetSummaryUseCase:
+        return GetSummaryUseCase(summary_repo)
+
+    @provide
+    def get_summaries_use_case(
+        self, summary_repo: IRetroSummaryRepository
+    ) -> GetSummariesUseCase:
+        return GetSummariesUseCase(summary_repo)
