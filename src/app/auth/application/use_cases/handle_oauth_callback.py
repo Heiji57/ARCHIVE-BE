@@ -63,8 +63,6 @@ class HandleOAuthCallbackUseCase:
                     id=generate_id("user"),
                     email=Email(user_info.email),
                     password_hash=None,
-                    totp_enabled=False,
-                    totp_secret=None,
                     created_at=now,
                 )
                 user = await self._user_repo.save(user)

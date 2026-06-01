@@ -28,7 +28,7 @@ from app.auth.presentation.requests.requests import (
     UpdateProfileRequest,
     VerifyCodeRequest,
 )
-from app.auth.presentation.responses.responses import PreAuthTokenResponse, TokenResponse, UserResponse
+from app.auth.presentation.responses.responses import TokenResponse, UserResponse
 from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
@@ -146,14 +146,14 @@ async def register(
 @router.post(
     "/login",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[TokenResponse | PreAuthTokenResponse],
+    response_model=ApiResponse[TokenResponse],
 )
 async def login(
     body: LoginRequest,
     request: Request,
     response: Response,
     use_case: FromDishka[LoginUseCase],
-) -> ApiResponse[TokenResponse | PreAuthTokenResponse]:
+) -> ApiResponse[TokenResponse]:
     result = await use_case.execute(
         LoginCommand(
             email=body.email,
@@ -161,9 +161,6 @@ async def login(
             device_info=request.headers.get("user-agent"),
         )
     )
-    if "pre_auth_token" in result:
-        return ApiResponse.ok(PreAuthTokenResponse(pre_auth_token=result["pre_auth_token"]))
-
     _set_refresh_cookie(response, result["refresh_token"])
     return ApiResponse.ok(TokenResponse(access_token=result["access_token"]))
 

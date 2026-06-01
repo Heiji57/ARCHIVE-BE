@@ -11,11 +11,3 @@ class UserEmailDuplicatedException(BaseAppException):
 
 class InvalidEmailException(BaseAppException):
     code = "USER_EMAIL_INVALID"
-
-
-class TotpAlreadyEnabledException(BaseAppException):
-    code = "USER_TOTP_ALREADY_ENABLED"
-
-
-class TotpNotEnabledException(BaseAppException):
-    code = "USER_TOTP_NOT_ENABLED"

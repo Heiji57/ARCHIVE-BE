@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Cookie
+from fastapi import Cookie, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -36,15 +36,6 @@ def create_access_token(user_id: str) -> str:
     )
 
 
-def create_pre_auth_token(user_id: str) -> str:
-    settings = get_settings()
-    return _create_token(
-        user_id,
-        TokenType.PRE_AUTH,
-        timedelta(minutes=settings.auth.pre_auth_token_expire_minutes),
-    )
-
-
 def _decode(token: str, expected_type: TokenType) -> UserContext:
     settings = get_settings()
     try:
@@ -61,19 +52,11 @@ def _decode(token: str, expected_type: TokenType) -> UserContext:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = _bearer,  # type: ignore[assignment]
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> UserContext:
     if not credentials:
         raise AuthTokenInvalidException()
     return _decode(credentials.credentials, TokenType.ACCESS)
-
-
-async def get_pre_auth_user(
-    credentials: HTTPAuthorizationCredentials | None = _bearer,  # type: ignore[assignment]
-) -> UserContext:
-    if not credentials:
-        raise AuthTokenInvalidException()
-    return _decode(credentials.credentials, TokenType.PRE_AUTH)
 
 
 def extract_refresh_token(refresh_token: str | None = Cookie(default=None, alias="refresh_token")) -> str:

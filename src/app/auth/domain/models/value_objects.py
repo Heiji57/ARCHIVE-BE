@@ -8,5 +8,4 @@ class OAuthProvider(StrEnum):
 
 class TokenType(StrEnum):
     ACCESS = "access"
-    PRE_AUTH = "pre_auth"
     REFRESH = "refresh"

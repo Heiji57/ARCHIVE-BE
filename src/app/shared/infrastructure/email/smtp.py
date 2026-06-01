@@ -4,13 +4,20 @@ from email.message import EmailMessage
 from app.shared.infrastructure.config.settings import get_settings
 
 
-async def send_email(to: str, subject: str, body: str) -> None:
+async def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+) -> None:
     cfg = get_settings().email
     message = EmailMessage()
-    message["From"] = cfg.from_email
+    message["From"] = cfg.from_email or cfg.user
     message["To"] = to
     message["Subject"] = subject
     message.set_content(body)
+    if html_body:
+        message.add_alternative(html_body, subtype="html")
 
     await aiosmtplib.send(
         message,
@@ -18,5 +25,5 @@ async def send_email(to: str, subject: str, body: str) -> None:
         port=cfg.port,
         username=cfg.user,
         password=cfg.password,
-        use_tls=cfg.use_tls,
+        start_tls=cfg.use_tls,
     )

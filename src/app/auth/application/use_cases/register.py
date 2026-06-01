@@ -38,8 +38,6 @@ class RegisterUseCase:
             id=generate_id("user"),
             email=Email(cmd.email),
             password_hash=hash_password(cmd.password),
-            totp_enabled=False,
-            totp_secret=None,
             created_at=now,
         )
         saved = await self._user_repo.save(user)

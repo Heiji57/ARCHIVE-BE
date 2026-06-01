@@ -7,7 +7,6 @@ class AuthConfig(BaseSettings):
     secret_key: str
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
-    pre_auth_token_expire_minutes: int = 5
 
     # Email verification
     email_verify_code_ttl_seconds: int = 600    # 인증 코드 유효 시간 (10분)

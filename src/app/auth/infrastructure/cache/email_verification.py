@@ -1,10 +1,14 @@
 import json
 import secrets
+import string
 
 from redis.asyncio import Redis
 
 from app.auth.domain.exceptions.exceptions import AuthTokenInvalidException
 from app.shared.infrastructure.config.auth import AuthConfig
+
+_CODE_ALPHABET = string.ascii_uppercase + string.digits  # A-Z + 0-9
+_CODE_LENGTH = 6
 
 
 class EmailVerificationCache:
@@ -28,7 +32,7 @@ class EmailVerificationCache:
         return bool(await self._redis.exists(self._key_cooldown(email)))
 
     async def create_code(self, email: str) -> str:
-        code = f"{secrets.randbelow(1_000_000):06d}"
+        code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))
         payload = json.dumps({"code": code, "attempts": 0})
         await self._redis.setex(self._key_code(email), self._verify_ttl, payload)
         await self._redis.setex(self._key_cooldown(email), self._cooldown_ttl, "1")

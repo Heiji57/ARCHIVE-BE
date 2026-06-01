@@ -38,8 +38,6 @@ class UserRepository(IUserRepository):
             id=entity.id,
             email=str(entity.email),
             password_hash=entity.password_hash,
-            totp_enabled=entity.totp_enabled,
-            totp_secret=entity.totp_secret,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -49,8 +47,6 @@ class UserRepository(IUserRepository):
             id=model.id,
             email=Email(model.email),
             password_hash=model.password_hash,
-            totp_enabled=model.totp_enabled,
-            totp_secret=model.totp_secret,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

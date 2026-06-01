@@ -51,9 +51,27 @@ services:
       - archive-net
     restart: unless-stopped
 
+  # AI 요약 작업 처리 (수동 priority=9, 스케줄 priority=2)
   worker:
     build: .
-    command: celery -A src.app.shared.infrastructure.worker.celery_app worker --beat --loglevel=info
+    command: celery -A app.worker.celery_app worker -Q ai_tasks --concurrency=3 --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  # Beat 스케줄러 + schedule_summaries 태스크 처리
+  worker-beat:
+    build: .
+    command: celery -A app.worker.celery_app worker --beat -Q default --concurrency=2 --loglevel=info
     env_file:
       - .env
     volumes:

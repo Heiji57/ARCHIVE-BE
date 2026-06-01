@@ -45,9 +45,12 @@ class RequestSummaryUseCase:
             )
             saved = await self._summary_repo.save(summary)
 
-        # 순환 임포트 방지를 위해 지연 임포트
         from app.worker.tasks.generate_summary import generate_summary_task
-        generate_summary_task.delay(saved.id, cmd.user_id)
+        generate_summary_task.apply_async(
+            args=[saved.id, cmd.user_id],
+            queue="ai_tasks",
+            priority=9,
+        )
 
         return saved
 

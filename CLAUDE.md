@@ -2,6 +2,31 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Model Selection (REQUIRED)
+
+코드를 수정하는 모든 요청이 들어오면 **구현 시작 전 반드시 사용할 모델을 확인한다.**
+
+응답 첫 줄에 아래 형식으로 묻는다:
+
+```
+사용할 모델을 선택하세요: 1) Haiku  2) Sonnet  3) Opus  (기본값: 2)
+```
+
+- 사용자가 **숫자(1·2·3)** 로 답하면 해당 모델로 진행한다.
+- 사용자가 **모델 이름**(haiku / sonnet / opus)으로 답해도 동일하게 처리한다.
+- 사용자가 **Enter(빈 입력)** 하거나 답하지 않으면 **Sonnet(기본값)** 으로 진행한다.
+- 선택된 모델은 `/model` 명령으로 전환할 수 있음을 안내한다.
+
+| 번호 | 모델 | 적합한 상황 |
+|---|---|---|
+| 1 | Haiku | 단순 CRUD, 보일러플레이트, 빠른 수정 |
+| 2 | Sonnet | 일반 기능 구현, 리팩토링 (기본값) |
+| 3 | Opus | 복잡한 아키텍처 설계, 어려운 버그, 성능 최적화 |
+
+> 단순 질문, 코드 설명, 현황 파악 요청은 모델 선택을 묻지 않는다.
+
+---
+
 ## Pre-Implementation Workflow (REQUIRED)
 
 코드를 수정하는 모든 요청(기능 추가, 리팩토링, 버그 수정 등)에서 **반드시 아래 순서를 따른다.**
@@ -122,6 +147,19 @@ alembic upgrade head
 # Celery worker 실행
 celery -A app.worker.celery_app worker --loglevel=info
 ```
+
+## Protected Files (DO NOT READ OR MODIFY)
+
+아래 파일은 절대 읽거나 수정하지 않는다. 코드 작업 중 이 파일들이 필요한 경우 사용자에게 직접 확인을 요청한다.
+
+| 파일 | 이유 |
+|---|---|
+| `.env` | 실제 시크릿 키, DB 비밀번호 등 민감 정보 포함 |
+| `.env.*` (`.env.local`, `.env.production` 등 모든 변형) | 동일한 이유 |
+
+> `.env.example`은 예시 파일이므로 읽기는 허용하나, 수정은 하지 않는다.
+
+---
 
 ## Development Notes
 

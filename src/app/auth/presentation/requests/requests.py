@@ -1,4 +1,8 @@
+import re
+
 from pydantic import BaseModel, EmailStr, field_validator
+
+_CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 
 
 class SendVerificationRequest(BaseModel):
@@ -9,12 +13,15 @@ class VerifyCodeRequest(BaseModel):
     email: EmailStr
     code: str
 
-    @field_validator("code")
+    @field_validator("code", mode="before")
     @classmethod
-    def code_must_be_six_digits(cls, v: str) -> str:
-        if not v.isdigit() or len(v) != 6:
-            raise ValueError("Code must be a 6-digit number.")
-        return v
+    def code_must_be_valid(cls, v: str) -> str:
+        if not isinstance(v, str):
+            raise ValueError("Code must be a string.")
+        normalized = v.strip().upper()
+        if not _CODE_RE.fullmatch(normalized):
+            raise ValueError("Code must be 6 characters of uppercase letters or digits.")
+        return normalized
 
 
 class RegisterRequest(BaseModel):

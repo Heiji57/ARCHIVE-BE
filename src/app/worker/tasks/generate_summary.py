@@ -5,7 +5,7 @@ from redis.asyncio import Redis
 from app.notification.domain.models.notification import Notification
 from app.notification.domain.models.value_objects import NotificationCategory, NotificationType
 from app.notification.infrastructure.persistence.repositories.notification_repo import NotificationRepository
-from app.retrospective.domain.exceptions.exceptions import SummaryAlreadyInProgressException
+from app.retrospective.domain.exceptions.exceptions import SummaryAlreadyInProgressException, SummaryInvalidStateException
 from app.retrospective.domain.models.value_objects import SummaryType
 from app.retrospective.infrastructure.ai.gemini_client import GeminiSummaryClient
 from app.retrospective.infrastructure.ai.prompt_builder import build_prompt
@@ -40,8 +40,8 @@ async def generate_summary_task(summary_id: str, user_id: str, send_notification
 
             try:
                 summary.mark_in_progress()
-            except SummaryAlreadyInProgressException:
-                return
+            except (SummaryAlreadyInProgressException, SummaryInvalidStateException):
+                return  # already in progress or completed (e.g. promoted task ran first)
 
             await summary_repo.save(summary)
             entries = await entry_repo.find_by_period(

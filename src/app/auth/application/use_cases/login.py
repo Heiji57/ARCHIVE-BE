@@ -4,7 +4,7 @@ import secrets
 from app.auth.application.dtos.commands import LoginCommand
 from app.auth.domain.exceptions.exceptions import AuthInvalidCredentialsException
 from app.auth.infrastructure.cache.auth_token import AuthTokenCache
-from app.shared.infrastructure.auth.jwt import create_access_token, create_pre_auth_token
+from app.shared.infrastructure.auth.jwt import create_access_token
 from app.shared.infrastructure.auth.password import verify_password
 from app.user.domain.repositories.repository import IUserRepository
 
@@ -25,9 +25,6 @@ class LoginUseCase:
 
         if not verify_password(cmd.password, user.password_hash):
             raise AuthInvalidCredentialsException()
-
-        if user.totp_enabled:
-            return {"pre_auth_token": create_pre_auth_token(user.id)}
 
         access_token = create_access_token(user.id)
         raw_refresh = secrets.token_urlsafe(32)
