@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -19,5 +19,9 @@ class UserSettingsModel(Base):
     notification_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     last_schedule_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    last_summary_date_local: Mapped[date | None] = mapped_column(Date, nullable=True)
+    github_push_target_repository_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("github_repositories.id", ondelete="SET NULL"), nullable=True
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

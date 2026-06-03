@@ -115,13 +115,14 @@ src/app/
 |---|---|
 | Auth | `POST /auth/email/verify/send`, `/confirm`, `/register`, `/login`, `/logout`, `/token/refresh` |
 | Auth | `GET /auth/me`, `PATCH /auth/me` |
-| Auth | `GET /auth/oauth/{provider}/authorize`, `/callback` |
+| Auth | `GET /auth/oauth/{provider}/authorize`, `/callback`, `POST /auth/oauth/onboarding` |
 | Todo | `GET/POST /todos`, `PATCH/DELETE /todos/{id}` |
 | Entry | `GET/POST /entries`, `GET/PUT/DELETE /entries/{id}` |
 | Summary | `POST /summaries/generate`, `GET /summaries`, `GET /summaries/{id}`, `GET /summaries/{id}/stream` |
 | Notification | `GET /notifications/stream`, `GET /notifications`, `PATCH /notifications/read-all`, `PATCH /notifications/{id}/read`, `DELETE /notifications/{id}`, `DELETE /notifications` |
-| Settings | `GET/PUT /settings` |
-| GitHub | `GET /github/repositories/available`, `GET/POST/DELETE /github/repositories`, `POST /github/repositories/sync-all`, `DELETE /github/repositories/{id}` |
+| Settings | `GET/PUT /settings`, `PATCH /settings/country`, `PATCH /settings/timezone` |
+| GitHub | `GET /github/connection`, `GET /github/repositories/available`, `GET/POST/DELETE /github/repositories`, `POST /github/repositories/sync-all`, `PATCH/DELETE /github/repositories/{id}` |
+| GitHub | `GET /github/commits`, `POST /github/retrospectives/push` |
 
 ## API Contract — Single Source of Truth
 
@@ -143,6 +144,9 @@ src/app/
 - **응답 형식**: `ApiResponse[T]` 래퍼 사용 (`shared/presentation/schemas/response.py`)
 - **인증**: 인증이 필요한 엔드포인트는 `current_user: UserContext = Depends(get_current_user)` 사용
 - **DB 마이그레이션**: 스키마 변경 시 `migrations/versions/` 에 Alembic 파일 추가
+- **사용자 타임존**: 사용자별 `users.timezone`(IANA tz) 보유. 모든 기간 계산("오늘", "이번 주" 등)은 이 tz 기준으로 처리한다. 절대 서버 UTC 기준으로 계산하지 않는다. `shared/domain/utils/period.py`의 `today_in_tz(tz)`, `now_in_tz(tz)` 사용.
+- **국가 → tz 매핑**: 신규 국가 추가 시 `shared/domain/utils/timezone.py`의 `SINGLE_TZ_COUNTRY` 또는 `MULTI_TZ_COUNTRIES`/`REGION_TZ`에 추가.
+- **AI 자동 요약 스케줄링**: Celery beat은 매시간 정각 단일 dispatcher(`dispatch_summaries_for_tz`)만 발사. 각 사용자의 현지 1am 도달 시 fan-out. `last_summary_date_local`로 DST 중복 방지. `SUMMARY_JITTER_SECONDS` 환경 변수로 부하 분산 폭 제어 (기본 1800s).
 
 ## Environment Setup
 

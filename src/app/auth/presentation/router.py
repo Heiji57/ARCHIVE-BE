@@ -1,15 +1,17 @@
 import json
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, Query, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.auth.application.dtos.commands import (
+    CompleteOnboardingCommand,
     LoginCommand,
     RegisterCommand,
     SendEmailVerificationCommand,
     VerifyEmailCodeCommand,
 )
+from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
 from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
 from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
@@ -20,9 +22,11 @@ from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
+from app.auth.domain.exceptions.exceptions import OnboardingTokenInvalidException
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.presentation.requests.requests import (
     LoginRequest,
+    OnboardingCompleteRequest,
     RegisterRequest,
     SendVerificationRequest,
     UpdateProfileRequest,
@@ -38,7 +42,9 @@ from app.shared.presentation.schemas.response import ApiResponse
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
 
 _REFRESH_COOKIE = "refresh_token"
+_ONBOARDING_COOKIE = "onboarding_token"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7일
+_ONBOARDING_COOKIE_MAX_AGE = 60 * 30  # 30분
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
@@ -56,42 +62,52 @@ def _clear_refresh_cookie(response: Response) -> None:
     response.delete_cookie(key=_REFRESH_COOKIE, httponly=True, secure=True, samesite="lax")
 
 
+def _set_onboarding_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=_ONBOARDING_COOKIE,
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=_ONBOARDING_COOKIE_MAX_AGE,
+        path="/",
+    )
+
+
+def _clear_onboarding_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=_ONBOARDING_COOKIE, httponly=True, secure=True, samesite="lax"
+    )
+
+
 def _oauth_success_html(access_token: str, frontend_origin: str) -> str:
     message = json.dumps({"type": "oauth_success", "access_token": access_token})
     origin = json.dumps(frontend_origin)
     return f"""<!DOCTYPE html>
-<html>
-<head><title>OAuth</title></head>
-<body>
-<script>
-  if (window.opener) {{
-    window.opener.postMessage({message}, {origin});
-    window.close();
-  }} else {{
-    window.location.href = {origin};
-  }}
-</script>
-</body>
-</html>"""
+<html><head><title>OAuth</title></head><body><script>
+  if (window.opener) {{ window.opener.postMessage({message}, {origin}); window.close(); }}
+  else {{ window.location.href = {origin}; }}
+</script></body></html>"""
+
+
+def _oauth_onboarding_html(frontend_origin: str) -> str:
+    message = json.dumps({"type": "oauth_onboarding_required"})
+    origin = json.dumps(frontend_origin)
+    return f"""<!DOCTYPE html>
+<html><head><title>OAuth Onboarding</title></head><body><script>
+  if (window.opener) {{ window.opener.postMessage({message}, {origin}); window.close(); }}
+  else {{ window.location.href = {origin} + '/onboarding'; }}
+</script></body></html>"""
 
 
 def _oauth_error_html(error_code: str, frontend_origin: str) -> str:
     message = json.dumps({"type": "oauth_error", "error": error_code})
     origin = json.dumps(frontend_origin)
     return f"""<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-<script>
-  if (window.opener) {{
-    window.opener.postMessage({message}, {origin});
-    window.close();
-  }} else {{
-    window.location.href = {origin};
-  }}
-</script>
-</body>
-</html>"""
+<html><head><title>OAuth Error</title></head><body><script>
+  if (window.opener) {{ window.opener.postMessage({message}, {origin}); window.close(); }}
+  else {{ window.location.href = {origin}; }}
+</script></body></html>"""
 
 
 @router.post(
@@ -135,6 +151,8 @@ async def register(
         RegisterCommand(
             email=body.email,
             password=body.password,
+            country=body.country,
+            region=body.region,
             device_info=request.headers.get("user-agent"),
         )
     )
@@ -263,13 +281,56 @@ async def oauth_callback(
     except Exception:
         return HTMLResponse(content=_oauth_error_html("INTERNAL_ERROR", frontend_origin))
 
-    html_response = HTMLResponse(content=_oauth_success_html(result["access_token"], frontend_origin))
+    if result.is_onboarding:
+        # 신규 사용자 — onboarding cookie 발급 + FE 온보딩 페이지로 안내
+        html_response = HTMLResponse(content=_oauth_onboarding_html(frontend_origin))
+        html_response.set_cookie(
+            key=_ONBOARDING_COOKIE,
+            value=result.onboarding_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=_ONBOARDING_COOKIE_MAX_AGE,
+            path="/",
+        )
+        return html_response
+
+    # 기존 사용자 — refresh cookie + access_token postMessage
+    html_response = HTMLResponse(content=_oauth_success_html(result.access_token, frontend_origin))
     html_response.set_cookie(
         key=_REFRESH_COOKIE,
-        value=result["refresh_token"],
+        value=result.refresh_token,
         httponly=True,
         secure=True,
         samesite="lax",
         max_age=_COOKIE_MAX_AGE,
     )
     return html_response
+
+
+@router.post(
+    "/oauth/onboarding",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ApiResponse[TokenResponse],
+)
+async def oauth_onboarding(
+    body: OnboardingCompleteRequest,
+    request: Request,
+    response: Response,
+    use_case: FromDishka[CompleteOnboardingUseCase],
+    onboarding_token: str | None = Cookie(default=None, alias=_ONBOARDING_COOKIE),
+) -> ApiResponse[TokenResponse]:
+    if not onboarding_token:
+        raise OnboardingTokenInvalidException("Onboarding cookie missing")
+
+    result = await use_case.execute(
+        CompleteOnboardingCommand(
+            onboarding_token=onboarding_token,
+            country=body.country,
+            region=body.region,
+            device_info=request.headers.get("user-agent"),
+        )
+    )
+    _clear_onboarding_cookie(response)
+    _set_refresh_cookie(response, result["refresh_token"])
+    return ApiResponse.created(TokenResponse(access_token=result["access_token"]))

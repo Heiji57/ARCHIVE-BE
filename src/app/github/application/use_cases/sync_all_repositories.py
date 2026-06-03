@@ -46,6 +46,7 @@ class SyncAllRepositoriesUseCase:
                 is_private=data.is_private,
                 default_branch=data.default_branch,
                 html_url=data.html_url,
+                commit_read_enabled=prior.commit_read_enabled if prior else True,
                 created_at=prior.created_at if prior else now,
                 updated_at=now if prior else None,
             ))

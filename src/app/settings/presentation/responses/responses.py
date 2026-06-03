@@ -5,6 +5,14 @@ from pydantic import BaseModel, Field
 from app.settings.domain.models.user_settings import UserSettings
 
 
+class GitHubSettingsBlock(BaseModel):
+    push_target_repository_id: str | None = Field(
+        default=None, serialization_alias="pushTargetRepositoryId"
+    )
+
+    model_config = {"populate_by_name": True}
+
+
 class SettingsResponse(BaseModel):
     locale: str
     auto_summary_weekly: bool = Field(serialization_alias="autoSummaryWeekly")
@@ -12,6 +20,7 @@ class SettingsResponse(BaseModel):
     auto_summary_yearly: bool = Field(serialization_alias="autoSummaryYearly")
     notification_retention_days: int = Field(serialization_alias="notificationRetentionDays")
     last_schedule_check_at: datetime | None = Field(serialization_alias="lastScheduleCheckAt")
+    github: GitHubSettingsBlock
 
     model_config = {"populate_by_name": True}
 
@@ -24,4 +33,7 @@ class SettingsResponse(BaseModel):
             auto_summary_yearly=s.auto_summary_yearly,
             notification_retention_days=s.notification_retention_days,
             last_schedule_check_at=s.last_schedule_check_at,
+            github=GitHubSettingsBlock(
+                push_target_repository_id=s.github_push_target_repository_id,
+            ),
         )

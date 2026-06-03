@@ -18,6 +18,7 @@ class GitHubRepositoryModel(Base):
     is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     default_branch: Mapped[str] = mapped_column(String(255), nullable=False)
     html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    commit_read_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

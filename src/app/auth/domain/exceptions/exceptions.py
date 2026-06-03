@@ -31,3 +31,23 @@ class RefreshTokenRevokedException(BaseAppException):
 
 class EmailNotVerifiedException(BaseAppException):
     code = "AUTH_EMAIL_NOT_VERIFIED"
+
+
+class OnboardingTokenInvalidException(BaseAppException):
+    code = "AUTH_ONBOARDING_TOKEN_INVALID"
+
+
+class OnboardingTokenExpiredException(BaseAppException):
+    code = "AUTH_ONBOARDING_TOKEN_EXPIRED"
+
+
+class CountryInvalidException(BaseAppException):
+    code = "AUTH_COUNTRY_INVALID"
+
+
+class CountryRegionRequiredException(BaseAppException):
+    code = "AUTH_COUNTRY_REGION_REQUIRED"
+
+
+class TimezoneInvalidException(BaseAppException):
+    code = "AUTH_TIMEZONE_INVALID"

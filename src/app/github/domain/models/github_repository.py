@@ -13,3 +13,4 @@ class GitHubRepository(BaseEntity):
     is_private: bool
     default_branch: str
     html_url: str
+    commit_read_enabled: bool = True

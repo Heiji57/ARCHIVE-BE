@@ -12,7 +12,7 @@ _QUEUES = (
 _TASK_ROUTES = {
     "worker.generate_summary": {"queue": "ai_tasks"},
     "worker.generate_from_child_summaries": {"queue": "ai_tasks"},
-    "worker.schedule_summaries": {"queue": "default"},
+    "worker.dispatch_summaries_for_tz": {"queue": "default"},
 }
 
 
@@ -32,28 +32,19 @@ def create_celery_app() -> Celery:
         task_queues=_QUEUES,
         task_routes=_TASK_ROUTES,
         task_default_queue="default",
+        # 매시간 정각 dispatcher 발사. dispatcher가 각 사용자의 tz 기준 "현지 1am" 여부를
+        # 판단해 fan-out한다. UTC 단일 beat이지만 사용자별로 다른 tz 처리 가능.
         beat_schedule={
-            "schedule-annual-summaries": {
-                "task": "worker.schedule_summaries",
-                "schedule": crontab(hour=1, minute=0, month_of_year=1, day_of_month=1),
-                "args": ["annual"],
-            },
-            "schedule-monthly-summaries": {
-                "task": "worker.schedule_summaries",
-                "schedule": crontab(hour=1, minute=0, day_of_month=1),
-                "args": ["monthly"],
-            },
-            "schedule-weekly-summaries": {
-                "task": "worker.schedule_summaries",
-                "schedule": crontab(hour=1, minute=0, day_of_week=1),
-                "args": ["weekly"],
+            "dispatch-summaries-hourly": {
+                "task": "worker.dispatch_summaries_for_tz",
+                "schedule": crontab(minute=0),  # 매시간 정각
             },
         },
     )
     app.autodiscover_tasks([
         "app.worker.tasks.generate_summary",
         "app.worker.tasks.generate_from_child_summaries",
-        "app.worker.tasks.schedule_summaries",
+        "app.worker.tasks.dispatch_summaries_for_tz",
     ])
     return app
 

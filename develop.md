@@ -236,7 +236,7 @@ presentation  →  application  →  domain
 | `todo` | 할 일 CRUD, 상태 전환, 날짜 배정 |
 | `retrospective` | 회고 작성, AI 요약 트리거 |
 | `notification` | 알림 생성, 읽음 처리 |
-| `github` | GitHub 저장소 연결 (OAuth 토큰 재사용), 저장소 동기화 |
+| `github` | GitHub 저장소 연결 (OAuth 토큰 재사용), 저장소 동기화, 커밋 조회, 회고 push, push target 설정 (`user_settings`에 통합) |
 
 > GitHub API, Anthropic API는 도메인이 아닌 infrastructure 어댑터입니다. 별도 Bounded Context를 만들지 않습니다.
 
@@ -1142,6 +1142,40 @@ if not stored:
     raise OAuthStateInvalidException()
 ```
 
+### OAuth 신규 사용자 온보딩 흐름 (국가 정보 수집)
+
+OAuth 콜백에서 처음 보이는 사용자는 곧바로 계정을 만들지 않고 **임시 onboarding token**을 발급해 FE가 국가/하위지역을 입력하도록 유도합니다.
+
+```
+1. /auth/oauth/{provider}/callback
+   ├─ provider 토큰 교환 + user_info 조회
+   ├─ 분기:
+   │   • 기존 사용자       → 일반 access/refresh 발급
+   │   • 신규 사용자       → Redis에 onboarding payload 저장 (TTL 30분)
+   │                       → HttpOnly Cookie `onboarding_token` 발급
+   │                       → postMessage({ type: "oauth_onboarding_required" })
+2. POST /auth/oauth/onboarding
+   ├─ Cookie의 onboarding_token으로 Redis 조회 (consume)
+   ├─ body { country, region? }  validation
+   ├─ country/region → IANA tz 결정
+   ├─ User + OAuthConnection 생성
+   └─ refresh_token Cookie + access_token body
+```
+
+Redis 키 형식: `auth:onboarding:{token} → JSON {provider, provider_user_id, email}` (TTL 1800s).
+
+### 사용자 타임존 & 국가
+
+| 필드 | 의미 | 변경 API |
+|---|---|---|
+| `users.country` | ISO 3166-1 alpha-2 (`KR`, `US`, ...) | `PATCH /settings/country` (timezone 자동 재계산) |
+| `users.region` | ISO 3166-2 (`US-CA`) — 다중 tz 국가만 사용 | `PATCH /settings/country` |
+| `users.timezone` | IANA tz (`Asia/Seoul`) — AI 요약 스케줄링 기준 | `PATCH /settings/timezone` (단독 override) |
+
+- 다중 tz 국가: `US, CA, RU, AU, BR, MX, ID, AR, CL, KZ, MN` — `region` 필수
+- `resolve_timezone(country, region)`는 `shared/domain/utils/timezone.py`에서 결정
+- AI 자동 요약은 **사용자 tz 기준 새벽 1시**에 트리거됨
+
 ---
 
 ## 19. Celery Worker
@@ -1186,24 +1220,40 @@ def generate_summary_task(self, user_id: str, retro_id: str) -> dict:
 - `max_retries`, `default_retry_delay`를 항상 명시합니다.
 - 태스크는 진입점 역할만 합니다. 비즈니스 로직은 Use Case에 위임합니다.
 
-### Beat 스케줄
+### Beat 스케줄 — 사용자 tz 기반 자동 요약
+
+Celery beat은 매시간 정각 단일 dispatcher 태스크만 발사합니다. dispatcher가 각 사용자의 `users.timezone` 기준 "현지 1am" 도달 여부를 판단해 fan-out합니다.
 
 ```python
-# shared/infrastructure/worker/celery_app.py
-celery_app.conf.timezone = 'Asia/Seoul'
-celery_app.conf.enable_utc = True
-
+# app/worker/celery_app.py
 celery_app.conf.beat_schedule = {
-    "weekly-summary": {
-        "task": "retrospective.generate_scheduled_summary",
-        "schedule": crontab(day_of_week=0, hour=9, minute=0),   # 매주 일요일 09:00 KST
-    },
-    "monthly-summary": {
-        "task": "retrospective.generate_scheduled_summary",
-        "schedule": crontab(day=1, hour=9, minute=0),            # 매월 1일 09:00 KST
+    "dispatch-summaries-hourly": {
+        "task": "worker.dispatch_summaries_for_tz",
+        "schedule": crontab(minute=0),  # 매시간 정각
     },
 }
 ```
+
+**왜 단일 dispatcher인가?**
+- Celery beat은 단일 tz 가정으로 동작 (UTC). 사용자별 다른 tz를 직접 지원하지 않음.
+- Hourly tick + 사용자 tz 비교가 코드/운영 비용 면에서 가장 단순.
+
+**dispatcher 흐름** (`app/worker/tasks/dispatch_summaries_for_tz.py`):
+
+1. `user_settings`에서 `auto_summary_* = true` 사용자 + `users.timezone` JOIN 조회
+2. 각 사용자에 대해 `now_utc.astimezone(ZoneInfo(user.tz)).hour == 1` 검사
+3. `last_summary_date_local`와 현재 현지 날짜가 같으면 skip (DST fall-back 중복 방지)
+4. 현지 날짜로 schedule type 결정 (1/1 → annual, 매월 1일 → monthly, 월요일 → weekly)
+5. `auto_summary_*` 플래그와 schedule type 매칭 확인
+6. fan-out 시 사용자별 결정적 지터 적용 — `countdown = hash(user_id) % SUMMARY_JITTER_SECONDS`
+7. `last_summary_date_local` 갱신
+
+**환경 변수**:
+- `SUMMARY_JITTER_SECONDS` (기본 1800) — 0이면 정시, 1800이면 0~30분 분산, 3600이면 0~60분 분산
+
+**기간 계산**:
+- 주차 산정은 majority-day 방식 (월~일 7일 중 더 많은 날이 속한 달의 주차)
+- `shared/domain/utils/period.py`의 `weeks_owned_by_month`, `week_of_month` 사용
 
 ---
 

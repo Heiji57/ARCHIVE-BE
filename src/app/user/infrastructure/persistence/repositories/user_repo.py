@@ -38,6 +38,9 @@ class UserRepository(IUserRepository):
             id=entity.id,
             email=str(entity.email),
             password_hash=entity.password_hash,
+            country=entity.country,
+            region=entity.region,
+            timezone=entity.timezone,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -47,6 +50,9 @@ class UserRepository(IUserRepository):
             id=model.id,
             email=Email(model.email),
             password_hash=model.password_hash,
+            country=model.country,
+            region=model.region,
+            timezone=model.timezone,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

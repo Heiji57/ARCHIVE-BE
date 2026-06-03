@@ -7,17 +7,25 @@ from app.auth.domain.exceptions.exceptions import (
     AuthInvalidCredentialsException,
     AuthTokenExpiredException,
     AuthTokenInvalidException,
+    CountryInvalidException,
+    CountryRegionRequiredException,
     EmailNotVerifiedException,
     OAuthStateInvalidException,
+    OnboardingTokenExpiredException,
+    OnboardingTokenInvalidException,
     RefreshTokenInvalidException,
     RefreshTokenRevokedException,
+    TimezoneInvalidException,
 )
 from app.github.domain.exceptions.exceptions import (
     GitHubApiUnavailableException,
     GitHubConnectionNotFoundException,
+    GitHubPushFailedException,
+    GitHubPushTargetNotSetException,
     GitHubRateLimitedException,
     GitHubRepositoryAlreadyLinkedException,
     GitHubRepositoryNotFoundException,
+    GitHubRepositoryNotLinkedException,
     GitHubTokenInvalidException,
 )
 from app.notification.domain.exceptions.exceptions import NotificationNotFoundException
@@ -47,6 +55,8 @@ _STATUS_MAP: dict[str, int] = {
     EmailNotVerifiedException.code: 400,
     InvalidEmailException.code: 400,
     GitHubConnectionNotFoundException.code: 400,
+    GitHubPushTargetNotSetException.code: 400,
+    GitHubRepositoryNotLinkedException.code: 400,
     # 401
     AuthTokenInvalidException.code: 401,
     AuthTokenExpiredException.code: 401,
@@ -55,6 +65,8 @@ _STATUS_MAP: dict[str, int] = {
     RefreshTokenRevokedException.code: 401,
     Auth2FACodeInvalidException.code: 401,
     GitHubTokenInvalidException.code: 401,
+    OnboardingTokenInvalidException.code: 401,
+    OnboardingTokenExpiredException.code: 401,
     # 404
     UserNotFoundException.code: 404,
     TodoNotFoundException.code: 404,
@@ -69,8 +81,14 @@ _STATUS_MAP: dict[str, int] = {
     JournalEntryAlreadyExistsException.code: 409,
     SummaryAlreadyInProgressException.code: 409,
     GitHubRepositoryAlreadyLinkedException.code: 409,
+    # 422
+    CountryInvalidException.code: 422,
+    CountryRegionRequiredException.code: 422,
+    TimezoneInvalidException.code: 422,
     # 429
     GitHubRateLimitedException.code: 429,
+    # 502
+    GitHubPushFailedException.code: 502,
     # 503
     GitHubApiUnavailableException.code: 503,
 }

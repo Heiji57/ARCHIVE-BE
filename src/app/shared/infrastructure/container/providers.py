@@ -4,6 +4,7 @@ from dishka import Provider, Scope, provide
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
 from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
 from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
@@ -19,22 +20,29 @@ from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
 from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
+from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
 from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
 from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
 from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
 from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import OAuthConnectionRepository
+from app.github.application.use_cases.get_connection_status import GetConnectionStatusUseCase
+from app.github.application.use_cases.get_today_commits import GetTodayCommitsUseCase
 from app.github.application.use_cases.link_repository import LinkRepositoryUseCase
 from app.github.application.use_cases.list_available_repositories import ListAvailableRepositoriesUseCase
 from app.github.application.use_cases.list_linked_repositories import ListLinkedRepositoriesUseCase
+from app.github.application.use_cases.push_retrospective import PushRetrospectiveUseCase
 from app.github.application.use_cases.sync_all_repositories import SyncAllRepositoriesUseCase
 from app.github.application.use_cases.unlink_all_repositories import UnlinkAllRepositoriesUseCase
 from app.github.application.use_cases.unlink_repository import UnlinkRepositoryUseCase
+from app.github.application.use_cases.update_repository import UpdateRepositoryUseCase
 from app.github.domain.repositories.repository import IGitHubRepositoryRepository
 from app.github.infrastructure.api.github_api_client import GitHubApiClient
 from app.github.infrastructure.persistence.repositories.github_repository_repo import GitHubRepositoryRepository
 from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
 from app.settings.application.use_cases.get_settings import GetSettingsUseCase
+from app.settings.application.use_cases.update_country import UpdateCountryUseCase
 from app.settings.application.use_cases.update_settings import UpdateSettingsUseCase
+from app.settings.application.use_cases.update_timezone import UpdateTimezoneUseCase
 from app.settings.domain.repositories.repository import IUserSettingsRepository
 from app.settings.infrastructure.persistence.repositories.user_settings_repo import UserSettingsRepository
 from app.notification.application.use_cases.delete_notification import DeleteNotificationUseCase
@@ -101,6 +109,11 @@ class AppProvider(Provider):
     def oauth_state_cache(self, config: AppConfig) -> OAuthStateCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
         return OAuthStateCache(redis)
+
+    @provide
+    def onboarding_token_cache(self, config: AppConfig) -> OnboardingTokenCache:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return OnboardingTokenCache(redis)
 
     @provide
     def oauth_client_registry(self, config: AppConfig) -> OAuthClientRegistry:
@@ -201,8 +214,20 @@ class RequestProvider(Provider):
         return GetSettingsUseCase(repo)
 
     @provide
-    def update_settings_use_case(self, repo: IUserSettingsRepository) -> UpdateSettingsUseCase:
-        return UpdateSettingsUseCase(repo)
+    def update_settings_use_case(
+        self,
+        repo: IUserSettingsRepository,
+        github_repo: IGitHubRepositoryRepository,
+    ) -> UpdateSettingsUseCase:
+        return UpdateSettingsUseCase(repo, github_repo)
+
+    @provide
+    def update_country_use_case(self, user_repo: IUserRepository) -> UpdateCountryUseCase:
+        return UpdateCountryUseCase(user_repo)
+
+    @provide
+    def update_timezone_use_case(self, user_repo: IUserRepository) -> UpdateTimezoneUseCase:
+        return UpdateTimezoneUseCase(user_repo)
 
     # ── Auth Use Cases ────────────────────────────────────────────────────────
 
@@ -269,9 +294,27 @@ class RequestProvider(Provider):
         oauth_connection_repo: IOAuthConnectionRepository,
         user_repo: IUserRepository,
         auth_token_cache: AuthTokenCache,
+        onboarding_cache: OnboardingTokenCache,
     ) -> HandleOAuthCallbackUseCase:
         return HandleOAuthCallbackUseCase(
-            registry, state_cache, oauth_connection_repo, user_repo, auth_token_cache
+            registry,
+            state_cache,
+            oauth_connection_repo,
+            user_repo,
+            auth_token_cache,
+            onboarding_cache,
+        )
+
+    @provide
+    def complete_onboarding_use_case(
+        self,
+        onboarding_cache: OnboardingTokenCache,
+        user_repo: IUserRepository,
+        oauth_connection_repo: IOAuthConnectionRepository,
+        auth_token_cache: AuthTokenCache,
+    ) -> CompleteOnboardingUseCase:
+        return CompleteOnboardingUseCase(
+            onboarding_cache, user_repo, oauth_connection_repo, auth_token_cache
         )
 
     # ── Todo Use Cases ────────────────────────────────────────────────────────
@@ -393,3 +436,38 @@ class RequestProvider(Provider):
         self, repo: IGitHubRepositoryRepository
     ) -> UnlinkAllRepositoriesUseCase:
         return UnlinkAllRepositoriesUseCase(repo)
+
+    @provide
+    def get_connection_status_use_case(
+        self,
+        oauth_repo: IOAuthConnectionRepository,
+        settings_repo: IUserSettingsRepository,
+        api_client: GitHubApiClient,
+    ) -> GetConnectionStatusUseCase:
+        return GetConnectionStatusUseCase(oauth_repo, settings_repo, api_client)
+
+    @provide
+    def update_repository_use_case(
+        self, repo: IGitHubRepositoryRepository
+    ) -> UpdateRepositoryUseCase:
+        return UpdateRepositoryUseCase(repo)
+
+    @provide
+    def get_today_commits_use_case(
+        self,
+        user_repo: IUserRepository,
+        oauth_repo: IOAuthConnectionRepository,
+        repo: IGitHubRepositoryRepository,
+        api_client: GitHubApiClient,
+    ) -> GetTodayCommitsUseCase:
+        return GetTodayCommitsUseCase(user_repo, oauth_repo, repo, api_client)
+
+    @provide
+    def push_retrospective_use_case(
+        self,
+        settings_repo: IUserSettingsRepository,
+        oauth_repo: IOAuthConnectionRepository,
+        repo: IGitHubRepositoryRepository,
+        api_client: GitHubApiClient,
+    ) -> PushRetrospectiveUseCase:
+        return PushRetrospectiveUseCase(settings_repo, oauth_repo, repo, api_client)

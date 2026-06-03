@@ -32,6 +32,8 @@ class UserSettingsRepository(IUserSettingsRepository):
             auto_summary_yearly=entity.auto_summary_yearly,
             notification_retention_days=entity.notification_retention_days,
             last_schedule_check_at=entity.last_schedule_check_at,
+            last_summary_date_local=entity.last_summary_date_local,
+            github_push_target_repository_id=entity.github_push_target_repository_id,
             updated_at=entity.updated_at,
         )
 
@@ -44,5 +46,7 @@ class UserSettingsRepository(IUserSettingsRepository):
             auto_summary_yearly=model.auto_summary_yearly,
             notification_retention_days=model.notification_retention_days,
             last_schedule_check_at=model.last_schedule_check_at,
+            last_summary_date_local=model.last_summary_date_local,
+            github_push_target_repository_id=model.github_push_target_repository_id,
             updated_at=model.updated_at,
         )

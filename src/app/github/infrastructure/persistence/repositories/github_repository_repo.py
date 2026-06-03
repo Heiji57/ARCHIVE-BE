@@ -42,6 +42,19 @@ class GitHubRepositoryRepository(IGitHubRepositoryRepository):
         )
         return [self._to_entity(m) for m in result.scalars().all()]
 
+    async def find_commit_read_enabled_by_user(
+        self, user_id: str
+    ) -> list[GitHubRepository]:
+        result = await self._session.execute(
+            select(GitHubRepositoryModel)
+            .where(
+                GitHubRepositoryModel.user_id == user_id,
+                GitHubRepositoryModel.commit_read_enabled.is_(True),
+            )
+            .order_by(GitHubRepositoryModel.full_name.asc())
+        )
+        return [self._to_entity(m) for m in result.scalars().all()]
+
     async def find_by_github_id(
         self, user_id: str, github_repo_id: int
     ) -> GitHubRepository | None:
@@ -78,6 +91,7 @@ class GitHubRepositoryRepository(IGitHubRepositoryRepository):
             is_private=entity.is_private,
             default_branch=entity.default_branch,
             html_url=entity.html_url,
+            commit_read_enabled=entity.commit_read_enabled,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -93,6 +107,7 @@ class GitHubRepositoryRepository(IGitHubRepositoryRepository):
             is_private=model.is_private,
             default_branch=model.default_branch,
             html_url=model.html_url,
+            commit_read_enabled=model.commit_read_enabled,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

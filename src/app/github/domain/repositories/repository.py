@@ -17,6 +17,11 @@ class IGitHubRepositoryRepository(ABC):
     async def find_by_user(self, user_id: str) -> list[GitHubRepository]: ...
 
     @abstractmethod
+    async def find_commit_read_enabled_by_user(
+        self, user_id: str
+    ) -> list[GitHubRepository]: ...
+
+    @abstractmethod
     async def find_by_github_id(
         self, user_id: str, github_repo_id: int
     ) -> GitHubRepository | None: ...

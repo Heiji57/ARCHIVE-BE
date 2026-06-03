@@ -133,7 +133,9 @@ paths:
             example:
               email: user@example.com
               password: strongPass1!
-              password_confirm: strongPass1!
+              passwordConfirm: strongPass1!
+              country: KR
+              region: null
       responses:
         '201':
           description: 가입 성공
@@ -153,6 +155,8 @@ paths:
         - AUTH_EMAIL_NOT_VERIFIED
         - USER_EMAIL_INVALID
         - USER_EMAIL_DUPLICATED
+        - AUTH_COUNTRY_INVALID
+        - AUTH_COUNTRY_REGION_REQUIRED
 
   /auth/login:
     post:
@@ -290,14 +294,21 @@ paths:
       description: |
         OAuth provider가 redirect로 호출하는 콜백. **클라이언트가 직접 호출하지 않는다.**
 
-        응답은 HTML이며 팝업 창에서 `window.opener.postMessage()`로 부모 창에 결과를 전달한다:
+        응답은 HTML이며 팝업 창에서 `window.opener.postMessage()`로 부모 창에 결과를 전달한다.
+
+        ### 분기
+        - **기존 사용자** → `oauth_success` + access token + `refresh_token` HttpOnly Cookie
+        - **신규 사용자** (OAuth 첫 사용) → `oauth_onboarding_required` + `onboarding_token` HttpOnly Cookie (TTL 30분).
+          FE는 `/onboarding` 페이지로 이동해 `POST /auth/oauth/onboarding`에서 국가 정보를 추가 입력해 가입을 완료한다.
+
         ```js
-        // 성공
+        // 기존 사용자
         { type: "oauth_success", access_token: "..." }
+        // 신규 사용자
+        { type: "oauth_onboarding_required" }
         // 실패
         { type: "oauth_error", error: "<ERROR_CODE>" }
         ```
-        성공 시 refresh token은 HttpOnly Cookie로 함께 설정된다.
       security: []
       parameters:
         - $ref: '#/components/parameters/OAuthProviderPath'
@@ -318,13 +329,62 @@ paths:
           description: HTML 응답 (postMessage 스크립트 포함)
           headers:
             Set-Cookie:
-              description: 성공 시에만 `refresh_token` cookie 발급
+              description: |
+                기존 사용자 → `refresh_token` HttpOnly Cookie (7d)
+                신규 사용자 → `onboarding_token` HttpOnly Cookie (30min)
               schema: { type: string }
           content:
             text/html:
               schema: { type: string }
       x-error-codes:
         - AUTH_OAUTH_STATE_INVALID
+
+  /auth/oauth/onboarding:
+    post:
+      tags: [auth]
+      summary: OAuth 신규 사용자 온보딩 완료
+      description: |
+        OAuth 콜백 단계에서 `onboarding_token` HttpOnly Cookie를 받은 신규 사용자가 국가 정보를
+        추가 입력해 가입을 완료한다.
+
+        - 다중 tz 국가(US/CA/RU/AU/BR/MX/ID/AR/CL/KZ/MN)는 `region` 필수 (ISO 3166-2: 예 `US-CA`)
+        - 단일 tz 국가는 `region` 생략 가능
+        - 성공 시 `onboarding_token` Cookie 삭제 + `refresh_token` Cookie + access token body
+      security:
+        - OnboardingCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OnboardingCompleteRequest' }
+            examples:
+              korea:
+                summary: 한국 (단일 tz)
+                value: { country: KR }
+              us_california:
+                summary: 미국 캘리포니아 (다중 tz)
+                value: { country: US, region: US-CA }
+      responses:
+        '201':
+          description: 가입 완료
+          headers:
+            Set-Cookie:
+              description: '`refresh_token` HttpOnly cookie (7d) + `onboarding_token` 삭제'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseToken' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '409':
+          $ref: '#/components/responses/Conflict_409'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+      x-error-codes:
+        - AUTH_ONBOARDING_TOKEN_INVALID
+        - AUTH_ONBOARDING_TOKEN_EXPIRED
+        - AUTH_COUNTRY_INVALID
+        - AUTH_COUNTRY_REGION_REQUIRED
+        - USER_EMAIL_DUPLICATED
 
   # ════════════════════════════════════════════════════════════════════════════
   # TODOS
@@ -801,9 +861,93 @@ paths:
           $ref: '#/components/responses/Unauthorized_401'
         '422': { $ref: '#/components/responses/ValidationError_422' }
 
+  /settings/country:
+    patch:
+      tags: [settings]
+      summary: 국가/하위지역 변경 — timezone 자동 재계산
+      description: |
+        사용자 국가를 변경하면 backend가 country/region 조합으로 timezone을 재계산해 같이 저장한다.
+        AI 자동 요약 트리거 시간(현지 1am)도 새 timezone 기준으로 자동 갱신된다.
+
+        - 다중 tz 국가는 `region`(ISO 3166-2) 필수
+        - 단일 tz 국가는 `region` 생략 가능
+        - 임의로 timezone만 단독 변경하려면 `PATCH /settings/timezone` 사용
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateCountryRequest' }
+            examples:
+              korea:    { value: { country: KR } }
+              us_ca:    { value: { country: US, region: US-CA } }
+              japan:    { value: { country: JP } }
+      responses:
+        '200':
+          description: 수정 성공 (timezone 포함된 user 응답)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseUser' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '404':
+          $ref: '#/components/responses/NotFound_404'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+      x-error-codes:
+        - AUTH_COUNTRY_INVALID
+        - AUTH_COUNTRY_REGION_REQUIRED
+        - USER_NOT_FOUND
+
+  /settings/timezone:
+    patch:
+      tags: [settings]
+      summary: Timezone 단독 변경 (country는 유지)
+      description: |
+        country를 바꾸지 않고 timezone만 별도로 override한다. 해외 출장/임시 거주 등의 케이스용.
+        IANA 식별자(`Asia/Seoul`, `America/Los_Angeles` 등) 형식이어야 한다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTimezoneRequest' }
+            example:
+              timezone: America/Los_Angeles
+      responses:
+        '200':
+          description: 수정 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseUser' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '404':
+          $ref: '#/components/responses/NotFound_404'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+      x-error-codes:
+        - AUTH_TIMEZONE_INVALID
+        - USER_NOT_FOUND
+
   # ════════════════════════════════════════════════════════════════════════════
   # GITHUB
   # ════════════════════════════════════════════════════════════════════════════
+
+  /github/connection:
+    get:
+      tags: [github]
+      summary: GitHub 연결 상태 + push target 통합 조회
+      description: |
+        FE가 GitHub 화면 진입 시 한 번에 상태를 파악할 수 있도록 묶어 반환한다.
+
+        - `connected`: GitHub OAuth 연결 + 토큰 유효성 검증 결과
+        - `login`: GitHub username (connected=true일 때만)
+        - `pushTargetRepositoryId`: 회고 push 대상 저장소 id (없으면 null)
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseConnectionStatus' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
 
   /github/repositories/available:
     get:
@@ -934,6 +1078,34 @@ paths:
         schema: { type: string }
         example: ghrepo_01HXYZ...
 
+    patch:
+      tags: [github]
+      summary: 저장소 역할 설정 (commit 읽기 on/off)
+      description: |
+        해당 저장소를 회고 화면의 "오늘의 커밋" 집계 대상으로 포함할지 토글한다.
+        `commitReadEnabled=false`이면 `GET /github/commits` 응답에서 제외된다.
+        Push 대상 지정은 별개 — `commitReadEnabled=false`인 저장소도 push 대상이 될 수 있다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateRepositoryRequest' }
+            example:
+              commitReadEnabled: false
+      responses:
+        '200':
+          description: 수정 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseRepository' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '404':
+          $ref: '#/components/responses/NotFound_404'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+      x-error-codes:
+        - GITHUB_REPOSITORY_NOT_FOUND
+
     delete:
       tags: [github]
       summary: 단일 저장소 연결 해제
@@ -949,6 +1121,125 @@ paths:
           $ref: '#/components/responses/NotFound_404'
       x-error-codes:
         - GITHUB_REPOSITORY_NOT_FOUND
+
+  /github/commits:
+    get:
+      tags: [github]
+      summary: 오늘(또는 특정 날짜)의 커밋 모음
+      description: |
+        사용자의 `commitReadEnabled=true` 저장소들에서 지정 날짜의 커밋을 모아 시간 내림차순으로 반환한다.
+
+        - **타임존**: 항상 `user.timezone` 기준. 별도 `tz` 쿼리 파라미터를 받지 않는다.
+        - **author 필터**: 사용자 본인의 GitHub 계정(login) 커밋만 (`/user` API로 자동 조회)
+        - **`date` 생략 시**: `user.timezone` 기준 오늘
+        - **범위**: `[date 00:00, date+1 00:00)` 사용자 tz → UTC 변환 후 GitHub API `since`/`until`
+        - **단일 저장소 실패**: rate limit·서버오류 외 오류는 해당 저장소만 skip, 나머지 결과 반환
+      parameters:
+        - in: query
+          name: date
+          required: false
+          schema: { type: string, format: date, pattern: '^\d{4}-\d{2}-\d{2}$' }
+          example: '2026-06-12'
+          description: 생략 시 user.timezone 기준 오늘
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseCommitList' }
+        '400':
+          $ref: '#/components/responses/BadRequest_400'
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+        '429':
+          $ref: '#/components/responses/RateLimited_429'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable_503'
+      x-error-codes:
+        - GITHUB_CONNECTION_NOT_FOUND
+        - GITHUB_TOKEN_INVALID
+        - GITHUB_RATE_LIMITED
+        - GITHUB_API_UNAVAILABLE
+
+  /github/retrospectives/push:
+    post:
+      tags: [github]
+      summary: 회고 마크다운을 push target 저장소에 commit/push
+      description: |
+        사용자가 작성한 회고 마크다운 본문을 push target 저장소의 정해진 경로에 commit한다.
+
+        ### 파일 경로 규칙 (사용자 settings.locale 기반 i18n)
+        | periodType | 폴더 (ko/en) | 파일명 (ko/en) |
+        |---|---|---|
+        | DAILY  | `일간/` / `daily/` | `2026-06-12 회고록.md` / `2026-06-12 retrospective.md` |
+        | WEEKLY | `주간/` / `weekly/` | `2026-06 2주차 회고록.md` / `2026-06 week 2 retrospective.md` |
+        | MONTHLY | `월간/` / `monthly/` | `2026-06 회고록.md` / `2026-06 retrospective.md` |
+        | ANNUAL | `년간/` / `annual/` | `2026 회고록.md` / `2026 retrospective.md` |
+
+        ### periodKey 형식
+        - DAILY: `YYYY-MM-DD` (예: `2026-06-12`)
+        - WEEKLY: `YYYY-MM-Wn` (n=1~6, majority-day 방식)
+        - MONTHLY: `YYYY-MM`
+        - ANNUAL: `YYYY`
+
+        ### 동작
+        - 같은 경로 파일이 있으면 **덮어쓰기**(update). 없으면 **생성**(create).
+        - GitHub commit history가 자체 버전 관리 역할 — 덮어써도 이력 유지
+        - 푸시 브랜치는 저장소의 `defaultBranch` 사용
+        - 커밋 메시지는 사용자 locale로 자동 생성 (prefix `docs(retro):` 영문 고정)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushRetrospectiveRequest' }
+            examples:
+              daily_ko:
+                summary: 일간 회고 (한국)
+                value:
+                  periodType: DAILY
+                  periodKey: '2026-06-12'
+                  contentMarkdown: '# 오늘의 회고\n...'
+              weekly:
+                summary: 주간 회고
+                value:
+                  periodType: WEEKLY
+                  periodKey: '2026-06-W2'
+                  contentMarkdown: '# 이번 주 회고\n...'
+              monthly:
+                summary: 월간 회고
+                value:
+                  periodType: MONTHLY
+                  periodKey: '2026-06'
+                  contentMarkdown: '# 6월 회고\n...'
+              annual:
+                summary: 년간 회고
+                value:
+                  periodType: ANNUAL
+                  periodKey: '2026'
+                  contentMarkdown: '# 2026년 회고\n...'
+      responses:
+        '201':
+          description: push 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponsePushResult' }
+        '400':
+          $ref: '#/components/responses/BadRequest_400'
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+        '502':
+          $ref: '#/components/responses/BadGateway_502'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable_503'
+      x-error-codes:
+        - GITHUB_CONNECTION_NOT_FOUND
+        - GITHUB_TOKEN_INVALID
+        - GITHUB_PUSH_TARGET_NOT_SET
+        - GITHUB_REPOSITORY_NOT_LINKED
+        - GITHUB_PUSH_FAILED
+        - GITHUB_API_UNAVAILABLE
 
 # ────────────────────────────────────────────────────────────────────────────────
 components:
@@ -967,6 +1258,14 @@ components:
       in: cookie
       name: refresh_token
       description: HttpOnly · Secure · SameSite=Lax · Max-Age 7d
+    OnboardingCookie:
+      type: apiKey
+      in: cookie
+      name: onboarding_token
+      description: |
+        OAuth 신규 사용자 온보딩용 임시 토큰. HttpOnly · Secure · SameSite=Lax · Max-Age 30분.
+        Redis에 `auth:onboarding:{token} → {provider, provider_user_id, email}` 형태로 적재됨.
+        클라이언트가 `POST /auth/oauth/onboarding`에서 사용 후 즉시 삭제된다.
 
   # ════════════════════════════════════════════════════════════════════════════
   parameters:
@@ -1005,7 +1304,14 @@ components:
   responses:
   # ════════════════════════════════════════════════════════════════════════════
     BadRequest_400:
-      description: 잘못된 요청 (도메인 invalid state)
+      description: |
+        잘못된 요청. 가능한 도메인 코드:
+        - `RETRO_SUMMARY_INVALID_STATE` — 요약이 잘못된 상태
+        - `AUTH_EMAIL_NOT_VERIFIED` — 이메일 미인증 상태에서 register 시도
+        - `AUTH_OAUTH_STATE_INVALID` — OAuth state 불일치
+        - `GITHUB_CONNECTION_NOT_FOUND` — GitHub 미연결
+        - `GITHUB_PUSH_TARGET_NOT_SET` — push 대상 미설정
+        - `GITHUB_REPOSITORY_NOT_LINKED` — push 대상이 연결되지 않은 저장소
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1021,6 +1327,10 @@ components:
         - `AUTH_TOKEN_INVALID` — 토큰 누락 / 형식 오류 / 서명 불일치 / type mismatch
         - `AUTH_INVALID_CREDENTIALS` — 이메일/비밀번호 불일치
         - `AUTH_REFRESH_TOKEN_INVALID` / `AUTH_REFRESH_TOKEN_REVOKED` — refresh 실패
+        - `AUTH_OAUTH_STATE_INVALID` — OAuth state 검증 실패
+        - `AUTH_ONBOARDING_TOKEN_INVALID` — onboarding cookie 누락
+        - `AUTH_ONBOARDING_TOKEN_EXPIRED` — onboarding TTL(30분) 만료
+        - `GITHUB_TOKEN_INVALID` — GitHub OAuth 토큰 만료/폐기 (FE는 GitHub OAuth 재인증 유도)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1069,6 +1379,18 @@ components:
           example:
             status: error
             code: GITHUB_RATE_LIMITED
+            data: null
+            details: []
+    BadGateway_502:
+      description: |
+        외부 서비스(GitHub) push 실패. sha 충돌 / 권한 / 네트워크 오류 등.
+        FE는 사용자에게 "다시 시도" 안내. 자동 retry는 금지(중복 commit 위험).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            status: error
+            code: GITHUB_PUSH_FAILED
             data: null
             details: []
     ServiceUnavailable_503:
@@ -1157,16 +1479,29 @@ components:
         email: { type: string, format: email }
         code:
           type: string
-          pattern: '^\d{6}$'
-          description: 정확히 숫자 6자리
+          pattern: '^[A-Z0-9]{6}$'
+          description: 영문 대문자 또는 숫자 6자리 (서버에서 strip + upper 정규화 후 검증)
 
     RegisterRequest:
       type: object
-      required: [email, password, password_confirm]
+      required: [email, password, passwordConfirm, country]
       properties:
         email:            { type: string, format: email }
         password:         { type: string, minLength: 8 }
-        password_confirm: { type: string, minLength: 8 }
+        passwordConfirm:  { type: string, minLength: 8 }
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          description: |
+            ISO 3166-1 alpha-2 국가 코드 (예: `KR`, `US`, `JP`).
+            다중 tz 국가(US/CA/RU/AU/BR/MX/ID/AR/CL/KZ/MN)는 `region` 필수.
+        region:
+          type: string
+          nullable: true
+          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+          description: |
+            ISO 3166-2 하위지역 코드 (예: `US-CA`, `CA-ON`).
+            단일 tz 국가는 생략 가능 (`null`).
 
     LoginRequest:
       type: object
@@ -1180,19 +1515,61 @@ components:
       properties:
         display_name: { type: string, nullable: true }
 
+    OnboardingCompleteRequest:
+      type: object
+      required: [country]
+      properties:
+        country: { type: string, pattern: '^[A-Z]{2}$' }
+        region:
+          type: string
+          nullable: true
+          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+
+    UpdateCountryRequest:
+      type: object
+      required: [country]
+      properties:
+        country: { type: string, pattern: '^[A-Z]{2}$' }
+        region:
+          type: string
+          nullable: true
+          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+
+    UpdateTimezoneRequest:
+      type: object
+      required: [timezone]
+      properties:
+        timezone:
+          type: string
+          example: Asia/Seoul
+          description: IANA timezone identifier
+
     # ── Auth Response ──────────────────────────────────────────────────────
     TokenResponse:
       type: object
-      required: [access_token]
+      required: [accessToken]
       properties:
-        access_token: { type: string }
+        accessToken: { type: string }
 
     UserResponse:
       type: object
-      required: [id, email]
+      required: [id, email, country, timezone]
       properties:
-        id:    { type: string }
-        email: { type: string, format: email }
+        id:       { type: string }
+        email:    { type: string, format: email }
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          example: KR
+        region:
+          type: string
+          nullable: true
+          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+          example: null
+        timezone:
+          type: string
+          example: Asia/Seoul
+          description: IANA timezone identifier — AI 자동 요약은 이 tz 기준 "현지 새벽 1시"에 트리거됨
 
     ApiResponseToken:
       allOf:
@@ -1367,6 +1744,21 @@ components:
               items: { $ref: '#/components/schemas/NotificationResponse' }
 
     # ── Settings ───────────────────────────────────────────────────────────
+    GitHubSettingsBlock:
+      type: object
+      description: |
+        Settings 내 GitHub 관련 사용자 설정 네임스페이스.
+        top-level 평탄화 대신 중첩 형태로 운용 — 향후 GitHub 관련 사용자 설정이 늘어도 top-level 오염 없음.
+      properties:
+        pushTargetRepositoryId:
+          type: string
+          nullable: true
+          example: ghrepo_01HXYZ...
+          description: |
+            회고 push 대상 저장소 id. 사용자가 연결한 저장소 중 하나여야 함.
+            연결 안 된 id 지정 시 `GITHUB_REPOSITORY_NOT_LINKED` (400).
+            null로 명시하면 push target 해제.
+
     UpdateSettingsRequest:
       type: object
       properties:
@@ -1386,10 +1778,12 @@ components:
           type: string
           format: date-time
           nullable: true
+        github:
+          $ref: '#/components/schemas/GitHubSettingsBlock'
 
     SettingsResponse:
       type: object
-      required: [locale, autoSummaryWeekly, autoSummaryMonthly, autoSummaryYearly, notificationRetentionDays]
+      required: [locale, autoSummaryWeekly, autoSummaryMonthly, autoSummaryYearly, notificationRetentionDays, github]
       properties:
         locale:                    { type: string }
         autoSummaryWeekly:         { type: boolean }
@@ -1400,6 +1794,8 @@ components:
           type: string
           format: date-time
           nullable: true
+        github:
+          $ref: '#/components/schemas/GitHubSettingsBlock'
 
     ApiResponseSettings:
       allOf:
@@ -1421,18 +1817,28 @@ components:
 
     RepositoryResponse:
       type: object
-      required: [id, githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl, createdAt]
+      required: [id, githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl, commitReadEnabled, createdAt]
       properties:
-        id:             { type: string, description: 백엔드에서 발급한 연결 ID (`ghrepo_...`) }
-        githubRepoId:   { type: integer, format: int64 }
-        owner:          { type: string }
-        name:           { type: string }
-        fullName:       { type: string, example: octocat/Hello-World }
-        isPrivate:      { type: boolean }
-        defaultBranch:  { type: string, example: main }
-        htmlUrl:        { type: string, format: uri }
-        createdAt:      { type: string, format: date-time }
-        updatedAt:      { type: string, format: date-time, nullable: true }
+        id:                { type: string, description: 백엔드에서 발급한 연결 ID (`ghrepo_...`) }
+        githubRepoId:      { type: integer, format: int64 }
+        owner:             { type: string }
+        name:              { type: string }
+        fullName:          { type: string, example: octocat/Hello-World }
+        isPrivate:         { type: boolean }
+        defaultBranch:     { type: string, example: main }
+        htmlUrl:           { type: string, format: uri }
+        commitReadEnabled:
+          type: boolean
+          default: true
+          description: 회고 화면 "오늘의 커밋" 집계 대상 여부 (PATCH로 토글)
+        createdAt:         { type: string, format: date-time }
+        updatedAt:         { type: string, format: date-time, nullable: true }
+
+    UpdateRepositoryRequest:
+      type: object
+      required: [commitReadEnabled]
+      properties:
+        commitReadEnabled: { type: boolean }
 
     AvailableRepositoryResponse:
       type: object
@@ -1470,3 +1876,90 @@ components:
             data:
               type: array
               items: { $ref: '#/components/schemas/AvailableRepositoryResponse' }
+
+    # ── GitHub Connection ──────────────────────────────────────────────────
+    ConnectionStatusResponse:
+      type: object
+      required: [connected]
+      properties:
+        connected:
+          type: boolean
+          description: GitHub OAuth 연결 + 토큰 유효성 검증 결과
+        login:
+          type: string
+          nullable: true
+          example: octocat
+          description: connected=true일 때만 값 존재
+        pushTargetRepositoryId:
+          type: string
+          nullable: true
+          example: ghrepo_01HXYZ...
+          description: 회고 push 대상 저장소 id. 미설정 시 null.
+
+    ApiResponseConnectionStatus:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/ConnectionStatusResponse' }
+
+    # ── GitHub Commits ─────────────────────────────────────────────────────
+    CommitResponse:
+      type: object
+      required: [repositoryId, fullName, sha, message, htmlUrl, author, committedAt]
+      properties:
+        repositoryId: { type: string, description: 백엔드 저장소 연결 ID }
+        fullName:     { type: string, example: octocat/Hello-World }
+        sha:          { type: string, example: 8f23c41 }
+        message:
+          type: string
+          description: 커밋 메시지 첫 줄만 (서버에서 200자 자름)
+        htmlUrl:      { type: string, format: uri }
+        author:       { type: string, description: 작성자 GitHub login }
+        committedAt:  { type: string, format: date-time }
+
+    ApiResponseCommitList:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/CommitResponse' }
+
+    # ── GitHub Retrospective Push ──────────────────────────────────────────
+    PushRetrospectiveRequest:
+      type: object
+      required: [periodType, periodKey, contentMarkdown]
+      properties:
+        periodType:
+          type: string
+          enum: [DAILY, WEEKLY, MONTHLY, ANNUAL]
+        periodKey:
+          type: string
+          description: |
+            periodType별 형식 (서버 검증 정규식):
+            - DAILY:  `^\d{4}-\d{2}-\d{2}$` (예: `2026-06-12`)
+            - WEEKLY: `^\d{4}-\d{2}-W[1-6]$` (예: `2026-06-W2`, majority-day 방식)
+            - MONTHLY: `^\d{4}-\d{2}$` (예: `2026-06`)
+            - ANNUAL: `^\d{4}$` (예: `2026`)
+        contentMarkdown:
+          type: string
+          minLength: 1
+          maxLength: 1000000
+          description: 회고 본문 (마크다운). 그대로 파일 내용으로 저장됨.
+
+    PushResultResponse:
+      type: object
+      required: [commitSha, htmlUrl, path]
+      properties:
+        commitSha: { type: string, example: 8f23c41abcd... }
+        htmlUrl:   { type: string, format: uri, description: GitHub 상 파일 또는 커밋 링크 }
+        path:      { type: string, example: 일간/2026-06-12 회고록.md }
+
+    ApiResponsePushResult:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/PushResultResponse' }
