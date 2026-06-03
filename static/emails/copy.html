@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <meta name="referrer" content="no-referrer">
+    <title>ARCHIVE 인증 코드 복사</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            height: 100%;
+            background-color: #000000;
+            color: #f5f5f7;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 20px;
+        }
+
+        .card {
+            width: 100%;
+            max-width: 420px;
+            background-color: #1c1c1e;
+            border-radius: 22px;
+            padding: 48px 36px;
+            text-align: center;
+        }
+
+        .wordmark {
+            font-size: 12px;
+            font-weight: 600;
+            color: #f5f5f7;
+            letter-spacing: 0.36em;
+            margin-bottom: 36px;
+        }
+
+        .check {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background-color: rgba(10, 132, 255, 0.16);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px auto;
+            transition: opacity 0.18s ease;
+        }
+
+        .check svg {
+            width: 28px;
+            height: 28px;
+            stroke: #0a84ff;
+            stroke-width: 3;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .check.error {
+            background-color: rgba(255, 69, 58, 0.16);
+        }
+
+        .check.error svg {
+            stroke: #ff453a;
+        }
+
+        h1 {
+            font-size: 26px;
+            font-weight: 600;
+            line-height: 1.12;
+            letter-spacing: -0.4px;
+            color: #f5f5f7;
+            margin-bottom: 12px;
+        }
+
+        p.subtitle {
+            font-size: 15px;
+            font-weight: 400;
+            line-height: 1.45;
+            letter-spacing: -0.2px;
+            color: #a1a1a6;
+            margin-bottom: 28px;
+        }
+
+        .code-display {
+            display: inline-block;
+            background-color: #2c2c2e;
+            border-radius: 14px;
+            padding: 18px 24px;
+            font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+            font-size: 24px;
+            font-weight: 600;
+            color: #f5f5f7;
+            letter-spacing: 0.28em;
+            padding-left: calc(24px + 0.28em);
+            margin-bottom: 32px;
+            user-select: all;
+            -webkit-user-select: all;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-direction: column;
+        }
+
+        button {
+            font-family: inherit;
+            font-size: 15px;
+            font-weight: 400;
+            border: none;
+            border-radius: 9999px;
+            padding: 13px 28px;
+            cursor: pointer;
+            transition: transform 0.12s ease, opacity 0.12s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        button:active { transform: scale(0.96); }
+
+        .primary {
+            background-color: #0a84ff;
+            color: #ffffff;
+        }
+
+        .secondary {
+            background-color: transparent;
+            color: #0a84ff;
+            font-size: 14px;
+            padding: 8px;
+        }
+
+        .hint {
+            margin-top: 24px;
+            font-size: 12px;
+            color: #636366;
+            letter-spacing: -0.1px;
+        }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="wordmark">ARCHIVE</div>
+
+        <div class="check" id="check">
+            <svg id="check-icon" viewBox="0 0 24 24">
+                <polyline points="4 12 10 18 20 6"></polyline>
+            </svg>
+        </div>
+
+        <h1 id="title">복사되었습니다</h1>
+        <p class="subtitle" id="subtitle">인증 코드가 클립보드에 복사되었어요.<br>회원가입 화면으로 돌아가 붙여 넣어 주세요.</p>
+
+        <div class="code-display" id="code-display">······</div>
+
+        <div class="actions">
+            <button type="button" class="primary" id="copy-btn">다시 복사하기</button>
+            <button type="button" class="secondary" id="close-btn">창 닫기</button>
+        </div>
+
+        <p class="hint">이 창은 닫으셔도 됩니다.</p>
+    </main>
+
+    <script>
+        (function () {
+            const params = new URLSearchParams(window.location.search);
+            const code = (params.get('code') || '').trim().toUpperCase();
+
+            const display = document.getElementById('code-display');
+            const title = document.getElementById('title');
+            const subtitle = document.getElementById('subtitle');
+            const check = document.getElementById('check');
+            const checkIcon = document.getElementById('check-icon');
+            const copyBtn = document.getElementById('copy-btn');
+            const closeBtn = document.getElementById('close-btn');
+
+            function showError(message) {
+                check.classList.add('error');
+                checkIcon.innerHTML = '<line x1="6" y1="6" x2="18" y2="18"></line><line x1="18" y1="6" x2="6" y2="18"></line>';
+                title.textContent = '복사 실패';
+                subtitle.innerHTML = message;
+            }
+
+            function showSuccess() {
+                check.classList.remove('error');
+                checkIcon.innerHTML = '<polyline points="4 12 10 18 20 6"></polyline>';
+                title.textContent = '복사되었습니다';
+                subtitle.innerHTML = '인증 코드가 클립보드에 복사되었어요.<br>회원가입 화면으로 돌아가 붙여 넣어 주세요.';
+            }
+
+            if (!/^[A-Z0-9]{6}$/.test(code)) {
+                display.textContent = '······';
+                showError('잘못된 인증 코드 링크입니다.<br>메일에서 다시 시도해 주세요.');
+                copyBtn.disabled = true;
+                copyBtn.style.opacity = '0.4';
+                return;
+            }
+
+            display.textContent = code;
+
+            async function copyToClipboard() {
+                try {
+                    if (navigator.clipboard && window.isSecureContext) {
+                        await navigator.clipboard.writeText(code);
+                    } else {
+                        const ta = document.createElement('textarea');
+                        ta.value = code;
+                        ta.style.position = 'fixed';
+                        ta.style.opacity = '0';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                    }
+                    showSuccess();
+                } catch (e) {
+                    showError('자동 복사가 차단되었습니다.<br>아래 코드를 길게 눌러 직접 복사해 주세요.');
+                }
+            }
+
+            copyBtn.addEventListener('click', copyToClipboard);
+            closeBtn.addEventListener('click', function () {
+                window.close();
+                setTimeout(function () {
+                    if (!window.closed) {
+                        window.location.href = 'about:blank';
+                    }
+                }, 80);
+            });
+
+            copyToClipboard();
+        })();
+    </script>
+</body>
+</html>

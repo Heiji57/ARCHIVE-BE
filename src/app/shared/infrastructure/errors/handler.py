@@ -7,9 +7,18 @@ from app.auth.domain.exceptions.exceptions import (
     AuthInvalidCredentialsException,
     AuthTokenExpiredException,
     AuthTokenInvalidException,
+    EmailNotVerifiedException,
     OAuthStateInvalidException,
     RefreshTokenInvalidException,
     RefreshTokenRevokedException,
+)
+from app.github.domain.exceptions.exceptions import (
+    GitHubApiUnavailableException,
+    GitHubConnectionNotFoundException,
+    GitHubRateLimitedException,
+    GitHubRepositoryAlreadyLinkedException,
+    GitHubRepositoryNotFoundException,
+    GitHubTokenInvalidException,
 )
 from app.notification.domain.exceptions.exceptions import NotificationNotFoundException
 from app.retrospective.domain.exceptions.exceptions import (
@@ -26,33 +35,44 @@ from app.todo.domain.exceptions.exceptions import (
     TodoNotFoundException,
 )
 from app.user.domain.exceptions.exceptions import (
+    InvalidEmailException,
     UserEmailDuplicatedException,
     UserNotFoundException,
 )
 
 _STATUS_MAP: dict[str, int] = {
     # 400
-    AuthTokenInvalidException.code: 400,
     OAuthStateInvalidException.code: 400,
     SummaryInvalidStateException.code: 400,
+    EmailNotVerifiedException.code: 400,
+    InvalidEmailException.code: 400,
+    GitHubConnectionNotFoundException.code: 400,
     # 401
+    AuthTokenInvalidException.code: 401,
     AuthTokenExpiredException.code: 401,
     AuthInvalidCredentialsException.code: 401,
     RefreshTokenInvalidException.code: 401,
     RefreshTokenRevokedException.code: 401,
     Auth2FACodeInvalidException.code: 401,
+    GitHubTokenInvalidException.code: 401,
     # 404
     UserNotFoundException.code: 404,
     TodoNotFoundException.code: 404,
     JournalEntryNotFoundException.code: 404,
     RetroSummaryNotFoundException.code: 404,
     NotificationNotFoundException.code: 404,
+    GitHubRepositoryNotFoundException.code: 404,
     # 409
     UserEmailDuplicatedException.code: 409,
     TodoAlreadyCompletedException.code: 409,
     TodoAlreadyInProgressException.code: 409,
     JournalEntryAlreadyExistsException.code: 409,
     SummaryAlreadyInProgressException.code: 409,
+    GitHubRepositoryAlreadyLinkedException.code: 409,
+    # 429
+    GitHubRateLimitedException.code: 429,
+    # 503
+    GitHubApiUnavailableException.code: 503,
 }
 
 

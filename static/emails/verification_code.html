@@ -69,13 +69,24 @@
                             <!-- ─── Code box ─────────────────────────────── -->
                             <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
                                 <tr>
-                                    <td class="code-box" align="center" style="background-color: #2c2c2e; border-radius: 18px; padding: 36px 28px;">
+                                    <td class="code-box" style="background-color: #2c2c2e; border-radius: 18px; padding: 28px 28px 36px 28px;">
 
-                                        <p style="margin: 0 0 18px 0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; line-height: 1; color: #636366; letter-spacing: 0.2em; text-transform: uppercase;">
-                                            Verification Code
-                                        </p>
+                                        <!-- Label row: Verification Code (left) + Copy button (right) -->
+                                        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                                            <tr>
+                                                <td align="left" valign="middle" style="font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; line-height: 1; color: #636366; letter-spacing: 0.2em; text-transform: uppercase;">
+                                                    Verification Code
+                                                </td>
+                                                <td align="right" valign="middle">
+                                                    <a href="{{ copy_url }}" target="_blank" rel="noopener noreferrer" style="display: inline-block; background-color: rgba(255, 255, 255, 0.06); color: #f5f5f7; text-decoration: none; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: 0.04em; padding: 7px 10px 7px 9px; border-radius: 8px; mso-padding-alt: 0;">
+                                                        <span style="display: inline-block; vertical-align: middle; font-size: 13px; line-height: 1; padding-right: 4px;">&#x29C9;</span><span style="display: inline-block; vertical-align: middle;">Copy</span>
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        </table>
 
-                                        <p class="code-text" style="margin: 0; font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 42px; font-weight: 600; line-height: 1.1; letter-spacing: 0.3em; color: #f5f5f7; padding-left: 0.3em;">
+                                        <!-- Code -->
+                                        <p class="code-text" align="center" style="margin: 22px 0 0 0; text-align: center; font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 42px; font-weight: 600; line-height: 1.1; letter-spacing: 0.3em; color: #f5f5f7; padding-left: 0.3em;">
                                             {{ code }}
                                         </p>
 

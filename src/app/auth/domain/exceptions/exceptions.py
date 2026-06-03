@@ -27,3 +27,7 @@ class RefreshTokenInvalidException(BaseAppException):
 
 class RefreshTokenRevokedException(BaseAppException):
     code = "AUTH_REFRESH_TOKEN_REVOKED"
+
+
+class EmailNotVerifiedException(BaseAppException):
+    code = "AUTH_EMAIL_NOT_VERIFIED"

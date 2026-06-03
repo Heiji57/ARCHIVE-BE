@@ -7,8 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.auth.presentation.router import router as auth_router
+from app.github.presentation.router import router as github_router
 from app.notification.presentation.router import router as notification_router
 from app.settings.presentation.router import router as settings_router
 from app.retrospective.presentation.router import router as entry_router
@@ -58,12 +60,15 @@ def create_app() -> FastAPI:
         from app.shared.infrastructure.errors.handler import validation_exception_handler as _handler
         return await _handler(request, exc)
 
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(todo_router, prefix="/api/v1")
     app.include_router(entry_router, prefix="/api/v1")
     app.include_router(summary_router, prefix="/api/v1")
     app.include_router(notification_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
+    app.include_router(github_router, prefix="/api/v1")
     return app
 
 

@@ -25,7 +25,7 @@ class GitHubOAuthClient(IOAuthClient):
         params = urlencode({
             "client_id": self._config.client_id,
             "redirect_uri": self._config.redirect_uri,
-            "scope": "user:email",
+            "scope": "user:email,public_repo",
             "state": state,
         })
         return f"{self._AUTH_URL}?{params}"

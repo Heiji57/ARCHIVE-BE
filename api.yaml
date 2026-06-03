@@ -42,6 +42,8 @@ tags:
     description: 알림 목록·읽음 처리·SSE 스트림
   - name: settings
     description: 유저 환경설정 (자동 요약, 알림 보존 등)
+  - name: github
+    description: GitHub 저장소 연결·동기화 (OAuth access_token 재사용)
 
 x-tagGroups:
   - name: Account
@@ -50,6 +52,8 @@ x-tagGroups:
     tags: [entries, summaries]
   - name: Productivity
     tags: [todos, notifications]
+  - name: Integrations
+    tags: [github]
 
 security:
   - BearerAuth: []
@@ -140,10 +144,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ApiResponseToken' }
+        '400':
+          $ref: '#/components/responses/BadRequest_400'
         '409':
           $ref: '#/components/responses/Conflict_409'
         '422': { $ref: '#/components/responses/ValidationError_422' }
       x-error-codes:
+        - AUTH_EMAIL_NOT_VERIFIED
+        - USER_EMAIL_INVALID
         - USER_EMAIL_DUPLICATED
 
   /auth/login:
@@ -793,6 +801,155 @@ paths:
           $ref: '#/components/responses/Unauthorized_401'
         '422': { $ref: '#/components/responses/ValidationError_422' }
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # GITHUB
+  # ════════════════════════════════════════════════════════════════════════════
+
+  /github/repositories/available:
+    get:
+      tags: [github]
+      summary: GitHub에서 사용자 저장소 목록 조회
+      description: |
+        OAuth로 연결된 GitHub 계정의 모든 **public** 저장소 목록을 GitHub API에서 직접 가져온다.
+        DB 저장은 하지 않음 (연결 후보 표시 용도).
+        - `public_repo` scope 기준
+        - 페이지네이션 자동 처리 (최대 2000개)
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseAvailableRepoList' }
+        '400':
+          $ref: '#/components/responses/BadRequest_400'
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '429':
+          $ref: '#/components/responses/RateLimited_429'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable_503'
+      x-error-codes:
+        - GITHUB_CONNECTION_NOT_FOUND
+        - GITHUB_TOKEN_INVALID
+        - GITHUB_RATE_LIMITED
+        - GITHUB_API_UNAVAILABLE
+
+  /github/repositories:
+    get:
+      tags: [github]
+      summary: 연결된 저장소 목록 조회
+      description: DB에 저장된, 현재 사용자가 연결한 GitHub 저장소 목록.
+      responses:
+        '200':
+          description: 조회 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseRepositoryList' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+
+    post:
+      tags: [github]
+      summary: 특정 저장소 1개 연결
+      description: |
+        `githubRepoId`로 식별되는 저장소를 사용자 계정에 연결한다.
+        백엔드가 GitHub API에서 해당 저장소 메타데이터를 직접 조회해 저장 (위·변조 방지).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LinkRepositoryRequest' }
+            example:
+              githubRepoId: 1296269
+      responses:
+        '201':
+          description: 연결 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseRepository' }
+        '400':
+          $ref: '#/components/responses/BadRequest_400'
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '404':
+          $ref: '#/components/responses/NotFound_404'
+        '409':
+          $ref: '#/components/responses/Conflict_409'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+        '429':
+          $ref: '#/components/responses/RateLimited_429'
+      x-error-codes:
+        - GITHUB_CONNECTION_NOT_FOUND
+        - GITHUB_TOKEN_INVALID
+        - GITHUB_REPOSITORY_NOT_FOUND
+        - GITHUB_REPOSITORY_ALREADY_LINKED
+        - GITHUB_RATE_LIMITED
+
+    delete:
+      tags: [github]
+      summary: 모든 저장소 연결 해제
+      description: 현재 사용자의 모든 GitHub 저장소 연결을 일괄 삭제.
+      responses:
+        '200':
+          description: 삭제 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+
+  /github/repositories/sync-all:
+    post:
+      tags: [github]
+      summary: GitHub 저장소 전체 일괄 연결 (1회 sync)
+      description: |
+        호출 시점의 GitHub 저장소 목록을 모두 가져와 일괄 연결한다 (idempotent upsert).
+        이후 새로 생긴 repo는 사용자가 다시 호출해야 추가됨 (자동 갱신 없음).
+        이미 연결된 저장소는 유지되며, 메타데이터가 바뀌었다면 갱신된다.
+      responses:
+        '200':
+          description: sync 성공. 응답에는 현재 시점에 연결된 모든 저장소 목록이 담긴다.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseRepositoryList' }
+        '400':
+          $ref: '#/components/responses/BadRequest_400'
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '429':
+          $ref: '#/components/responses/RateLimited_429'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable_503'
+      x-error-codes:
+        - GITHUB_CONNECTION_NOT_FOUND
+        - GITHUB_TOKEN_INVALID
+        - GITHUB_RATE_LIMITED
+        - GITHUB_API_UNAVAILABLE
+
+  /github/repositories/{repository_id}:
+    parameters:
+      - in: path
+        name: repository_id
+        required: true
+        schema: { type: string }
+        example: ghrepo_01HXYZ...
+
+    delete:
+      tags: [github]
+      summary: 단일 저장소 연결 해제
+      responses:
+        '200':
+          description: 해제 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '404':
+          $ref: '#/components/responses/NotFound_404'
+      x-error-codes:
+        - GITHUB_REPOSITORY_NOT_FOUND
+
 # ────────────────────────────────────────────────────────────────────────────────
 components:
 # ────────────────────────────────────────────────────────────────────────────────
@@ -858,7 +1015,12 @@ components:
             data: null
             details: []
     Unauthorized_401:
-      description: 인증 실패 (토큰 만료/무효/자격증명 불일치)
+      description: |
+        인증 실패. 가능한 코드:
+        - `AUTH_TOKEN_EXPIRED` — access token 만료 (**FE 자동 refresh 트리거**)
+        - `AUTH_TOKEN_INVALID` — 토큰 누락 / 형식 오류 / 서명 불일치 / type mismatch
+        - `AUTH_INVALID_CREDENTIALS` — 이메일/비밀번호 불일치
+        - `AUTH_REFRESH_TOKEN_INVALID` / `AUTH_REFRESH_TOKEN_REVOKED` — refresh 실패
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -899,6 +1061,26 @@ components:
             details:
               - field: email
                 message: value is not a valid email address
+    RateLimited_429:
+      description: GitHub API rate limit 초과. 잠시 후 재시도.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            status: error
+            code: GITHUB_RATE_LIMITED
+            data: null
+            details: []
+    ServiceUnavailable_503:
+      description: 외부 서비스(GitHub API) 일시적 장애
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            status: error
+            code: GITHUB_API_UNAVAILABLE
+            data: null
+            details: []
 
   # ════════════════════════════════════════════════════════════════════════════
   schemas:
@@ -1225,3 +1407,66 @@ components:
         - type: object
           properties:
             data: { $ref: '#/components/schemas/SettingsResponse' }
+
+    # ── GitHub Repository ──────────────────────────────────────────────────
+    LinkRepositoryRequest:
+      type: object
+      required: [githubRepoId]
+      properties:
+        githubRepoId:
+          type: integer
+          format: int64
+          minimum: 1
+          description: GitHub의 numeric repository ID
+
+    RepositoryResponse:
+      type: object
+      required: [id, githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl, createdAt]
+      properties:
+        id:             { type: string, description: 백엔드에서 발급한 연결 ID (`ghrepo_...`) }
+        githubRepoId:   { type: integer, format: int64 }
+        owner:          { type: string }
+        name:           { type: string }
+        fullName:       { type: string, example: octocat/Hello-World }
+        isPrivate:      { type: boolean }
+        defaultBranch:  { type: string, example: main }
+        htmlUrl:        { type: string, format: uri }
+        createdAt:      { type: string, format: date-time }
+        updatedAt:      { type: string, format: date-time, nullable: true }
+
+    AvailableRepositoryResponse:
+      type: object
+      required: [githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl]
+      properties:
+        githubRepoId:   { type: integer, format: int64 }
+        owner:          { type: string }
+        name:           { type: string }
+        fullName:       { type: string }
+        isPrivate:      { type: boolean }
+        defaultBranch:  { type: string }
+        htmlUrl:        { type: string, format: uri }
+
+    ApiResponseRepository:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/RepositoryResponse' }
+
+    ApiResponseRepositoryList:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/RepositoryResponse' }
+
+    ApiResponseAvailableRepoList:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: '#/components/schemas/AvailableRepositoryResponse' }

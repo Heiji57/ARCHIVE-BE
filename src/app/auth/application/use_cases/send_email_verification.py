@@ -15,12 +15,15 @@ class SendEmailVerificationUseCase:
             raise AuthTokenInvalidException("Please wait before requesting another code.")
 
         code = await self._cache.create_code(cmd.email)
-        expires_minutes = get_settings().auth.email_verify_code_ttl_seconds // 60
+        settings = get_settings()
+        expires_minutes = settings.auth.email_verify_code_ttl_seconds // 60
+        copy_url = f"{settings.api_base_url.rstrip('/')}/static/emails/copy.html?code={code}"
 
         html_body = render_email(
             "verification_code.html",
             code=code,
             expires_minutes=expires_minutes,
+            copy_url=copy_url,
         )
         text_body = (
             f"ARCHIVE 이메일 인증\n\n"

@@ -12,7 +12,7 @@ from app.user.domain.exceptions.exceptions import UserEmailDuplicatedException
 from app.user.domain.models.user import User
 from app.user.domain.models.value_objects import Email
 from app.user.domain.repositories.repository import IUserRepository
-from app.auth.domain.exceptions.exceptions import AuthTokenInvalidException
+from app.auth.domain.exceptions.exceptions import EmailNotVerifiedException
 
 
 class RegisterUseCase:
@@ -28,7 +28,7 @@ class RegisterUseCase:
 
     async def execute(self, cmd: RegisterCommand) -> dict[str, str]:
         if not await self._verification_cache.is_verified(cmd.email):
-            raise AuthTokenInvalidException("Email not verified.")
+            raise EmailNotVerifiedException("Email not verified.")
 
         if await self._user_repo.find_by_email(cmd.email):
             raise UserEmailDuplicatedException()

@@ -131,7 +131,6 @@ async def register(
     response: Response,
     use_case: FromDishka[RegisterUseCase],
 ) -> ApiResponse[TokenResponse]:
-    body.validate_passwords_match()
     result = await use_case.execute(
         RegisterCommand(
             email=body.email,

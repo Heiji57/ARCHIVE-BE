@@ -1,6 +1,6 @@
 import re
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 _CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 
@@ -36,9 +36,11 @@ class RegisterRequest(BaseModel):
             raise ValueError("Password must be at least 8 characters.")
         return v
 
-    def validate_passwords_match(self) -> None:
+    @model_validator(mode="after")
+    def passwords_match(self) -> "RegisterRequest":
         if self.password != self.password_confirm:
             raise ValueError("Passwords do not match.")
+        return self
 
 
 class LoginRequest(BaseModel):

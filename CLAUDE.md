@@ -61,7 +61,7 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 | Cache / Queue broker | Redis |
 | Background tasks | Celery + celery-aio-pool |
 | DI Container | Dishka |
-| Auth | python-jose (JWT), passlib (bcrypt) |
+| Auth | python-jose (JWT), pwdlib (argon2) |
 | HTTP Client | httpx |
 | AI | Google Gemini (google-genai) |
 | Email | aiosmtplib |
@@ -79,6 +79,7 @@ src/app/
 ├── retrospective/  # 회고 엔트리 + AI 요약
 ├── notification/   # 알림 (SSE 포함)
 ├── settings/       # 유저 설정
+├── github/         # GitHub 저장소 연결 (OAuth 토큰 재사용)
 ├── worker/         # Celery 태스크
 └── shared/         # 공통 인프라 (DI, config, auth, DB, error handling)
 ```
@@ -120,6 +121,20 @@ src/app/
 | Summary | `POST /summaries/generate`, `GET /summaries`, `GET /summaries/{id}`, `GET /summaries/{id}/stream` |
 | Notification | `GET /notifications/stream`, `GET /notifications`, `PATCH /notifications/read-all`, `PATCH /notifications/{id}/read`, `DELETE /notifications/{id}`, `DELETE /notifications` |
 | Settings | `GET/PUT /settings` |
+| GitHub | `GET /github/repositories/available`, `GET/POST/DELETE /github/repositories`, `POST /github/repositories/sync-all`, `DELETE /github/repositories/{id}` |
+
+## API Contract — Single Source of Truth
+
+- `api.yaml`은 API 응답/에러 규약의 **Single Source of Truth(SST)** 다.
+- 백엔드 매핑(`shared/infrastructure/errors/handler.py`의 `_STATUS_MAP`)과 `api.yaml`이 충돌하면, **`api.yaml`을 기준으로 백엔드를 맞춘다.** 거꾸로가 아니다.
+- 새 도메인 예외를 추가했다면 반드시:
+  1. `_STATUS_MAP`에 HTTP 상태 코드 매핑 추가
+  2. `api.yaml`의 해당 엔드포인트 `x-error-codes`에 코드 명시
+  3. `api.yaml`의 공통 응답(`Unauthorized_401`, `Conflict_409` 등) description의 코드 목록에 추가
+- 인증 관련 응답은 HTTP 표준 준수:
+  - `401 Unauthorized` — 토큰 만료/무효/누락/자격증명 불일치 (FE는 `401 + AUTH_TOKEN_EXPIRED`에서만 자동 refresh 트리거)
+  - `400 Bad Request` — 요청 자체의 도메인 조건 위반 (예: 이메일 미인증)
+  - `422 Unprocessable Entity` — Pydantic 스키마/타입 검증 실패 (자동)
 
 ## Key Conventions
 

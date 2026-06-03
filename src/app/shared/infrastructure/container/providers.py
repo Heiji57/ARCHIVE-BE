@@ -23,6 +23,15 @@ from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
 from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
 from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
 from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import OAuthConnectionRepository
+from app.github.application.use_cases.link_repository import LinkRepositoryUseCase
+from app.github.application.use_cases.list_available_repositories import ListAvailableRepositoriesUseCase
+from app.github.application.use_cases.list_linked_repositories import ListLinkedRepositoriesUseCase
+from app.github.application.use_cases.sync_all_repositories import SyncAllRepositoriesUseCase
+from app.github.application.use_cases.unlink_all_repositories import UnlinkAllRepositoriesUseCase
+from app.github.application.use_cases.unlink_repository import UnlinkRepositoryUseCase
+from app.github.domain.repositories.repository import IGitHubRepositoryRepository
+from app.github.infrastructure.api.github_api_client import GitHubApiClient
+from app.github.infrastructure.persistence.repositories.github_repository_repo import GitHubRepositoryRepository
 from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
 from app.settings.application.use_cases.get_settings import GetSettingsUseCase
 from app.settings.application.use_cases.update_settings import UpdateSettingsUseCase
@@ -100,6 +109,10 @@ class AppProvider(Provider):
             OAuthProvider.GOOGLE: GoogleOAuthClient(config.google_oauth),
         })
 
+    @provide
+    def github_api_client(self) -> GitHubApiClient:
+        return GitHubApiClient()
+
 
 class RequestProvider(Provider):
     """REQUEST scope — 요청마다 생성·소멸하는 의존성."""
@@ -142,6 +155,10 @@ class RequestProvider(Provider):
     @provide
     def oauth_connection_repo(self, session: AsyncSession) -> IOAuthConnectionRepository:
         return OAuthConnectionRepository(session)
+
+    @provide
+    def github_repository_repo(self, session: AsyncSession) -> IGitHubRepositoryRepository:
+        return GitHubRepositoryRepository(session)
 
     # ── Notification Use Cases ────────────────────────────────────────────────
 
@@ -330,3 +347,49 @@ class RequestProvider(Provider):
         self, summary_repo: IRetroSummaryRepository
     ) -> GetSummariesUseCase:
         return GetSummariesUseCase(summary_repo)
+
+    # ── GitHub Use Cases ──────────────────────────────────────────────────────
+
+    @provide
+    def list_available_repositories_use_case(
+        self,
+        oauth_repo: IOAuthConnectionRepository,
+        api_client: GitHubApiClient,
+    ) -> ListAvailableRepositoriesUseCase:
+        return ListAvailableRepositoriesUseCase(oauth_repo, api_client)
+
+    @provide
+    def list_linked_repositories_use_case(
+        self, repo: IGitHubRepositoryRepository
+    ) -> ListLinkedRepositoriesUseCase:
+        return ListLinkedRepositoriesUseCase(repo)
+
+    @provide
+    def link_repository_use_case(
+        self,
+        repo: IGitHubRepositoryRepository,
+        oauth_repo: IOAuthConnectionRepository,
+        api_client: GitHubApiClient,
+    ) -> LinkRepositoryUseCase:
+        return LinkRepositoryUseCase(repo, oauth_repo, api_client)
+
+    @provide
+    def sync_all_repositories_use_case(
+        self,
+        repo: IGitHubRepositoryRepository,
+        oauth_repo: IOAuthConnectionRepository,
+        api_client: GitHubApiClient,
+    ) -> SyncAllRepositoriesUseCase:
+        return SyncAllRepositoriesUseCase(repo, oauth_repo, api_client)
+
+    @provide
+    def unlink_repository_use_case(
+        self, repo: IGitHubRepositoryRepository
+    ) -> UnlinkRepositoryUseCase:
+        return UnlinkRepositoryUseCase(repo)
+
+    @provide
+    def unlink_all_repositories_use_case(
+        self, repo: IGitHubRepositoryRepository
+    ) -> UnlinkAllRepositoriesUseCase:
+        return UnlinkAllRepositoriesUseCase(repo)

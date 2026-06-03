@@ -60,7 +60,7 @@
 | 캐시 / 큐 브로커 | Redis 7 |
 | 비동기 워커 | Celery 5 |
 | IoC Container | dishka |
-| 인증 | python-jose (JWT), passlib[bcrypt] |
+| 인증 | python-jose (JWT), pwdlib[argon2] |
 | AI | anthropic, openai |
 | 외부 API | httpx (GitHub API, OAuth — async only) |
 | 설정 관리 | pydantic-settings |
@@ -188,7 +188,7 @@ src/
             │   └── redis.py         # Redis 연결 풀 (DB 0/1/2)
             ├── auth/
             │   ├── jwt.py           # JWT 발급 / 검증
-            │   └── password.py      # bcrypt 해싱
+            │   └── password.py      # argon2 해싱 (pwdlib, hardened params)
             ├── errors/
             │   ├── codes.py         # ErrorCode 상수 (도메인별 에러 코드)
             │   └── handler.py       # GlobalExceptionHandler + HTTP 상태 매핑
@@ -236,6 +236,7 @@ presentation  →  application  →  domain
 | `todo` | 할 일 CRUD, 상태 전환, 날짜 배정 |
 | `retrospective` | 회고 작성, AI 요약 트리거 |
 | `notification` | 알림 생성, 읽음 처리 |
+| `github` | GitHub 저장소 연결 (OAuth 토큰 재사용), 저장소 동기화 |
 
 > GitHub API, Anthropic API는 도메인이 아닌 infrastructure 어댑터입니다. 별도 Bounded Context를 만들지 않습니다.
 
