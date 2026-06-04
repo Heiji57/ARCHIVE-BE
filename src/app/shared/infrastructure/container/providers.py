@@ -4,14 +4,23 @@ from dishka import Provider, Scope, provide
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.auth.application.services.session_service import SessionService
 from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
 from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
 from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
+from app.auth.application.use_cases.initiate_oauth_link import InitiateOAuthLinkUseCase
+from app.auth.application.use_cases.list_sessions import ListSessionsUseCase
 from app.auth.application.use_cases.login import LoginUseCase
 from app.auth.application.use_cases.logout import LogoutUseCase
 from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
 from app.auth.application.use_cases.register import RegisterUseCase
+from app.auth.application.use_cases.request_password_reset import RequestPasswordResetUseCase
+from app.auth.application.use_cases.reset_password import ResetPasswordUseCase
+from app.auth.application.use_cases.revoke_session import (
+    RevokeOtherSessionsUseCase,
+    RevokeSessionUseCase,
+)
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
@@ -21,6 +30,7 @@ from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
 from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
+from app.auth.infrastructure.cache.password_reset import PasswordResetCache
 from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
 from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
 from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
@@ -71,7 +81,13 @@ from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUse
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
+from app.user.domain.repositories.country_history_repository import (
+    ICountryHistoryRepository,
+)
 from app.user.domain.repositories.repository import IUserRepository
+from app.user.infrastructure.persistence.repositories.country_history_repo import (
+    CountryHistoryRepository,
+)
 from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 
 
@@ -101,6 +117,10 @@ class AppProvider(Provider):
         return AuthTokenCache(redis, config.auth)
 
     @provide
+    def session_service(self, cache: AuthTokenCache) -> SessionService:
+        return SessionService(cache)
+
+    @provide
     def email_verification_cache(self, config: AppConfig) -> EmailVerificationCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
         return EmailVerificationCache(redis, config.auth)
@@ -114,6 +134,11 @@ class AppProvider(Provider):
     def onboarding_token_cache(self, config: AppConfig) -> OnboardingTokenCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
         return OnboardingTokenCache(redis)
+
+    @provide
+    def password_reset_cache(self, config: AppConfig) -> PasswordResetCache:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return PasswordResetCache(redis)
 
     @provide
     def oauth_client_registry(self, config: AppConfig) -> OAuthClientRegistry:
@@ -173,6 +198,10 @@ class RequestProvider(Provider):
     def github_repository_repo(self, session: AsyncSession) -> IGitHubRepositoryRepository:
         return GitHubRepositoryRepository(session)
 
+    @provide
+    def country_history_repo(self, session: AsyncSession) -> ICountryHistoryRepository:
+        return CountryHistoryRepository(session)
+
     # ── Notification Use Cases ────────────────────────────────────────────────
 
     @provide
@@ -222,8 +251,12 @@ class RequestProvider(Provider):
         return UpdateSettingsUseCase(repo, github_repo)
 
     @provide
-    def update_country_use_case(self, user_repo: IUserRepository) -> UpdateCountryUseCase:
-        return UpdateCountryUseCase(user_repo)
+    def update_country_use_case(
+        self,
+        user_repo: IUserRepository,
+        country_history_repo: ICountryHistoryRepository,
+    ) -> UpdateCountryUseCase:
+        return UpdateCountryUseCase(user_repo, country_history_repo)
 
     @provide
     def update_timezone_use_case(self, user_repo: IUserRepository) -> UpdateTimezoneUseCase:
@@ -248,29 +281,49 @@ class RequestProvider(Provider):
         self,
         user_repo: IUserRepository,
         verification_cache: EmailVerificationCache,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
+        country_history_repo: ICountryHistoryRepository,
     ) -> RegisterUseCase:
-        return RegisterUseCase(user_repo, verification_cache, auth_token_cache)
+        return RegisterUseCase(
+            user_repo, verification_cache, session_service, country_history_repo
+        )
 
     @provide
     def login_use_case(
         self,
         user_repo: IUserRepository,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
     ) -> LoginUseCase:
-        return LoginUseCase(user_repo, auth_token_cache)
+        return LoginUseCase(user_repo, session_service)
 
     @provide
     def refresh_token_use_case(
         self,
-        user_repo: IUserRepository,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
     ) -> RefreshTokenUseCase:
-        return RefreshTokenUseCase(user_repo, auth_token_cache)
+        return RefreshTokenUseCase(session_service)
 
     @provide
-    def logout_use_case(self, auth_token_cache: AuthTokenCache) -> LogoutUseCase:
-        return LogoutUseCase(auth_token_cache)
+    def logout_use_case(self, session_service: SessionService) -> LogoutUseCase:
+        return LogoutUseCase(session_service)
+
+    @provide
+    def list_sessions_use_case(
+        self, session_service: SessionService
+    ) -> ListSessionsUseCase:
+        return ListSessionsUseCase(session_service)
+
+    @provide
+    def revoke_session_use_case(
+        self, session_service: SessionService, cache: AuthTokenCache
+    ) -> RevokeSessionUseCase:
+        return RevokeSessionUseCase(session_service, cache)
+
+    @provide
+    def revoke_other_sessions_use_case(
+        self, session_service: SessionService
+    ) -> RevokeOtherSessionsUseCase:
+        return RevokeOtherSessionsUseCase(session_service)
 
     @provide
     def get_me_use_case(self, user_repo: IUserRepository) -> GetMeUseCase:
@@ -287,13 +340,19 @@ class RequestProvider(Provider):
         return InitiateOAuthUseCase(registry, state_cache)
 
     @provide
+    def initiate_oauth_link_use_case(
+        self, registry: OAuthClientRegistry, state_cache: OAuthStateCache
+    ) -> InitiateOAuthLinkUseCase:
+        return InitiateOAuthLinkUseCase(registry, state_cache)
+
+    @provide
     def handle_oauth_callback_use_case(
         self,
         registry: OAuthClientRegistry,
         state_cache: OAuthStateCache,
         oauth_connection_repo: IOAuthConnectionRepository,
         user_repo: IUserRepository,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
         onboarding_cache: OnboardingTokenCache,
     ) -> HandleOAuthCallbackUseCase:
         return HandleOAuthCallbackUseCase(
@@ -301,9 +360,26 @@ class RequestProvider(Provider):
             state_cache,
             oauth_connection_repo,
             user_repo,
-            auth_token_cache,
+            session_service,
             onboarding_cache,
         )
+
+    @provide
+    def request_password_reset_use_case(
+        self,
+        user_repo: IUserRepository,
+        cache: PasswordResetCache,
+    ) -> RequestPasswordResetUseCase:
+        return RequestPasswordResetUseCase(user_repo, cache)
+
+    @provide
+    def reset_password_use_case(
+        self,
+        user_repo: IUserRepository,
+        cache: PasswordResetCache,
+        session_service: SessionService,
+    ) -> ResetPasswordUseCase:
+        return ResetPasswordUseCase(user_repo, cache, session_service)
 
     @provide
     def complete_onboarding_use_case(
@@ -311,10 +387,15 @@ class RequestProvider(Provider):
         onboarding_cache: OnboardingTokenCache,
         user_repo: IUserRepository,
         oauth_connection_repo: IOAuthConnectionRepository,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
+        country_history_repo: ICountryHistoryRepository,
     ) -> CompleteOnboardingUseCase:
         return CompleteOnboardingUseCase(
-            onboarding_cache, user_repo, oauth_connection_repo, auth_token_cache
+            onboarding_cache,
+            user_repo,
+            oauth_connection_repo,
+            session_service,
+            country_history_repo,
         )
 
     # ── Todo Use Cases ────────────────────────────────────────────────────────

@@ -1,34 +1,31 @@
-import hashlib
-import secrets
+"""Refresh token 회전 + reuse detection.
 
-from app.auth.domain.exceptions.exceptions import RefreshTokenInvalidException
-from app.auth.infrastructure.cache.auth_token import AuthTokenCache
+SessionService.rotate() 가 정책의 본체. 본 use case 는 라우터 응답 형태로 어댑트만 한다.
+
+응답 시 refresh_token 이 빈 문자열이면 grace window hit — 호출자는 기존 RT 쿠키를
+**갱신하지 않고 그대로** 두면 된다 (라우터에서 분기).
+"""
+from app.auth.application.services.session_service import (
+    RequestMeta,
+    SessionService,
+)
 from app.shared.infrastructure.auth.jwt import create_access_token
-from app.user.domain.repositories.repository import IUserRepository
 
 
 class RefreshTokenUseCase:
-    def __init__(
-        self,
-        user_repo: IUserRepository,
-        auth_token_cache: AuthTokenCache,
-    ) -> None:
-        self._user_repo = user_repo
-        self._auth_token_cache = auth_token_cache
+    def __init__(self, session_service: SessionService) -> None:
+        self._session_service = session_service
 
     async def execute(
-        self, raw_refresh_token: str, device_info: str | None
+        self,
+        raw_refresh_token: str,
+        device_info: str | None,
+        ip: str | None = None,
     ) -> dict[str, str]:
-        old_hash = hashlib.sha256(raw_refresh_token.encode()).hexdigest()
-        user_id = await self._auth_token_cache.get_user_id(old_hash)
-        if not user_id:
-            raise RefreshTokenInvalidException()
-
-        raw_new = secrets.token_urlsafe(32)
-        new_hash = hashlib.sha256(raw_new.encode()).hexdigest()
-        await self._auth_token_cache.rotate(old_hash, new_hash, user_id, device_info)
-
+        rotated = await self._session_service.rotate(
+            raw_refresh_token, RequestMeta(user_agent=device_info, ip=ip)
+        )
         return {
-            "access_token": create_access_token(user_id),
-            "refresh_token": raw_new,
+            "access_token": create_access_token(rotated.user_id),
+            "refresh_token": rotated.refresh_token,  # "" 면 grace hit
         }

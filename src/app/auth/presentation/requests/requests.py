@@ -143,3 +143,28 @@ class UpdateTimezoneRequest(BaseModel):
         if not isinstance(v, str) or "/" not in v:
             raise ValueError("Timezone must be an IANA identifier like 'Asia/Seoul'.")
         return v.strip()
+
+
+class RequestPasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=120)
+    new_password: str = Field(alias="newPassword")
+    new_password_confirm: str = Field(alias="newPasswordConfirm")
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("new_password")
+    @classmethod
+    def password_min_length(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters.")
+        return v
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> "ResetPasswordRequest":
+        if self.new_password != self.new_password_confirm:
+            raise ValueError("Passwords do not match.")
+        return self

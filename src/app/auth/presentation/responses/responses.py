@@ -25,3 +25,9 @@ class UserResponse(BaseModel):
             region=user.region,
             timezone=user.timezone,
         )
+
+
+class OAuthLinkInitResponse(BaseModel):
+    authorize_url: str = Field(serialization_alias="authorizeUrl")
+
+    model_config = {"populate_by_name": True}

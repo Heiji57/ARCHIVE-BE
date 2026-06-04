@@ -1,14 +1,12 @@
-import hashlib
-import secrets
 from datetime import datetime, timezone
 
 from app.auth.application.dtos.commands import RegisterCommand
+from app.auth.application.services.session_service import RequestMeta, SessionService
 from app.auth.domain.exceptions.exceptions import (
     CountryInvalidException,
     CountryRegionRequiredException,
     EmailNotVerifiedException,
 )
-from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
 from app.shared.domain.utils.id import generate_id
 from app.shared.domain.utils.timezone import (
@@ -21,6 +19,10 @@ from app.shared.infrastructure.auth.password import hash_password
 from app.user.domain.exceptions.exceptions import UserEmailDuplicatedException
 from app.user.domain.models.user import User
 from app.user.domain.models.value_objects import Email
+from app.user.domain.repositories.country_history_repository import (
+    CountryChangeSource,
+    ICountryHistoryRepository,
+)
 from app.user.domain.repositories.repository import IUserRepository
 
 
@@ -29,11 +31,13 @@ class RegisterUseCase:
         self,
         user_repo: IUserRepository,
         verification_cache: EmailVerificationCache,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
+        country_history_repo: ICountryHistoryRepository,
     ) -> None:
         self._user_repo = user_repo
         self._verification_cache = verification_cache
-        self._auth_token_cache = auth_token_cache
+        self._session_service = session_service
+        self._country_history_repo = country_history_repo
 
     async def execute(self, cmd: RegisterCommand) -> dict[str, str]:
         if not await self._verification_cache.is_verified(cmd.email):
@@ -66,9 +70,20 @@ class RegisterUseCase:
         saved = await self._user_repo.save(user)
         await self._verification_cache.consume_verified(cmd.email)
 
-        access_token = create_access_token(saved.id)
-        raw_refresh = secrets.token_urlsafe(32)
-        token_hash = hashlib.sha256(raw_refresh.encode()).hexdigest()
-        await self._auth_token_cache.store(token_hash, saved.id, cmd.device_info)
+        # 국가 history 1행 기록 (가입 시점)
+        await self._country_history_repo.record(
+            user_id=saved.id,
+            country=cmd.country,
+            region=cmd.region,
+            timezone=tz,
+            source=CountryChangeSource.REGISTRATION,
+            at=now,
+        )
 
-        return {"access_token": access_token, "refresh_token": raw_refresh}
+        issued = await self._session_service.issue(
+            saved.id, RequestMeta(user_agent=cmd.device_info, ip=cmd.ip)
+        )
+        return {
+            "access_token": create_access_token(saved.id),
+            "refresh_token": issued.refresh_token,
+        }

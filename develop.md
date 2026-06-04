@@ -1142,6 +1142,151 @@ if not stored:
     raise OAuthStateInvalidException()
 ```
 
+### OAuth 계정 link 흐름 (이미 로그인된 사용자가 provider 추가 연결)
+
+이메일 가입 사용자(또는 Google 사용자)가 자신의 계정에 GitHub 등 다른 provider를 추가 연결하려는 케이스. 기존 callback은 email 매칭으로 자동 연결을 시도하지만, **이메일이 다른 경우 새 사용자가 잘못 생성되는 위험**이 있어 별도 진입점을 둡니다.
+
+**POST init 패턴** 사용 — popup GET 으로는 Bearer 헤더 전송이 불가능하므로, FE 가 먼저 인증된 POST 호출로 authorize URL 을 받아 popup 으로 직접 엽니다.
+
+```
+1. POST /auth/oauth/{provider}/link/init         (Bearer 인증 필수)
+   ├─ state_cache.create_link_state(provider, current_user.id)
+   │    → Redis: auth:oauth:state:{state} = {"provider":..., "link_user_id":...}
+   └─ 200 { "authorizeUrl": "https://github.com/login/oauth/authorize?..." }
+
+2. FE: window.open(authorizeUrl)  → GitHub 동의 화면
+
+3. provider redirect → GET /auth/oauth/{provider}/callback?code=...&state=...
+   ├─ state_cache.consume_state(state) → {provider, link_user_id}
+   ├─ link_user_id 있음 → link 분기
+   │   ├─ provider 계정이 다른 사용자에 이미 연결 → 409 AUTH_OAUTH_ACCOUNT_ALREADY_LINKED
+   │   ├─ 현재 사용자가 같은 provider에 다른 계정 연결 → 409 AUTH_OAUTH_PROVIDER_ALREADY_LINKED
+   │   ├─ 동일 provider account 재요청 → 멱등(access_token만 갱신)
+   │   └─ 신규 → OAuthConnection 저장
+   └─ HTML postMessage { type: "oauth_linked", provider }
+```
+
+**설계 결정**:
+- 기존 `/auth/oauth/{provider}/authorize` 는 익명 GET — Bearer 헤더 없음
+- popup GET 으로 Bearer 헤더는 못 실음 → init 단계를 POST 로 분리해 표준 Authorization 헤더 사용
+- callback 한 곳에 흐름을 묶고 state 페이로드로 분기 → callback URL 추가 없이 단일 진입점 유지
+- link 결과는 새 토큰을 발급하지 않음 (이미 로그인된 세션 그대로 사용)
+- **OAuth callback URL 은 FE proxy origin 으로 통일** (`http://{fe-origin}/api/v1/auth/oauth/{provider}/callback`). 그래야 callback HTML 의 `window.opener.postMessage` 가 FE origin 으로 도달.
+
+### 비밀번호 재설정 흐름
+
+```
+1. POST /auth/password/reset/request { email }
+   ├─ 항상 200 (이메일 enumeration 방지)
+   ├─ 내부 분기: 미가입 / OAuth 전용 / 60초 쿨다운 → silent skip
+   ├─ 정상 → token = secrets.token_urlsafe(32)
+   │        Redis: auth:pwreset:{token} = user_id  TTL=1800s
+   └─ 이메일 발송 (Apple 다크모드 템플릿 + plain text)
+
+2. POST /auth/password/reset/confirm { token, newPassword, newPasswordConfirm }
+   ├─ Redis getdel(auth:pwreset:{token}) → user_id (1회용)
+   ├─ user.password_hash 검증 (OAuth 전용 → 400 AUTH_PASSWORD_RESET_NOT_ALLOWED)
+   ├─ password_hash = hash_password(newPassword)
+   └─ session_service.revoke_all(user_id)   # 모든 세션 폐기 → 모든 기기 강제 로그아웃
+```
+
+**보안 결정**:
+- 토큰은 Redis 1회용. 사용 후 즉시 삭제
+- 성공 시 모든 세션 폐기 → 비밀번호 노출 가정 하에 다른 기기 보호
+- 응답에서 이메일 등록 여부 누설 금지
+
+### Session 보안 정책 — server-side trust anchor + RT rotation + reuse detection
+
+OAuth 2.1 best practice 준수. Access token 은 stateless JWT 로 평상시 부하를 낮게 유지하고, refresh 길목에서만 Redis 의 세션 레코드를 신뢰 기준점으로 다중 검증.
+
+#### Refresh Token 형식
+```
+RT = "{sessionId}.{secret}"
+   = "sess_<uuid7_hex>.<urlsafe_32B>"
+```
+- sessionId 는 opaque random — 클라이언트 추측 불가
+- secret 은 서버 측에서 SHA-256 hash 로만 저장 (Redis 유출 시에도 RT 원문 노출 X)
+- RT 자체는 클라이언트 측 HttpOnly Secure SameSite=Lax 쿠키
+
+#### Redis 스키마
+```
+KEY  auth:session:{sessionId}          JSON  → SessionRecord
+KEY  auth:user_sessions:{user_id}      Set   → {sessionId, ...}
+TTL  refresh_token_expire_days * 86400
+
+SessionRecord = {
+  user_id, rt_hash, prev_rt_hash, prev_at,
+  device_info, device_label, ip_prefix,
+  issued_at, last_used_at, rotation_counter
+}
+```
+
+#### Refresh 정책 (`SessionService.rotate`)
+```
+1. RT split → sessionId, secret. presented_hash = SHA-256(secret)
+2. Redis 세션 조회 → 없으면 401 AUTH_REFRESH_TOKEN_INVALID
+3. 매칭 분기:
+   a) presented_hash == rt_hash         → 정상 rotation
+      - 새 secret 발급, rt_hash 교체, prev_rt_hash 백업, rotation_counter++
+   b) presented_hash == prev_rt_hash AND now - prev_at < 5s → grace hit
+      - 동시 refresh race (탭 2개) — 새 RT 발급하지 않음, 기존 쿠키 유지
+      - structlog: session.refresh_grace_hit
+   c) 그 외                              → 탈취 의심
+      - cache.delete_all(user_id) 로 해당 user 모든 세션 즉시 폐기
+      - structlog WARNING: session.refresh_reuse_detected
+        (presented_hash, current_hash, prev_hash, prev_at, purged_session_ids,
+         ip_prefix, device_label, user_agent)
+      - 401 AUTH_REFRESH_TOKEN_REUSE_DETECTED
+```
+
+#### 세션 관리 API (사용자 자가 통제)
+```
+GET    /auth/sessions                  # 활성 세션 목록 (is_current 표시)
+DELETE /auth/sessions/{sessionId}      # 단일 세션 폐기
+DELETE /auth/sessions                  # 현재 외 전부 폐기 (revoked_count 반환)
+```
+
+#### 무효화 경로 (모두 Redis 키 삭제 1동작으로 일원화)
+| 행위 | 호출 |
+|---|---|
+| 로그아웃 | `session_service.revoke(sessionId, user_id)` |
+| 비밀번호 재설정 완료 | `session_service.revoke_all(user_id)` |
+| 탈취 탐지 | `_handle_reuse` 내부에서 `cache.delete_all` |
+| 다른 기기 전부 로그아웃 | `session_service.revoke_others(user_id, current_sid)` |
+
+#### 보안 감사 로깅
+별도 `security` 채널 (`shared/infrastructure/logger/security.py`) — structlog JSONRenderer 로 stdout 에 출력. 운영에서는 별도 sink (SIEM, audit table) 로 라우팅 가능.
+- `session.refresh_grace_hit` INFO — race detection
+- `session.refresh_reuse_detected` WARNING — 탈취 의심 (전체 컨텍스트 포함)
+- `session.revoked` / `session.revoked_all` / `session.revoked_others` INFO
+
+### 국가 변경 이력 (user_country_history)
+
+통계/분석 용도의 audit log. 사용자별 country/region/timezone 변경 시점을 보존.
+
+```
+user_country_history
+├ id          (uch_*)
+├ user_id     FK users(id) ON DELETE CASCADE
+├ country     CHAR(2)      -- ISO 3166-1 alpha-2
+├ region      VARCHAR(8)   -- ISO 3166-2 (다중 tz 국가만)
+├ timezone    VARCHAR(64)  -- IANA tz at change time
+├ source      VARCHAR(32)  -- 'registration' | 'oauth_onboarding' | 'settings_update'
+└ created_at  TIMESTAMPTZ
+```
+
+**기록 지점** (3곳):
+- `RegisterUseCase` → `source=registration`
+- `CompleteOnboardingUseCase` → `source=oauth_onboarding`
+- `UpdateCountryUseCase` → `source=settings_update` (실제 값이 변경된 경우만, 동일 값 재전송은 무시)
+
+**Backfill**: migration 011 이 기존 모든 유저에 대해 현재 country 로 `source=registration` 1행을 삽입.
+
+**인덱스** (분석 쿼리용):
+- `ix_uch_user_id_created_at` (user_id, created_at DESC) — 특정 유저 시계열
+- `ix_uch_country_created_at` (country, created_at DESC) — 국가별 코호트
+- `ix_uch_created_at` (created_at) — 전체 변경 빈도
+
 ### OAuth 신규 사용자 온보딩 흐름 (국가 정보 수집)
 
 OAuth 콜백에서 처음 보이는 사용자는 곧바로 계정을 만들지 않고 **임시 onboarding token**을 발급해 FE가 국가/하위지역을 입력하도록 유도합니다.

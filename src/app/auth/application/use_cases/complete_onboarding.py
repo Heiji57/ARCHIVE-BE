@@ -1,8 +1,7 @@
-import hashlib
-import secrets
 from datetime import datetime, timezone
 
 from app.auth.application.dtos.commands import CompleteOnboardingCommand
+from app.auth.application.services.session_service import RequestMeta, SessionService
 from app.auth.domain.exceptions.exceptions import (
     CountryInvalidException,
     CountryRegionRequiredException,
@@ -10,7 +9,6 @@ from app.auth.domain.exceptions.exceptions import (
 from app.auth.domain.models.oauth_connection import OAuthConnection
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
-from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
 from app.shared.domain.utils.id import generate_id
 from app.shared.domain.utils.timezone import (
@@ -22,6 +20,10 @@ from app.shared.infrastructure.auth.jwt import create_access_token
 from app.user.domain.exceptions.exceptions import UserEmailDuplicatedException
 from app.user.domain.models.user import User
 from app.user.domain.models.value_objects import Email
+from app.user.domain.repositories.country_history_repository import (
+    CountryChangeSource,
+    ICountryHistoryRepository,
+)
 from app.user.domain.repositories.repository import IUserRepository
 
 
@@ -31,12 +33,14 @@ class CompleteOnboardingUseCase:
         onboarding_cache: OnboardingTokenCache,
         user_repo: IUserRepository,
         oauth_connection_repo: IOAuthConnectionRepository,
-        auth_token_cache: AuthTokenCache,
+        session_service: SessionService,
+        country_history_repo: ICountryHistoryRepository,
     ) -> None:
         self._onboarding_cache = onboarding_cache
         self._user_repo = user_repo
         self._oauth_connection_repo = oauth_connection_repo
-        self._auth_token_cache = auth_token_cache
+        self._session_service = session_service
+        self._country_history_repo = country_history_repo
 
     async def execute(self, cmd: CompleteOnboardingCommand) -> dict[str, str]:
         if not is_supported_country(cmd.country):
@@ -80,9 +84,19 @@ class CompleteOnboardingUseCase:
         )
         await self._oauth_connection_repo.save(connection)
 
-        access_token = create_access_token(saved.id)
-        raw_refresh = secrets.token_urlsafe(32)
-        refresh_hash = hashlib.sha256(raw_refresh.encode()).hexdigest()
-        await self._auth_token_cache.store(refresh_hash, saved.id, cmd.device_info)
+        await self._country_history_repo.record(
+            user_id=saved.id,
+            country=cmd.country,
+            region=cmd.region,
+            timezone=tz,
+            source=CountryChangeSource.OAUTH_ONBOARDING,
+            at=now,
+        )
 
-        return {"access_token": access_token, "refresh_token": raw_refresh}
+        issued = await self._session_service.issue(
+            saved.id, RequestMeta(user_agent=cmd.device_info, ip=cmd.ip)
+        )
+        return {
+            "access_token": create_access_token(saved.id),
+            "refresh_token": issued.refresh_token,
+        }

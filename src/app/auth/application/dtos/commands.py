@@ -19,6 +19,7 @@ class RegisterCommand:
     country: str
     region: str | None = None
     device_info: str | None = None
+    ip: str | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class LoginCommand:
     email: str
     password: str
     device_info: str | None = None
+    ip: str | None = None
 
 
 @dataclass(frozen=True)
@@ -34,3 +36,15 @@ class CompleteOnboardingCommand:
     country: str
     region: str | None = None
     device_info: str | None = None
+    ip: str | None = None
+
+
+@dataclass(frozen=True)
+class RequestPasswordResetCommand:
+    email: str
+
+
+@dataclass(frozen=True)
+class ResetPasswordCommand:
+    token: str
+    new_password: str
