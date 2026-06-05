@@ -65,8 +65,14 @@ router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
 
 _REFRESH_COOKIE = "refresh_token"
 _ONBOARDING_COOKIE = "onboarding_token"
-_COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7일
-_ONBOARDING_COOKIE_MAX_AGE = 60 * 30  # 30분
+
+
+def _refresh_cookie_max_age() -> int:
+    return get_settings().auth.refresh_token_expire_days * 86400
+
+
+def _onboarding_cookie_max_age() -> int:
+    return get_settings().auth.onboarding_token_ttl_seconds
 
 
 def _client_ip(request: Request) -> str | None:
@@ -84,7 +90,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=_COOKIE_MAX_AGE,
+        max_age=_refresh_cookie_max_age(),
     )
 
 
@@ -99,7 +105,7 @@ def _set_onboarding_cookie(response: Response, token: str) -> None:
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=_ONBOARDING_COOKIE_MAX_AGE,
+        max_age=_onboarding_cookie_max_age(),
         path="/",
     )
 
@@ -336,7 +342,7 @@ async def oauth_callback(
             httponly=True,
             secure=True,
             samesite="lax",
-            max_age=_ONBOARDING_COOKIE_MAX_AGE,
+            max_age=_onboarding_cookie_max_age(),
             path="/",
         )
         return html_response
@@ -355,7 +361,7 @@ async def oauth_callback(
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=_COOKIE_MAX_AGE,
+        max_age=_refresh_cookie_max_age(),
     )
     return html_response
 

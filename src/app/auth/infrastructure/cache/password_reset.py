@@ -15,14 +15,14 @@ import secrets
 from redis.asyncio import Redis
 
 from app.auth.domain.exceptions.exceptions import PasswordResetTokenExpiredException
+from app.shared.infrastructure.config.auth import AuthConfig
 
 
 class PasswordResetCache:
-    _TTL = 1800  # 30 minutes
-    _COOLDOWN_TTL = 60  # 재발송 쿨다운
-
-    def __init__(self, redis: Redis) -> None:
+    def __init__(self, redis: Redis, config: AuthConfig) -> None:
         self._redis = redis
+        self._ttl = config.password_reset_ttl_seconds
+        self._cooldown_ttl = config.password_reset_cooldown_ttl_seconds
 
     def _key_token(self, token: str) -> str:
         return f"auth:pwreset:{token}"
@@ -35,8 +35,8 @@ class PasswordResetCache:
 
     async def create_token(self, user_id: str, email: str) -> str:
         token = secrets.token_urlsafe(32)
-        await self._redis.setex(self._key_token(token), self._TTL, user_id)
-        await self._redis.setex(self._key_cooldown(email), self._COOLDOWN_TTL, "1")
+        await self._redis.setex(self._key_token(token), self._ttl, user_id)
+        await self._redis.setex(self._key_cooldown(email), self._cooldown_ttl, "1")
         return token
 
     async def consume_token(self, token: str) -> str:

@@ -38,7 +38,7 @@ class RequestPasswordResetUseCase:
 
         token = await self._cache.create_token(user.id, email)
         settings = get_settings()
-        expires_minutes = 30
+        expires_minutes = settings.auth.password_reset_ttl_seconds // 60
         reset_url = (
             f"{settings.frontend_url.rstrip('/')}/reset-password?token={token}"
         )

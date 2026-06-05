@@ -1077,14 +1077,24 @@ def run_migrations_online() -> None:
 |---|---|---|
 | `redis://redis:6379/0` | Celery 브로커 (태스크 큐) | `celery_app.broker_url` |
 | `redis://redis:6379/1` | Celery result backend | `celery_app.result_backend` |
-| `redis://redis:6379/2` | 앱 캐시 (GitHub 커밋, OAuth state, API 응답) | `RedisCache` 클래스 |
+| `redis://redis:6379/2` | 앱 캐시 (OAuth state / onboarding / password reset / email verify) | `REDIS_CACHE_URL` |
+| `redis://redis:6379/3` | Auth 세션 (refresh token 세션 레코드 + 역인덱스) | `REDIS_AUTH_URL` |
 
-캐시 키 네이밍: `{도메인}:{식별자}:{목적}` 형식
+캐시 키 네이밍 + TTL (TTL 은 모두 `.env` 에서 관리):
 
 ```
-github:commits:{user_id}:{repo_full_name}    # TTL: 300초
-user:oauth_state:{state_value}               # TTL: 600초 (1회용)
-summary:result:{retro_id}                    # TTL: 3600초
+# DB 2 — 앱 캐시
+auth:oauth:state:{state}                    # TTL: OAUTH_STATE_TTL_SECONDS
+auth:onboarding:{token}                     # TTL: ONBOARDING_TOKEN_TTL_SECONDS
+auth:pwreset:{token}                        # TTL: PASSWORD_RESET_TTL_SECONDS
+auth:pwreset:cooldown:{email}               # TTL: PASSWORD_RESET_COOLDOWN_TTL_SECONDS
+auth:email:code:{email}                     # TTL: EMAIL_VERIFY_CODE_TTL_SECONDS
+auth:email:cooldown:{email}                 # TTL: EMAIL_COOLDOWN_TTL_SECONDS
+auth:email:verified:{email}                 # TTL: EMAIL_VERIFIED_TTL_SECONDS
+
+# DB 3 — 세션 (§18 Session 보안 정책 참조)
+auth:session:{sessionId}                    # TTL: REFRESH_TOKEN_EXPIRE_DAYS * 86400
+auth:user_sessions:{user_id}                # Set, TTL 동일
 ```
 
 ---
@@ -1136,8 +1146,8 @@ import secrets
 # 생성 — 암호학적으로 안전한 랜덤 값
 state = secrets.token_urlsafe(32)
 
-# Redis 저장 — TTL 10분, 콜백 후 즉시 삭제 (1회용)
-await redis.setex(f"user:oauth_state:{state}", 600, user_session_id)
+# Redis 저장 — TTL = OAUTH_STATE_TTL_SECONDS (기본 600s = 10분), 콜백 후 즉시 삭제 (1회용)
+await redis.setex(f"user:oauth_state:{state}", settings.auth.oauth_state_ttl_seconds, user_session_id)
 
 # 콜백 검증 — getdel로 읽는 동시에 삭제 (재사용 방지)
 stored = await redis.getdel(f"user:oauth_state:{state}")
@@ -1181,10 +1191,10 @@ if not stored:
 ```
 1. POST /auth/password/reset/request { email }
    ├─ 항상 200 (이메일 enumeration 방지)
-   ├─ 내부 분기: 미가입 / OAuth 전용 / 60초 쿨다운 → silent skip
+   ├─ 내부 분기: 미가입 / OAuth 전용 / 쿨다운(PASSWORD_RESET_COOLDOWN_TTL_SECONDS) → silent skip
    ├─ 정상 → token = secrets.token_urlsafe(32)
-   │        Redis: auth:pwreset:{token} = user_id  TTL=1800s
-   └─ 이메일 발송 (Apple 다크모드 템플릿 + plain text)
+   │        Redis: auth:pwreset:{token} = user_id  TTL=PASSWORD_RESET_TTL_SECONDS
+   └─ 이메일 발송 (Apple 다크모드 템플릿 + plain text — 본문의 "X분 유효"도 동일 값에서 derive)
 
 2. POST /auth/password/reset/confirm { token, newPassword, newPasswordConfirm }
    ├─ Redis getdel(auth:pwreset:{token}) → user_id (1회용)
@@ -1231,7 +1241,7 @@ SessionRecord = {
 3. 매칭 분기:
    a) presented_hash == rt_hash         → 정상 rotation
       - 새 secret 발급, rt_hash 교체, prev_rt_hash 백업, rotation_counter++
-   b) presented_hash == prev_rt_hash AND now - prev_at < 5s → grace hit
+   b) presented_hash == prev_rt_hash AND now - prev_at < SESSION_GRACE_WINDOW_SECONDS → grace hit
       - 동시 refresh race (탭 2개) — 새 RT 발급하지 않음, 기존 쿠키 유지
       - structlog: session.refresh_grace_hit
    c) 그 외                              → 탈취 의심
@@ -1299,7 +1309,7 @@ OAuth 콜백에서 처음 보이는 사용자는 곧바로 계정을 만들지 �
    ├─ provider 토큰 교환 + user_info 조회
    ├─ 분기:
    │   • 기존 사용자       → 일반 access/refresh 발급
-   │   • 신규 사용자       → Redis에 onboarding payload 저장 (TTL 30분)
+   │   • 신규 사용자       → Redis에 onboarding payload 저장 (TTL=ONBOARDING_TOKEN_TTL_SECONDS)
    │                       → HttpOnly Cookie `onboarding_token` 발급
    │                       → postMessage({ type: "oauth_onboarding_required" })
 2. POST /auth/oauth/onboarding

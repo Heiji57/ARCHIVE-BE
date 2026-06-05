@@ -14,13 +14,13 @@ import secrets
 from redis.asyncio import Redis
 
 from app.auth.domain.exceptions.exceptions import OnboardingTokenExpiredException
+from app.shared.infrastructure.config.auth import AuthConfig
 
 
 class OnboardingTokenCache:
-    _TTL = 1800  # 30 minutes
-
-    def __init__(self, redis: Redis) -> None:
+    def __init__(self, redis: Redis, config: AuthConfig) -> None:
         self._redis = redis
+        self._ttl = config.onboarding_token_ttl_seconds
 
     def _key(self, token: str) -> str:
         return f"auth:onboarding:{token}"
@@ -37,7 +37,7 @@ class OnboardingTokenCache:
             "provider_user_id": provider_user_id,
             "email": email,
         })
-        await self._redis.setex(self._key(token), self._TTL, payload)
+        await self._redis.setex(self._key(token), self._ttl, payload)
         return token
 
     async def peek(self, token: str) -> dict[str, str]:

@@ -12,13 +12,13 @@ import secrets
 from redis.asyncio import Redis
 
 from app.auth.domain.exceptions.exceptions import OAuthStateInvalidException
+from app.shared.infrastructure.config.auth import AuthConfig
 
 
 class OAuthStateCache:
-    _TTL = 600  # 10 minutes
-
-    def __init__(self, redis: Redis) -> None:
+    def __init__(self, redis: Redis, config: AuthConfig) -> None:
         self._redis = redis
+        self._ttl = config.oauth_state_ttl_seconds
 
     def _key(self, state: str) -> str:
         return f"auth:oauth:state:{state}"
@@ -27,14 +27,14 @@ class OAuthStateCache:
         """일반 로그인용 state — provider만 저장."""
         state = secrets.token_urlsafe(32)
         payload = json.dumps({"provider": provider})
-        await self._redis.setex(self._key(state), self._TTL, payload)
+        await self._redis.setex(self._key(state), self._ttl, payload)
         return state
 
     async def create_link_state(self, provider: str, user_id: str) -> str:
         """계정 link용 state — provider + 현재 user_id 저장."""
         state = secrets.token_urlsafe(32)
         payload = json.dumps({"provider": provider, "link_user_id": user_id})
-        await self._redis.setex(self._key(state), self._TTL, payload)
+        await self._redis.setex(self._key(state), self._ttl, payload)
         return state
 
     async def consume_state(self, state: str) -> dict[str, str]:

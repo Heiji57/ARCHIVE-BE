@@ -19,9 +19,8 @@ from app.auth.domain.exceptions.exceptions import (
 )
 from app.auth.infrastructure.cache.auth_token import AuthTokenCache, SessionRecord
 from app.shared.domain.utils.id import generate_id
+from app.shared.infrastructure.config.auth import AuthConfig
 from app.shared.infrastructure.logger.security import get_security_logger
-
-_GRACE_WINDOW_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -45,8 +44,9 @@ class RotatedSession:
 
 
 class SessionService:
-    def __init__(self, cache: AuthTokenCache) -> None:
+    def __init__(self, cache: AuthTokenCache, config: AuthConfig) -> None:
         self._cache = cache
+        self._grace_window = config.session_grace_window_seconds
         self._log = get_security_logger()
 
     # ── 발급 ──────────────────────────────────────────────────────────────────
@@ -116,7 +116,7 @@ class SessionService:
             record.prev_rt_hash is not None
             and presented_hash == record.prev_rt_hash
             and record.prev_at is not None
-            and (now - record.prev_at) < _GRACE_WINDOW_SECONDS
+            and (now - record.prev_at) < self._grace_window
         ):
             # 이미 새 RT 발급된 상태. 동일 RT 재발행하지 않고 현재 유효 RT 를 사용하도록 안내.
             # 두 번째 탭은 어차피 직후 새 access_token이 필요할 뿐 — 401 로 한 번 더 refresh 유도해도 되지만,

@@ -117,8 +117,10 @@ class AppProvider(Provider):
         return AuthTokenCache(redis, config.auth)
 
     @provide
-    def session_service(self, cache: AuthTokenCache) -> SessionService:
-        return SessionService(cache)
+    def session_service(
+        self, cache: AuthTokenCache, config: AppConfig
+    ) -> SessionService:
+        return SessionService(cache, config.auth)
 
     @provide
     def email_verification_cache(self, config: AppConfig) -> EmailVerificationCache:
@@ -128,17 +130,17 @@ class AppProvider(Provider):
     @provide
     def oauth_state_cache(self, config: AppConfig) -> OAuthStateCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
-        return OAuthStateCache(redis)
+        return OAuthStateCache(redis, config.auth)
 
     @provide
     def onboarding_token_cache(self, config: AppConfig) -> OnboardingTokenCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
-        return OnboardingTokenCache(redis)
+        return OnboardingTokenCache(redis, config.auth)
 
     @provide
     def password_reset_cache(self, config: AppConfig) -> PasswordResetCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
-        return PasswordResetCache(redis)
+        return PasswordResetCache(redis, config.auth)
 
     @provide
     def oauth_client_registry(self, config: AppConfig) -> OAuthClientRegistry:
