@@ -797,7 +797,7 @@ paths:
       description: |
         Celery worker(`ai_tasks` 큐, priority=9)로 요약 작업을 enqueue하고 **즉시 202를 반환**한다.
 
-        - 같은 기간에 PENDING/IN_PROGRESS 요약이 있으면 `409 RETRO_SUMMARY_IN_PROGRESS` 반환
+        - 같은 기간에 PENDING/IN_PROGRESS 요약이 있으면 `409 RETRO_SUMMARY_ALREADY_IN_PROGRESS` 반환
         - COMPLETED 요약이 있으면 그대로 반환 (재실행하지 않음)
         - FAILED 요약은 자동으로 PENDING 리셋 후 재실행
         - Gemini 호출은 rate_limit `60/min` 적용
@@ -823,7 +823,7 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict_409'
       x-error-codes:
-        - RETRO_SUMMARY_IN_PROGRESS
+        - RETRO_SUMMARY_ALREADY_IN_PROGRESS
         - RETRO_SUMMARY_INVALID_STATE
 
   /summaries:

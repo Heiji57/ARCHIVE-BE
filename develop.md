@@ -807,7 +807,7 @@ class ErrorCode:
     TODO_ALREADY_COMPLETED = "TODO_ALREADY_COMPLETED"
     # Retrospective
     RETRO_NOT_FOUND = "RETRO_NOT_FOUND"
-    RETRO_SUMMARY_IN_PROGRESS = "RETRO_SUMMARY_IN_PROGRESS"
+    RETRO_SUMMARY_ALREADY_IN_PROGRESS = "RETRO_SUMMARY_ALREADY_IN_PROGRESS"
 ```
 
 ### Validation 에러 (422)
@@ -1095,35 +1095,38 @@ summary:result:{retro_id}                    # TTL: 3600초
 
 | 방식 | 흐름 |
 |---|---|
-| 이메일/패스워드 | `POST /auth/register` → `POST /auth/login` → JWT 발급 |
-| GitHub OAuth | `GET /auth/github` → GitHub → `GET /auth/github/callback` → JWT 발급 |
-| Google OAuth | `GET /auth/google` → Google → `GET /auth/google/callback` → JWT 발급 |
-| TOTP 2FA | 1단계 로그인 → pre_auth 토큰 → `POST /auth/2fa/verify` → access 토큰 교환 |
+| 이메일/패스워드 | `POST /auth/register` 또는 `POST /auth/login` → access token(body) + refresh cookie 발급 |
+| GitHub OAuth | `GET /auth/oauth/github/authorize` → GitHub → `GET /auth/oauth/github/callback` → postMessage + cookie |
+| Google OAuth | `GET /auth/oauth/google/authorize` → Google → `GET /auth/oauth/google/callback` → postMessage + cookie |
+| OAuth 신규 사용자 | callback → onboarding cookie + `oauth_onboarding_required` postMessage → `POST /auth/oauth/onboarding` 으로 가입 완료 |
+| OAuth 계정 link | `POST /auth/oauth/{provider}/link/init` (Bearer) → 응답 `authorizeUrl` 을 popup 으로 open |
 
-### JWT 구조
+> **2FA(TOTP) 는 현재 비활성화 상태**입니다. 관련 컬럼은 migration 007 에서 제거됐고, pre_auth 토큰 흐름도 없습니다.
+
+### 토큰 구조
 
 ```python
-# 1단계 로그인 완료 후 발급 — 유효기간 5분, 2FA 검증 전용
-{ "sub": "user_id", "type": "pre_auth", "exp": ... }
-
-# 2FA 검증 완료 후 발급 — 유효기간 15분
+# Access Token (JWT, stateless) — 유효기간: settings.auth.access_token_expire_minutes (기본 15분)
 { "sub": "user_id", "type": "access", "exp": ... }
 
-# Refresh Token — 유효기간 7일
-{ "sub": "user_id", "type": "refresh", "exp": ... }
+# Refresh Token (opaque, NOT a JWT) — 유효기간: settings.auth.refresh_token_expire_days (기본 7일)
+# 형식: "{sessionId}.{secret}"  예) "sess_abc123def....xyz.k4Hf...32B"
+#   - sessionId: opaque random — Redis session 레코드의 키
+#   - secret:    Redis 에는 SHA-256 hash 로만 저장
+# 클라이언트 측: HttpOnly Secure SameSite=Lax 쿠키. JS 접근 불가.
 ```
+
+상세 검증·rotation·reuse detection 정책은 본 §18 의 **Session 보안 정책** 섹션 참조.
 
 ### 라우터 보호
 
 ```python
-# 일반 인증 (2FA 미설정 사용자 또는 2FA 완료 사용자)
-current_user: UserContext = Depends(get_current_user)      # type == "access"
+# 일반 인증 — Bearer access token
+current_user: UserContext = Depends(get_current_user)
 
-# 2FA 1단계 완료 후 TOTP 입력 엔드포인트 전용
-current_user: UserContext = Depends(get_pre_auth_user)     # type == "pre_auth"
+# Refresh token 쿠키 추출 (refresh / logout / 세션 관리 라우트용)
+raw_refresh: str = Depends(extract_refresh_token)
 ```
-
-2FA 미설정 사용자는 로그인 시 바로 `access` 토큰을 받습니다. 2FA 설정 사용자는 `pre_auth` → TOTP 검증 → `access` 순서를 거칩니다.
 
 ### OAuth state 보안
 

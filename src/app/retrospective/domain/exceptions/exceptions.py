@@ -14,7 +14,7 @@ class RetroSummaryNotFoundException(BaseAppException):
 
 
 class SummaryAlreadyInProgressException(BaseAppException):
-    code = "RETRO_SUMMARY_IN_PROGRESS"
+    code = "RETRO_SUMMARY_ALREADY_IN_PROGRESS"
 
 
 class SummaryInvalidStateException(BaseAppException):
