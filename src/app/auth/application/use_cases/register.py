@@ -4,7 +4,7 @@ from app.auth.application.dtos.commands import RegisterCommand
 from app.auth.application.services.session_service import RequestMeta, SessionService
 from app.auth.domain.exceptions.exceptions import (
     CountryInvalidException,
-    CountryRegionRequiredException,
+    CountryTimezoneRequiredException,
     EmailNotVerifiedException,
 )
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
@@ -48,12 +48,12 @@ class RegisterUseCase:
 
         if not is_supported_country(cmd.country):
             raise CountryInvalidException(f"Unsupported country: {cmd.country}")
-        if is_multi_tz_country(cmd.country) and not cmd.region:
-            raise CountryRegionRequiredException(
-                f"Region required for {cmd.country}"
+        if is_multi_tz_country(cmd.country) and not cmd.timezone:
+            raise CountryTimezoneRequiredException(
+                f"Timezone required for multi-timezone country: {cmd.country}"
             )
         try:
-            tz = resolve_timezone(cmd.country, cmd.region)
+            tz = resolve_timezone(cmd.country, cmd.timezone)
         except ValueError as e:
             raise CountryInvalidException(str(e))
 
@@ -63,18 +63,17 @@ class RegisterUseCase:
             email=Email(cmd.email),
             password_hash=hash_password(cmd.password),
             country=cmd.country,
-            region=cmd.region,
+            region=None,
             timezone=tz,
             created_at=now,
         )
         saved = await self._user_repo.save(user)
         await self._verification_cache.consume_verified(cmd.email)
 
-        # 국가 history 1행 기록 (가입 시점)
         await self._country_history_repo.record(
             user_id=saved.id,
             country=cmd.country,
-            region=cmd.region,
+            region=None,
             timezone=tz,
             source=CountryChangeSource.REGISTRATION,
             at=now,

@@ -39,3 +39,7 @@ uuid6>=2024.7.10
 
 # Logging
 structlog>=24.4.0
+
+# Country / Timezone (ISO 3166-1/3166-2 + CLDR country↔IANA tz)
+pycountry>=24.6.1
+pytz>=2024.2

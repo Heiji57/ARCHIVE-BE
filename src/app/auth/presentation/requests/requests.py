@@ -4,7 +4,29 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 _CODE_RE = re.compile(r"^[A-Z0-9]{6}$")
 _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
-_REGION_RE = re.compile(r"^[A-Z]{2}-[A-Z0-9]{1,3}$")
+_IANA_TZ_RE = re.compile(r"^[A-Za-z]+(?:[/_-][A-Za-z0-9_+-]+)+$")
+
+
+def _normalize_country(v: str) -> str:
+    if not isinstance(v, str):
+        raise ValueError("Country must be a string.")
+    normalized = v.strip().upper()
+    if not _COUNTRY_RE.fullmatch(normalized):
+        raise ValueError("Country must be an ISO 3166-1 alpha-2 code.")
+    return normalized
+
+
+def _normalize_optional_timezone(v: str | None) -> str | None:
+    if v is None or v == "":
+        return None
+    if not isinstance(v, str):
+        raise ValueError("Timezone must be a string.")
+    normalized = v.strip()
+    if not _IANA_TZ_RE.fullmatch(normalized):
+        raise ValueError(
+            "Timezone must be an IANA identifier like 'Asia/Seoul' or 'America/Los_Angeles'."
+        )
+    return normalized
 
 
 class SendVerificationRequest(BaseModel):
@@ -31,7 +53,7 @@ class RegisterRequest(BaseModel):
     password: str
     password_confirm: str = Field(alias="passwordConfirm")
     country: str
-    region: str | None = None
+    timezone: str | None = None  # 다중 tz 국가일 때만 필수
 
     model_config = {"populate_by_name": True}
 
@@ -45,24 +67,12 @@ class RegisterRequest(BaseModel):
     @field_validator("country", mode="before")
     @classmethod
     def country_format(cls, v: str) -> str:
-        if not isinstance(v, str):
-            raise ValueError("Country must be a string.")
-        normalized = v.strip().upper()
-        if not _COUNTRY_RE.fullmatch(normalized):
-            raise ValueError("Country must be an ISO 3166-1 alpha-2 code.")
-        return normalized
+        return _normalize_country(v)
 
-    @field_validator("region", mode="before")
+    @field_validator("timezone", mode="before")
     @classmethod
-    def region_format(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not isinstance(v, str):
-            raise ValueError("Region must be a string.")
-        normalized = v.strip().upper()
-        if not _REGION_RE.fullmatch(normalized):
-            raise ValueError("Region must be an ISO 3166-2 code like 'US-CA'.")
-        return normalized
+    def timezone_format(cls, v: str | None) -> str | None:
+        return _normalize_optional_timezone(v)
 
     @model_validator(mode="after")
     def passwords_match(self) -> "RegisterRequest":
@@ -82,56 +92,32 @@ class UpdateProfileRequest(BaseModel):
 
 class OnboardingCompleteRequest(BaseModel):
     country: str
-    region: str | None = None
+    timezone: str | None = None
 
     @field_validator("country", mode="before")
     @classmethod
     def country_format(cls, v: str) -> str:
-        if not isinstance(v, str):
-            raise ValueError("Country must be a string.")
-        normalized = v.strip().upper()
-        if not _COUNTRY_RE.fullmatch(normalized):
-            raise ValueError("Country must be an ISO 3166-1 alpha-2 code.")
-        return normalized
+        return _normalize_country(v)
 
-    @field_validator("region", mode="before")
+    @field_validator("timezone", mode="before")
     @classmethod
-    def region_format(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not isinstance(v, str):
-            raise ValueError("Region must be a string.")
-        normalized = v.strip().upper()
-        if not _REGION_RE.fullmatch(normalized):
-            raise ValueError("Region must be an ISO 3166-2 code like 'US-CA'.")
-        return normalized
+    def timezone_format(cls, v: str | None) -> str | None:
+        return _normalize_optional_timezone(v)
 
 
 class UpdateCountryRequest(BaseModel):
     country: str
-    region: str | None = None
+    timezone: str | None = None
 
     @field_validator("country", mode="before")
     @classmethod
     def country_format(cls, v: str) -> str:
-        if not isinstance(v, str):
-            raise ValueError("Country must be a string.")
-        normalized = v.strip().upper()
-        if not _COUNTRY_RE.fullmatch(normalized):
-            raise ValueError("Country must be an ISO 3166-1 alpha-2 code.")
-        return normalized
+        return _normalize_country(v)
 
-    @field_validator("region", mode="before")
+    @field_validator("timezone", mode="before")
     @classmethod
-    def region_format(cls, v: str | None) -> str | None:
-        if v is None or v == "":
-            return None
-        if not isinstance(v, str):
-            raise ValueError("Region must be a string.")
-        normalized = v.strip().upper()
-        if not _REGION_RE.fullmatch(normalized):
-            raise ValueError("Region must be an ISO 3166-2 code like 'US-CA'.")
-        return normalized
+    def timezone_format(cls, v: str | None) -> str | None:
+        return _normalize_optional_timezone(v)
 
 
 class UpdateTimezoneRequest(BaseModel):

@@ -17,7 +17,7 @@ class RegisterCommand:
     email: str
     password: str
     country: str
-    region: str | None = None
+    timezone: str | None = None    # 다중 tz 국가일 때만 필수
     device_info: str | None = None
     ip: str | None = None
 
@@ -34,7 +34,7 @@ class LoginCommand:
 class CompleteOnboardingCommand:
     onboarding_token: str
     country: str
-    region: str | None = None
+    timezone: str | None = None
     device_info: str | None = None
     ip: str | None = None
 

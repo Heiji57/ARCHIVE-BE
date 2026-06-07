@@ -1,216 +1,89 @@
-"""국가/하위지역 → IANA 타임존 매핑.
+"""국가 ↔ IANA 타임존 매핑.
 
-다중 tz 국가는 region(ISO 3166-2 subdivision code) 필수.
-단일 tz 국가는 region 없이도 결정 가능.
+데이터 소스:
+- pycountry: ISO 3166-1 alpha-2 (249개국) 정식 목록
+- pytz.country_timezones: CLDR-derived 국가 → IANA tz 목록
+
+원칙:
+- 국가의 tz 가 1개 = "단일 tz 국가" → country 만으로 결정
+- 국가의 tz 가 2개 이상 = "다중 tz 국가" → timezone 파라미터 필수,
+  해당 timezone 이 그 국가의 옵션에 속해야 함
+
+이 모듈은 timezone 데이터를 직접 보관하지 않는다. tzdata (system zoneinfo) 와
+pytz 가 권위 데이터 — OS / 라이브러리 업데이트 시 자동 추적된다.
 """
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# 다중 tz 국가 — region(ISO 3166-2) 필수
-MULTI_TZ_COUNTRIES: frozenset[str] = frozenset({
-    "US", "CA", "RU", "AU", "BR", "MX", "ID", "AR", "CL", "KZ", "MN",
-})
+import pycountry
+import pytz
 
-# 단일 tz 국가의 기본 IANA 타임존
-SINGLE_TZ_COUNTRY: dict[str, str] = {
-    "KR": "Asia/Seoul",
-    "JP": "Asia/Tokyo",
-    "CN": "Asia/Shanghai",     # 정책상 단일
-    "TW": "Asia/Taipei",
-    "HK": "Asia/Hong_Kong",
-    "SG": "Asia/Singapore",
-    "MY": "Asia/Kuala_Lumpur",
-    "TH": "Asia/Bangkok",
-    "VN": "Asia/Ho_Chi_Minh",
-    "PH": "Asia/Manila",
-    "IN": "Asia/Kolkata",
-    "AE": "Asia/Dubai",
-    "SA": "Asia/Riyadh",
-    "IL": "Asia/Jerusalem",
-    "TR": "Europe/Istanbul",
-    "GB": "Europe/London",
-    "IE": "Europe/Dublin",
-    "FR": "Europe/Paris",
-    "DE": "Europe/Berlin",
-    "ES": "Europe/Madrid",
-    "IT": "Europe/Rome",
-    "NL": "Europe/Amsterdam",
-    "BE": "Europe/Brussels",
-    "CH": "Europe/Zurich",
-    "AT": "Europe/Vienna",
-    "PL": "Europe/Warsaw",
-    "SE": "Europe/Stockholm",
-    "NO": "Europe/Oslo",
-    "DK": "Europe/Copenhagen",
-    "FI": "Europe/Helsinki",
-    "PT": "Europe/Lisbon",
-    "GR": "Europe/Athens",
-    "CZ": "Europe/Prague",
-    "RO": "Europe/Bucharest",
-    "HU": "Europe/Budapest",
-    "UA": "Europe/Kyiv",
-    "ZA": "Africa/Johannesburg",
-    "EG": "Africa/Cairo",
-    "NG": "Africa/Lagos",
-    "KE": "Africa/Nairobi",
-    "MA": "Africa/Casablanca",
-    "NZ": "Pacific/Auckland",
-}
-
-# 다중 tz 국가의 region(ISO 3166-2) → IANA 타임존
-REGION_TZ: dict[str, str] = {
-    # ── 미국 (US) ──
-    "US-AL": "America/Chicago",        # Alabama
-    "US-AK": "America/Anchorage",      # Alaska
-    "US-AZ": "America/Phoenix",        # Arizona (no DST)
-    "US-AR": "America/Chicago",        # Arkansas
-    "US-CA": "America/Los_Angeles",    # California
-    "US-CO": "America/Denver",         # Colorado
-    "US-CT": "America/New_York",       # Connecticut
-    "US-DE": "America/New_York",       # Delaware
-    "US-FL": "America/New_York",       # Florida (대부분)
-    "US-GA": "America/New_York",       # Georgia
-    "US-HI": "Pacific/Honolulu",       # Hawaii
-    "US-ID": "America/Boise",          # Idaho
-    "US-IL": "America/Chicago",        # Illinois
-    "US-IN": "America/Indiana/Indianapolis",  # Indiana
-    "US-IA": "America/Chicago",        # Iowa
-    "US-KS": "America/Chicago",        # Kansas
-    "US-KY": "America/New_York",       # Kentucky (동부)
-    "US-LA": "America/Chicago",        # Louisiana
-    "US-ME": "America/New_York",       # Maine
-    "US-MD": "America/New_York",       # Maryland
-    "US-MA": "America/New_York",       # Massachusetts
-    "US-MI": "America/Detroit",        # Michigan
-    "US-MN": "America/Chicago",        # Minnesota
-    "US-MS": "America/Chicago",        # Mississippi
-    "US-MO": "America/Chicago",        # Missouri
-    "US-MT": "America/Denver",         # Montana
-    "US-NE": "America/Chicago",        # Nebraska
-    "US-NV": "America/Los_Angeles",    # Nevada
-    "US-NH": "America/New_York",       # New Hampshire
-    "US-NJ": "America/New_York",       # New Jersey
-    "US-NM": "America/Denver",         # New Mexico
-    "US-NY": "America/New_York",       # New York
-    "US-NC": "America/New_York",       # North Carolina
-    "US-ND": "America/Chicago",        # North Dakota
-    "US-OH": "America/New_York",       # Ohio
-    "US-OK": "America/Chicago",        # Oklahoma
-    "US-OR": "America/Los_Angeles",    # Oregon
-    "US-PA": "America/New_York",       # Pennsylvania
-    "US-RI": "America/New_York",       # Rhode Island
-    "US-SC": "America/New_York",       # South Carolina
-    "US-SD": "America/Chicago",        # South Dakota
-    "US-TN": "America/Chicago",        # Tennessee
-    "US-TX": "America/Chicago",        # Texas
-    "US-UT": "America/Denver",         # Utah
-    "US-VT": "America/New_York",       # Vermont
-    "US-VA": "America/New_York",       # Virginia
-    "US-WA": "America/Los_Angeles",    # Washington
-    "US-WV": "America/New_York",       # West Virginia
-    "US-WI": "America/Chicago",        # Wisconsin
-    "US-WY": "America/Denver",         # Wyoming
-    "US-DC": "America/New_York",       # District of Columbia
-    # ── 캐나다 (CA) ──
-    "CA-ON": "America/Toronto",
-    "CA-QC": "America/Toronto",
-    "CA-BC": "America/Vancouver",
-    "CA-AB": "America/Edmonton",
-    "CA-MB": "America/Winnipeg",
-    "CA-SK": "America/Regina",
-    "CA-NS": "America/Halifax",
-    "CA-NB": "America/Moncton",
-    "CA-NL": "America/St_Johns",
-    "CA-PE": "America/Halifax",
-    "CA-YT": "America/Whitehorse",
-    "CA-NT": "America/Yellowknife",
-    "CA-NU": "America/Iqaluit",
-    # ── 호주 (AU) ──
-    "AU-NSW": "Australia/Sydney",
-    "AU-VIC": "Australia/Melbourne",
-    "AU-QLD": "Australia/Brisbane",
-    "AU-SA":  "Australia/Adelaide",
-    "AU-WA":  "Australia/Perth",
-    "AU-TAS": "Australia/Hobart",
-    "AU-NT":  "Australia/Darwin",
-    "AU-ACT": "Australia/Sydney",
-    # ── 러시아 (RU) — 주요 ──
-    "RU-MOW": "Europe/Moscow",
-    "RU-SPE": "Europe/Moscow",
-    "RU-NVS": "Asia/Novosibirsk",
-    "RU-SVE": "Asia/Yekaterinburg",
-    "RU-PRI": "Asia/Vladivostok",
-    "RU-KAM": "Asia/Kamchatka",
-    "RU-KDA": "Europe/Moscow",
-    # ── 브라질 (BR) — 주요 ──
-    "BR-SP": "America/Sao_Paulo",
-    "BR-RJ": "America/Sao_Paulo",
-    "BR-DF": "America/Sao_Paulo",
-    "BR-AM": "America/Manaus",
-    "BR-AC": "America/Rio_Branco",
-    "BR-PA": "America/Belem",
-    # ── 멕시코 (MX) ──
-    "MX-CMX": "America/Mexico_City",
-    "MX-JAL": "America/Mexico_City",
-    "MX-BCN": "America/Tijuana",
-    "MX-BCS": "America/Mazatlan",
-    "MX-CHH": "America/Chihuahua",
-    "MX-SON": "America/Hermosillo",
-    "MX-ROO": "America/Cancun",
-    # ── 인도네시아 (ID) ──
-    "ID-JK": "Asia/Jakarta",
-    "ID-BA": "Asia/Makassar",
-    "ID-PA": "Asia/Jayapura",
-    # ── 아르헨티나 (AR) — 대부분 동일 ──
-    "AR-B": "America/Argentina/Buenos_Aires",
-    "AR-C": "America/Argentina/Buenos_Aires",
-    # ── 칠레 (CL) ──
-    "CL-RM": "America/Santiago",
-    "CL-VS": "America/Santiago",
-    "CL-MA": "America/Punta_Arenas",
-    # ── 카자흐스탄 (KZ) ──
-    "KZ-ALA": "Asia/Almaty",
-    "KZ-AKT": "Asia/Aqtobe",
-    # ── 몽골 (MN) ──
-    "MN-1":  "Asia/Ulaanbaatar",
-    "MN-64": "Asia/Hovd",
-}
-
-
-def is_multi_tz_country(country: str) -> bool:
-    return country.upper() in MULTI_TZ_COUNTRIES
+# ISO 3166-1 alpha-2 모든 코드 (249개)
+_SUPPORTED_COUNTRY_CODES: frozenset[str] = frozenset(
+    c.alpha_2 for c in pycountry.countries
+)
 
 
 def is_supported_country(country: str) -> bool:
-    code = country.upper()
-    return code in MULTI_TZ_COUNTRIES or code in SINGLE_TZ_COUNTRY
+    """ISO 3166-1 alpha-2 등록된 국가 코드인지."""
+    return country.upper() in _SUPPORTED_COUNTRY_CODES
 
 
-def resolve_timezone(country: str, region: str | None = None) -> str:
-    """국가/region 조합으로 IANA tz 문자열 결정.
+def country_timezone_options(country: str) -> list[str]:
+    """국가에 속한 IANA tz 옵션 목록.
+
+    빈 리스트면 tz 데이터 없음 (이론상 South Sudan(SS) 등 일부 누락 케이스).
+    1개면 단일 tz 국가, 2개 이상이면 다중 tz 국가.
+    """
+    return list(pytz.country_timezones.get(country.upper(), []))
+
+
+def is_multi_tz_country(country: str) -> bool:
+    """다중 tz 국가 여부 (tz 옵션이 2개 이상)."""
+    return len(country_timezone_options(country)) > 1
+
+
+def resolve_timezone(country: str, timezone: str | None = None) -> str:
+    """국가 + (옵션 timezone) 조합으로 IANA tz 문자열 결정.
+
+    단일 tz 국가: timezone 없어도 자동 결정. 주어졌다면 옵션에 속해야 함.
+    다중 tz 국가: timezone 필수. 해당 국가의 옵션에 속해야 함.
 
     Raises:
-        ValueError: 지원하지 않는 country, 또는 다중 tz 국가에서 region 누락/오류
+        ValueError: 지원하지 않는 country, tz 데이터 없는 country,
+                    다중 tz 국가에서 timezone 누락, 또는 timezone 이 country 옵션 밖.
     """
     country_code = country.upper()
+    if not is_supported_country(country_code):
+        raise ValueError(f"Unsupported country code: {country_code}")
 
-    if country_code in SINGLE_TZ_COUNTRY:
-        return SINGLE_TZ_COUNTRY[country_code]
+    options = country_timezone_options(country_code)
+    if not options:
+        raise ValueError(f"No timezone data for country: {country_code}")
 
-    if country_code in MULTI_TZ_COUNTRIES:
-        if not region:
-            raise ValueError(f"Region required for multi-timezone country: {country_code}")
-        region_code = region.upper()
-        if not region_code.startswith(f"{country_code}-"):
-            raise ValueError(f"Region '{region_code}' does not match country '{country_code}'")
-        if region_code not in REGION_TZ:
-            raise ValueError(f"Unsupported region code: {region_code}")
-        return REGION_TZ[region_code]
+    if len(options) == 1:
+        sole = options[0]
+        if timezone and timezone != sole:
+            raise ValueError(
+                f"Timezone '{timezone}' does not belong to country '{country_code}' "
+                f"(only option: {sole})"
+            )
+        return sole
 
-    raise ValueError(f"Unsupported country code: {country_code}")
+    # 다중 tz 국가
+    if not timezone:
+        raise ValueError(
+            f"Multi-timezone country '{country_code}' requires explicit timezone "
+            f"(options: {options})"
+        )
+    if timezone not in options:
+        raise ValueError(
+            f"Timezone '{timezone}' does not belong to country '{country_code}'"
+        )
+    return timezone
 
 
 def validate_timezone(tz: str) -> bool:
-    """IANA tz 문자열 유효성 검증 (zoneinfo로 로드 가능한지)."""
+    """IANA tz 문자열 유효성 검증 (zoneinfo 로 로드 가능한지)."""
     try:
         ZoneInfo(tz)
         return True

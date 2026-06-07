@@ -8,7 +8,7 @@ from app.auth.domain.exceptions.exceptions import (
     AuthTokenExpiredException,
     AuthTokenInvalidException,
     CountryInvalidException,
-    CountryRegionRequiredException,
+    CountryTimezoneRequiredException,
     EmailNotVerifiedException,
     OAuthAccountAlreadyLinkedException,
     OAuthProviderAlreadyLinkedException,
@@ -97,7 +97,7 @@ _STATUS_MAP: dict[str, int] = {
     OAuthProviderAlreadyLinkedException.code: 409,
     # 422
     CountryInvalidException.code: 422,
-    CountryRegionRequiredException.code: 422,
+    CountryTimezoneRequiredException.code: 422,
     TimezoneInvalidException.code: 422,
     # 429
     GitHubRateLimitedException.code: 429,

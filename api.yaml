@@ -207,12 +207,13 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RegisterRequest'
-            example:
-              email: user@example.com
-              password: strongPass1!
-              passwordConfirm: strongPass1!
-              country: KR
-              region: null
+            examples:
+              kr:
+                summary: 단일 tz 국가 (timezone 생략 가능)
+                value: { email: user@example.com, password: strongPass1!, passwordConfirm: strongPass1!, country: KR }
+              us_la:
+                summary: 다중 tz 국가 (timezone 필수)
+                value: { email: user@example.com, password: strongPass1!, passwordConfirm: strongPass1!, country: US, timezone: America/Los_Angeles }
       responses:
         '201':
           description: 가입 성공
@@ -233,7 +234,7 @@ paths:
         - USER_EMAIL_INVALID
         - USER_EMAIL_DUPLICATED
         - AUTH_COUNTRY_INVALID
-        - AUTH_COUNTRY_REGION_REQUIRED
+        - AUTH_COUNTRY_TIMEZONE_REQUIRED
 
   /auth/login:
     post:
@@ -533,8 +534,9 @@ paths:
         OAuth 콜백 단계에서 `onboarding_token` HttpOnly Cookie를 받은 신규 사용자가 국가 정보를
         추가 입력해 가입을 완료한다.
 
-        - 다중 tz 국가(US/CA/RU/AU/BR/MX/ID/AR/CL/KZ/MN)는 `region` 필수 (ISO 3166-2: 예 `US-CA`)
-        - 단일 tz 국가는 `region` 생략 가능
+        - **단일 tz 국가** (예: KR, JP, FR): `timezone` 생략 가능 — BE 가 자동 결정
+        - **다중 tz 국가** (예: US, RU, BR, AU, CA): `timezone` 필수 (IANA tz 문자열)
+        - 국가별 사용 가능한 timezone 목록은 `GET /settings/countries/{code}/timezones` 로 조회
         - 성공 시 `onboarding_token` Cookie 삭제 + `refresh_token` Cookie + access token body
       security:
         - OnboardingCookie: []
@@ -547,9 +549,12 @@ paths:
               korea:
                 summary: 한국 (단일 tz)
                 value: { country: KR }
-              us_california:
-                summary: 미국 캘리포니아 (다중 tz)
-                value: { country: US, region: US-CA }
+              us_la:
+                summary: 미국 LA (다중 tz)
+                value: { country: US, timezone: America/Los_Angeles }
+              brazil_sp:
+                summary: 브라질 상파울루 (다중 tz)
+                value: { country: BR, timezone: America/Sao_Paulo }
       responses:
         '201':
           description: 가입 완료
@@ -569,7 +574,7 @@ paths:
         - AUTH_ONBOARDING_TOKEN_INVALID
         - AUTH_ONBOARDING_TOKEN_EXPIRED
         - AUTH_COUNTRY_INVALID
-        - AUTH_COUNTRY_REGION_REQUIRED
+        - AUTH_COUNTRY_TIMEZONE_REQUIRED
         - USER_EMAIL_DUPLICATED
 
   # ════════════════════════════════════════════════════════════════════════════
@@ -1050,14 +1055,21 @@ paths:
   /settings/country:
     patch:
       tags: [settings]
-      summary: 국가/하위지역 변경 — timezone 자동 재계산
+      summary: 국가 변경 — timezone 자동 결정 (단일 tz) / IANA tz 명시 (다중 tz)
       description: |
-        사용자 국가를 변경하면 backend가 country/region 조합으로 timezone을 재계산해 같이 저장한다.
+        사용자 국가를 변경하면 backend 가 country / timezone 조합으로 IANA tz 를 결정해 같이 저장한다.
         AI 자동 요약 트리거 시간(현지 1am)도 새 timezone 기준으로 자동 갱신된다.
 
-        - 다중 tz 국가는 `region`(ISO 3166-2) 필수
-        - 단일 tz 국가는 `region` 생략 가능
-        - 임의로 timezone만 단독 변경하려면 `PATCH /settings/timezone` 사용
+        ### 입력 규칙
+        - **단일 tz 국가** (예: KR, JP, FR — pytz country_timezones 옵션 1개): `timezone` 생략 가능
+        - **다중 tz 국가** (예: US, RU, BR, AU, CA): `timezone` 필수 (IANA tz 문자열)
+        - 국가별 옵션은 `GET /settings/countries/{code}/timezones` 로 조회
+        - country 만 바꿔도 자동으로 새 tz 가 저장됨 (region 이라는 별도 입력 없음)
+        - 단순 timezone 만 단독 변경하려면 `PATCH /settings/timezone` 사용
+
+        ### 데이터 소스
+        - 국가 목록: `pycountry` (ISO 3166-1 alpha-2, 249개)
+        - 국가 → tz 매핑: `pytz.country_timezones` (CLDR-derived)
       requestBody:
         required: true
         content:
@@ -1065,8 +1077,9 @@ paths:
             schema: { $ref: '#/components/schemas/UpdateCountryRequest' }
             examples:
               korea:    { value: { country: KR } }
-              us_ca:    { value: { country: US, region: US-CA } }
               japan:    { value: { country: JP } }
+              us_la:    { value: { country: US, timezone: America/Los_Angeles } }
+              brazil:   { value: { country: BR, timezone: America/Sao_Paulo } }
       responses:
         '200':
           description: 수정 성공 (timezone 포함된 user 응답)
@@ -1080,8 +1093,40 @@ paths:
         '422': { $ref: '#/components/responses/ValidationError_422' }
       x-error-codes:
         - AUTH_COUNTRY_INVALID
-        - AUTH_COUNTRY_REGION_REQUIRED
+        - AUTH_COUNTRY_TIMEZONE_REQUIRED
         - USER_NOT_FOUND
+
+  /settings/countries/{code}/timezones:
+    get:
+      tags: [settings]
+      summary: 국가의 사용 가능한 IANA timezone 목록 조회
+      description: |
+        FE 가 국가 선택 시 호출해 timezone 드롭다운을 채운다.
+
+        - `multi: false` → 단일 tz 국가 (timezones 길이 1). FE 가 timezone 입력 받지 않아도 됨
+        - `multi: true`  → 다중 tz 국가. 사용자가 timezone 을 직접 선택해야 함
+
+        데이터 소스: `pytz.country_timezones` (CLDR-derived). OS tzdata 업데이트 시 자동 반영.
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: ISO 3166-1 alpha-2 국가 코드 (대소문자 무관)
+          schema: { type: string, pattern: '^[A-Za-z]{2}$' }
+      responses:
+        '200':
+          description: 국가의 timezone 옵션
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseCountryTimezones' }
+              examples:
+                kr: { value: { status: success, code: OK, data: { country: KR, timezones: [Asia/Seoul], multi: false } } }
+                us: { value: { status: success, code: OK, data: { country: US, timezones: [America/New_York, America/Chicago, America/Denver, America/Los_Angeles, "..."], multi: true } } }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '422': { $ref: '#/components/responses/ValidationError_422' }
+      x-error-codes:
+        - AUTH_COUNTRY_INVALID
 
   /settings/timezone:
     patch:
@@ -1561,7 +1606,13 @@ components:
             data: null
             details: []
     ValidationError_422:
-      description: 요청 검증 실패 (Pydantic)
+      description: |
+        요청 검증 실패. 두 가지 경로:
+        - **Pydantic 스키마 에러** → `code: VALIDATION_ERROR`, `details` 에 field별 메시지
+        - **도메인 검증 에러** (핸들러가 직접 반환) → 도메인 코드 사용:
+          - `AUTH_COUNTRY_INVALID` — ISO 3166-1 미등록 국가, 또는 tz 데이터 없는 국가
+          - `AUTH_COUNTRY_TIMEZONE_REQUIRED` — 다중 tz 국가에서 timezone 누락
+          - `AUTH_TIMEZONE_INVALID` — IANA 형식 아니거나 해당 국가의 옵션 밖
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -1694,15 +1745,15 @@ components:
           type: string
           pattern: '^[A-Z]{2}$'
           description: |
-            ISO 3166-1 alpha-2 국가 코드 (예: `KR`, `US`, `JP`).
-            다중 tz 국가(US/CA/RU/AU/BR/MX/ID/AR/CL/KZ/MN)는 `region` 필수.
-        region:
+            ISO 3166-1 alpha-2 국가 코드 (전 249개국 지원, pycountry 기반).
+            예: `KR`, `US`, `JP`. 대소문자/공백은 BE 가 정규화.
+        timezone:
           type: string
           nullable: true
-          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
           description: |
-            ISO 3166-2 하위지역 코드 (예: `US-CA`, `CA-ON`).
-            단일 tz 국가는 생략 가능 (`null`).
+            IANA timezone identifier (예: `Asia/Seoul`, `America/Los_Angeles`).
+            단일 tz 국가(예: KR, JP, FR)는 생략 가능 — BE 가 자동 결정.
+            다중 tz 국가(예: US, RU, BR)는 필수. 옵션 조회: `GET /settings/countries/{code}/timezones`.
 
     LoginRequest:
       type: object
@@ -1720,21 +1771,31 @@ components:
       type: object
       required: [country]
       properties:
-        country: { type: string, pattern: '^[A-Z]{2}$' }
-        region:
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          description: ISO 3166-1 alpha-2 국가 코드 (전 249개국 지원)
+        timezone:
           type: string
           nullable: true
-          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+          description: |
+            IANA timezone identifier.
+            단일 tz 국가는 생략 가능, 다중 tz 국가는 필수.
 
     UpdateCountryRequest:
       type: object
       required: [country]
       properties:
-        country: { type: string, pattern: '^[A-Z]{2}$' }
-        region:
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          description: ISO 3166-1 alpha-2 국가 코드 (전 249개국 지원)
+        timezone:
           type: string
           nullable: true
-          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+          description: |
+            IANA timezone identifier.
+            단일 tz 국가는 생략 가능 (자동 결정), 다중 tz 국가는 필수.
 
     UpdateTimezoneRequest:
       type: object
@@ -1744,6 +1805,26 @@ components:
           type: string
           example: Asia/Seoul
           description: IANA timezone identifier
+
+    CountryTimezonesResponse:
+      type: object
+      required: [country, timezones, multi]
+      properties:
+        country:   { type: string, pattern: '^[A-Z]{2}$' }
+        timezones:
+          type: array
+          items: { type: string }
+          description: 해당 국가의 IANA tz 옵션 (CLDR-derived, pytz)
+        multi:
+          type: boolean
+          description: 다중 tz 국가 여부. true 면 사용자가 timezone 을 직접 선택해야 함.
+
+    ApiResponseCountryTimezones:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/CountryTimezonesResponse' }
 
     RequestPasswordResetRequest:
       type: object

@@ -50,6 +50,9 @@ from app.github.infrastructure.api.github_api_client import GitHubApiClient
 from app.github.infrastructure.persistence.repositories.github_repository_repo import GitHubRepositoryRepository
 from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
 from app.settings.application.use_cases.get_settings import GetSettingsUseCase
+from app.settings.application.use_cases.list_country_timezones import (
+    ListCountryTimezonesUseCase,
+)
 from app.settings.application.use_cases.update_country import UpdateCountryUseCase
 from app.settings.application.use_cases.update_settings import UpdateSettingsUseCase
 from app.settings.application.use_cases.update_timezone import UpdateTimezoneUseCase
@@ -263,6 +266,10 @@ class RequestProvider(Provider):
     @provide
     def update_timezone_use_case(self, user_repo: IUserRepository) -> UpdateTimezoneUseCase:
         return UpdateTimezoneUseCase(user_repo)
+
+    @provide
+    def list_country_timezones_use_case(self) -> ListCountryTimezonesUseCase:
+        return ListCountryTimezonesUseCase()
 
     # ── Auth Use Cases ────────────────────────────────────────────────────────
 

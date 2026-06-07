@@ -1282,7 +1282,7 @@ user_country_history
 ├ id          (uch_*)
 ├ user_id     FK users(id) ON DELETE CASCADE
 ├ country     CHAR(2)      -- ISO 3166-1 alpha-2
-├ region      VARCHAR(8)   -- ISO 3166-2 (다중 tz 국가만)
+├ region      VARCHAR(8)   -- (deprecated) 과거 ISO 3166-2. 신규 입력은 NULL
 ├ timezone    VARCHAR(64)  -- IANA tz at change time
 ├ source      VARCHAR(32)  -- 'registration' | 'oauth_onboarding' | 'settings_update'
 └ created_at  TIMESTAMPTZ
@@ -1302,7 +1302,7 @@ user_country_history
 
 ### OAuth 신규 사용자 온보딩 흐름 (국가 정보 수집)
 
-OAuth 콜백에서 처음 보이는 사용자는 곧바로 계정을 만들지 않고 **임시 onboarding token**을 발급해 FE가 국가/하위지역을 입력하도록 유도합니다.
+OAuth 콜백에서 처음 보이는 사용자는 곧바로 계정을 만들지 않고 **임시 onboarding token** 을 발급해 FE 가 국가/timezone 을 입력하도록 유도합니다.
 
 ```
 1. /auth/oauth/{provider}/callback
@@ -1314,25 +1314,53 @@ OAuth 콜백에서 처음 보이는 사용자는 곧바로 계정을 만들지 �
    │                       → postMessage({ type: "oauth_onboarding_required" })
 2. POST /auth/oauth/onboarding
    ├─ Cookie의 onboarding_token으로 Redis 조회 (consume)
-   ├─ body { country, region? }  validation
-   ├─ country/region → IANA tz 결정
+   ├─ body { country, timezone? }  validation
+   ├─ resolve_timezone(country, timezone) → IANA tz 결정
    ├─ User + OAuthConnection 생성
    └─ refresh_token Cookie + access_token body
 ```
 
-Redis 키 형식: `auth:onboarding:{token} → JSON {provider, provider_user_id, email}` (TTL 1800s).
+Redis 키 형식: `auth:onboarding:{token} → JSON {provider, provider_user_id, email}`.
 
 ### 사용자 타임존 & 국가
 
 | 필드 | 의미 | 변경 API |
 |---|---|---|
-| `users.country` | ISO 3166-1 alpha-2 (`KR`, `US`, ...) | `PATCH /settings/country` (timezone 자동 재계산) |
-| `users.region` | ISO 3166-2 (`US-CA`) — 다중 tz 국가만 사용 | `PATCH /settings/country` |
-| `users.timezone` | IANA tz (`Asia/Seoul`) — AI 요약 스케줄링 기준 | `PATCH /settings/timezone` (단독 override) |
+| `users.country` | ISO 3166-1 alpha-2 (`KR`, `US`, ...). pycountry 기준 전 249개국 | `PATCH /settings/country` (timezone 자동/명시) |
+| `users.region` | **(deprecated)** 과거 ISO 3166-2. 신규 입력 받지 않음. 신규 row 는 NULL | — |
+| `users.timezone` | IANA tz (`Asia/Seoul`, `America/Los_Angeles`). AI 요약 스케줄링 기준 | `PATCH /settings/timezone` (단독 override) |
 
-- 다중 tz 국가: `US, CA, RU, AU, BR, MX, ID, AR, CL, KZ, MN` — `region` 필수
-- `resolve_timezone(country, region)`는 `shared/domain/utils/timezone.py`에서 결정
-- AI 자동 요약은 **사용자 tz 기준 새벽 1시**에 트리거됨
+#### 국가 → IANA timezone 결정 흐름
+
+```
+1. 국가 코드 검증
+   is_supported_country(country) → ISO 3166-1 alpha-2 등록 여부 (pycountry)
+
+2. 옵션 조회
+   country_timezone_options(country) → pytz.country_timezones[country]
+                                       (CLDR-derived, OS tzdata 자동 추적)
+
+3. 결정
+   if len(options) == 1:
+       timezone = options[0]   # 자동 결정 — FE 에서 timezone 생략 가능
+   else:
+       if not timezone:
+           raise AUTH_COUNTRY_TIMEZONE_REQUIRED
+       if timezone not in options:
+           raise AUTH_TIMEZONE_INVALID
+       # OK
+```
+
+#### FE 가 timezone 옵션 받는 법
+`GET /settings/countries/{code}/timezones` → `{ country, timezones[], multi }`
+- `multi: false` → FE 는 timezone 입력란을 숨겨도 됨
+- `multi: true`  → FE 는 `timezones[]` 로 드롭다운 채움
+
+#### 데이터 소스 & 갱신 정책
+- **국가 목록**: `pycountry` (ISO 3166-1, 249개). 신규 국가 발생 시 라이브러리 업데이트로 자동 반영.
+- **국가 → tz 매핑**: `pytz.country_timezones` (CLDR). DST 정책 변경, tz 신설·통합도 라이브러리 + OS tzdata 업데이트로 자동 반영. **dict 하드코딩 없음** — 코드 수정·배포 불필요.
+
+AI 자동 요약은 **사용자 tz 기준 새벽 1시** 에 트리거.
 
 ---
 

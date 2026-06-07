@@ -198,7 +198,7 @@ async def register(
             email=body.email,
             password=body.password,
             country=body.country,
-            region=body.region,
+            timezone=body.timezone,
             device_info=request.headers.get("user-agent"),
             ip=_client_ip(request),
         )
@@ -442,7 +442,7 @@ async def oauth_onboarding(
         CompleteOnboardingCommand(
             onboarding_token=onboarding_token,
             country=body.country,
-            region=body.region,
+            timezone=body.timezone,
             device_info=request.headers.get("user-agent"),
             ip=_client_ip(request),
         )

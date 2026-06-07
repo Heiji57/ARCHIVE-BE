@@ -52,14 +52,17 @@ class OnboardingTokenExpiredException(BaseAppException):
 
 
 class CountryInvalidException(BaseAppException):
+    """ISO 3166-1 alpha-2 미등록 국가, 또는 timezone 데이터가 없는 국가."""
     code = "AUTH_COUNTRY_INVALID"
 
 
-class CountryRegionRequiredException(BaseAppException):
-    code = "AUTH_COUNTRY_REGION_REQUIRED"
+class CountryTimezoneRequiredException(BaseAppException):
+    """다중 timezone 국가(예: US, RU, BR)는 IANA timezone 명시 필수."""
+    code = "AUTH_COUNTRY_TIMEZONE_REQUIRED"
 
 
 class TimezoneInvalidException(BaseAppException):
+    """주어진 timezone 이 IANA tz 가 아니거나 해당 국가의 옵션 밖."""
     code = "AUTH_TIMEZONE_INVALID"
 
 
