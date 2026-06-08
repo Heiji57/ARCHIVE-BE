@@ -120,11 +120,11 @@ src/app/
 | Auth | `GET /auth/sessions`, `DELETE /auth/sessions`, `DELETE /auth/sessions/{sessionId}` (활성 세션 관리) |
 | Todo | `GET/POST /todos`, `PATCH/DELETE /todos/{id}` |
 | Entry | `GET/POST /entries`, `GET/PUT/DELETE /entries/{id}` |
-| Summary | `POST /summaries/generate`, `GET /summaries`, `GET /summaries/{id}`, `GET /summaries/{id}/stream` |
+| Summary | `POST /summaries/generate`, `GET /summaries/readiness`, `GET /summaries`, `GET /summaries/{id}`, `GET /summaries/{id}/stream` |
 | Notification | `GET /notifications/stream`, `GET /notifications`, `PATCH /notifications/read-all`, `PATCH /notifications/{id}/read`, `DELETE /notifications/{id}`, `DELETE /notifications` |
 | Settings | `GET/PUT /settings`, `PATCH /settings/country`, `PATCH /settings/timezone`, `GET /settings/countries/{code}/timezones` |
 | GitHub | `GET /github/connection`, `GET /github/repositories/available`, `GET/POST/DELETE /github/repositories`, `POST /github/repositories/sync-all`, `PATCH/DELETE /github/repositories/{id}` |
-| GitHub | `GET /github/commits`, `POST /github/retrospectives/push` |
+| GitHub | `GET /github/commits` (지정 날짜 / 기본=오늘, public repo only, failed repo 포함), `POST /github/retrospectives/push` |
 
 ## API Contract — Single Source of Truth
 
@@ -149,11 +149,20 @@ src/app/
 - **사용자 타임존**: 사용자별 `users.timezone`(IANA tz) 보유. 모든 기간 계산("오늘", "이번 주" 등)은 이 tz 기준으로 처리한다. 절대 서버 UTC 기준으로 계산하지 않는다. `shared/domain/utils/period.py`의 `today_in_tz(tz)`, `now_in_tz(tz)` 사용.
 - **국가 → tz 매핑**: ISO 3166-1 alpha-2 전 249개국 지원 (`pycountry`). 국가→IANA tz 옵션은 `pytz.country_timezones` (CLDR-derived) 사용. 단일 tz 국가(예: KR, JP, FR)는 `country` 만으로 자동 결정, 다중 tz 국가(예: US, RU, BR)는 IANA `timezone` 명시 필수. 신규 국가/tz 추가는 `pytz`/system tzdata 업데이트로 자동 반영 — 코드 수정 불필요. 국가 입력 핸들러는 `shared/domain/utils/timezone.py`의 `is_supported_country`, `country_timezone_options`, `resolve_timezone` 사용. **`region` 컬럼은 deprecated**: 신규 입력 받지 않음, 기존 DB 컬럼은 호환 위해 유지.
 - **AI 자동 요약 스케줄링**: Celery beat은 매시간 정각 단일 dispatcher(`dispatch_summaries_for_tz`)만 발사. 각 사용자의 현지 1am 도달 시 fan-out. `last_summary_date_local`로 DST 중복 방지. `SUMMARY_JITTER_SECONDS` 환경 변수로 부하 분산 폭 제어 (기본 1800s).
+- **AI 요약 데이터 소스 정책**: 모든 경로(수동/자동)에서 단일 task `worker.generate_summary` 사용. summary_type 별 데이터 소스는 `retrospective/infrastructure/ai/strategies.py` 의 strategy 가 결정한다.
+  - **weekly**  : 그 주의 일일 entry 직접 (`EntriesOnlyStrategy`)
+  - **monthly** : 주 단위 하이브리드 — weekly summary 있으면 사용, 없으면 그 주 entries. weekly 가 있어도 갱신 이후 추가된 entry 가 있으면 자동 첨부 (`MonthlyHybridStrategy`, 방식 B)
+  - **annual**  : 월 단위 2단계 하이브리드 — monthly summary 있으면 사용, 없으면 그 달의 weekly summaries 로 보강 (`AnnualHybridStrategy`). 둘 다 없으면 해당 월 스킵
+  - 공통 골격(T1 mark in_progress / AI 호출 / T2 complete+notify) 은 `worker/tasks/generate_summary.py` 에 단일 구현
+- **AI 요약 생성 사전 점검 (`GET /summaries/readiness`)**: monthly/annual 만 지원. **entry 밀도** 기반으로 측정 (child summary 존재 여부 아님). monthly = 그 달 일수 중 entry 있는 날 수, annual = 12 중 entry 있는 월 수. `completenessRatio < 0.7` 이면 `recommendation: "insufficient"` → FE 가 사용자에게 다이얼로그로 확인 받음. 정책은 `READINESS_THRESHOLD` 상수 (`get_summary_readiness.py`).
 - **Session 보안 정책**: Refresh token = `{sessionId}.{secret}` 형식. 모든 refresh 시 rotation + reuse detection. 폐기된 RT 재등장 시 해당 사용자의 모든 세션 즉시 폐기 + `security` structlog 채널에 `session.refresh_reuse_detected` 로깅. 동시 refresh race 는 `SESSION_GRACE_WINDOW_SECONDS`(기본 5초) grace window 로 흡수 (`session.refresh_grace_hit` 로깅). 세션 정책 본체는 `auth/application/services/session_service.py`. Redis 캐시는 raw CRUD 만 담당 (`auth/infrastructure/cache/auth_token.py`).
 - **운영 파라미터 (TTL/window) env 화**: 모든 시간 기반 파라미터는 `.env` 에서 관리한다. `OAUTH_STATE_TTL_SECONDS`, `ONBOARDING_TOKEN_TTL_SECONDS`, `PASSWORD_RESET_TTL_SECONDS`, `PASSWORD_RESET_COOLDOWN_TTL_SECONDS`, `SESSION_GRACE_WINDOW_SECONDS`. 기본값은 `shared/infrastructure/config/auth.py`의 `AuthConfig`. 라우터의 cookie max-age는 별도 env 가 아니라 `refresh_token_expire_days` / `onboarding_token_ttl_seconds`에서 derive — 항상 Redis TTL과 동기화 보장.
 - **OAuth Link 흐름**: 로그인된 사용자의 provider 계정 link 는 `POST /auth/oauth/{provider}/link/init` (Bearer) 로 시작. 응답의 `authorizeUrl` 을 FE 가 popup 으로 직접 연다. callback URL 은 일반 로그인과 동일 — state 에 저장된 `link_user_id` 로 분기.
 - **OAuth Callback URL**: dev/prod 모두 **FE proxy origin** (예: `http://localhost:5173/api/v1/auth/oauth/{provider}/callback`) 으로 통일. callback HTML 의 `window.opener.postMessage` 가 FE origin 으로 도달해야 origin 검증을 통과한다.
 - **국가 변경 이력**: `user_country_history` 테이블에 (country, region, timezone, source, created_at) 기록. `source`: `registration` / `oauth_onboarding` / `settings_update`. 회원가입 시점 1행 자동 생성. `UpdateCountryUseCase` 는 실제 값이 변경된 경우에만 row 추가.
+- **GitHub commit 조회 (`GET /github/commits`)**: scope 정책상 **public repo only** (`GITHUB scope=public_repo`). 응답은 `{ commits, failedRepositories }` — 단일 repo 실패(404=삭제·private)는 `failedRepositories` 에 reason 과 함께 담겨 사용자에게 노출. Fatal 에러(`AUTH_TOKEN_INVALID`/`RATE_LIMITED`/`API_UNAVAILABLE`) 는 전체 raise. 사용자 GitHub `login` 은 `oauth_connections.provider_login` 에 캐시(lazy backfill) — `/user` API 재호출 없음.
+- **GitHubApiClient**: APP scope 단일 인스턴스 — `httpx.AsyncClient` 멤버 재사용으로 커넥션 풀링. lifespan 종료 시 `close()` 호출 (main.py 의 lifespan 에서 처리).
+- **회고록 GitHub push 상태**: `POST /github/retrospectives/push` 성공 시 `retrospective_pushes` 테이블에 `(user_id, period_type, period_key)` 단위로 upsert. `GET /entries`, `GET /entries/{id}`, `GET /summaries`, `GET /summaries/{id}` 응답의 `githubPush` 필드로 노출. 매핑 헬퍼는 `app.github.domain.utils.period_mapping` — `entry_to_period(entry)` / `summary_to_period(summary)`. `RetroType.YEARLY` 는 push API 의 `annual` 로 정규화.
 
 ## Environment Setup
 

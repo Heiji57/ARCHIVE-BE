@@ -10,3 +10,4 @@ class OAuthConnection(BaseEntity):
     provider: OAuthProvider
     provider_user_id: str
     access_token: str
+    provider_login: str | None = None    # provider 사용자명 캐시 (GitHub `login` 등)

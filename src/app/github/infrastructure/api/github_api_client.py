@@ -18,6 +18,8 @@ _MAX_PAGES = 20  # safety guard — 2000 repos cap
 _COMMITS_PAGE_SIZE = 100
 _COMMITS_MAX_PAGES = 5  # 500 commits per repo per day max
 
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+
 
 @dataclass(frozen=True)
 class GitHubRepoData:
@@ -100,45 +102,53 @@ def _raise_for_status(response: httpx.Response) -> None:
 
 
 class GitHubApiClient:
+    """단일 long-lived httpx.AsyncClient 를 재사용 — 커넥션 풀링.
+
+    APP scope 로 dishka 등록. lifespan 종료 시 `close()` 호출.
+    """
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT)
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
     async def list_user_repositories(self, access_token: str) -> list[GitHubRepoData]:
         results: list[GitHubRepoData] = []
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for page in range(1, _MAX_PAGES + 1):
-                response = await client.get(
-                    f"{_GITHUB_API}/user/repos",
-                    headers=_headers(access_token),
-                    params={
-                        "per_page": _PAGE_SIZE,
-                        "page": page,
-                        "visibility": "public",
-                        "affiliation": "owner,collaborator",
-                        "sort": "full_name",
-                    },
-                )
-                _raise_for_status(response)
-                items = response.json()
-                if not items:
-                    break
-                results.extend(_parse_repo(item) for item in items)
-                if len(items) < _PAGE_SIZE:
-                    break
+        for page in range(1, _MAX_PAGES + 1):
+            response = await self._client.get(
+                f"{_GITHUB_API}/user/repos",
+                headers=_headers(access_token),
+                params={
+                    "per_page": _PAGE_SIZE,
+                    "page": page,
+                    "visibility": "public",
+                    "affiliation": "owner,collaborator",
+                    "sort": "full_name",
+                },
+            )
+            _raise_for_status(response)
+            items = response.json()
+            if not items:
+                break
+            results.extend(_parse_repo(item) for item in items)
+            if len(items) < _PAGE_SIZE:
+                break
         return results
 
     async def get_repository(self, access_token: str, github_repo_id: int) -> GitHubRepoData:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                f"{_GITHUB_API}/repositories/{github_repo_id}",
-                headers=_headers(access_token),
-            )
+        response = await self._client.get(
+            f"{_GITHUB_API}/repositories/{github_repo_id}",
+            headers=_headers(access_token),
+        )
         _raise_for_status(response)
         return _parse_repo(response.json())
 
     async def get_authenticated_user(self, access_token: str) -> GitHubAuthenticatedUser:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                f"{_GITHUB_API}/user",
-                headers=_headers(access_token),
-            )
+        response = await self._client.get(
+            f"{_GITHUB_API}/user",
+            headers=_headers(access_token),
+        )
         _raise_for_status(response)
         data = response.json()
         return GitHubAuthenticatedUser(login=data["login"])
@@ -154,31 +164,30 @@ class GitHubApiClient:
     ) -> list[GitHubCommitData]:
         """List commits in [since, until) — caller must format ISO 8601 UTC strings."""
         results: list[GitHubCommitData] = []
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for page in range(1, _COMMITS_MAX_PAGES + 1):
-                params: dict[str, str | int] = {
-                    "since": since_iso,
-                    "until": until_iso,
-                    "per_page": _COMMITS_PAGE_SIZE,
-                    "page": page,
-                }
-                if author_login:
-                    params["author"] = author_login
-                response = await client.get(
-                    f"{_GITHUB_API}/repos/{owner}/{name}/commits",
-                    headers=_headers(access_token),
-                    params=params,
-                )
-                # 빈 저장소 등으로 409가 올 수 있음 → 정상 처리
-                if response.status_code == 409:
-                    break
-                _raise_for_status(response)
-                items = response.json()
-                if not items:
-                    break
-                results.extend(_parse_commit(item) for item in items)
-                if len(items) < _COMMITS_PAGE_SIZE:
-                    break
+        for page in range(1, _COMMITS_MAX_PAGES + 1):
+            params: dict[str, str | int] = {
+                "since": since_iso,
+                "until": until_iso,
+                "per_page": _COMMITS_PAGE_SIZE,
+                "page": page,
+            }
+            if author_login:
+                params["author"] = author_login
+            response = await self._client.get(
+                f"{_GITHUB_API}/repos/{owner}/{name}/commits",
+                headers=_headers(access_token),
+                params=params,
+            )
+            # 빈 저장소 등으로 409가 올 수 있음 → 정상 처리
+            if response.status_code == 409:
+                break
+            _raise_for_status(response)
+            items = response.json()
+            if not items:
+                break
+            results.extend(_parse_commit(item) for item in items)
+            if len(items) < _COMMITS_PAGE_SIZE:
+                break
         return results
 
     async def get_file_sha(
@@ -190,12 +199,11 @@ class GitHubApiClient:
         branch: str,
     ) -> str | None:
         """Returns sha if file exists, None if 404."""
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                f"{_GITHUB_API}/repos/{owner}/{name}/contents/{path}",
-                headers=_headers(access_token),
-                params={"ref": branch},
-            )
+        response = await self._client.get(
+            f"{_GITHUB_API}/repos/{owner}/{name}/contents/{path}",
+            headers=_headers(access_token),
+            params={"ref": branch},
+        )
         if response.status_code == 404:
             return None
         if response.status_code == 401:
@@ -224,12 +232,11 @@ class GitHubApiClient:
         if sha:
             body["sha"] = sha
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.put(
-                f"{_GITHUB_API}/repos/{owner}/{name}/contents/{path}",
-                headers=_headers(access_token),
-                json=body,
-            )
+        response = await self._client.put(
+            f"{_GITHUB_API}/repos/{owner}/{name}/contents/{path}",
+            headers=_headers(access_token),
+            json=body,
+        )
 
         if response.status_code == 401:
             raise GitHubTokenInvalidException()

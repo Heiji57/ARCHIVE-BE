@@ -3,7 +3,11 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.github.application.use_cases.get_connection_status import ConnectionStatus
-from app.github.application.use_cases.get_today_commits import TodayCommit
+from app.github.application.use_cases.get_commits_by_date import (
+    CommitItem,
+    CommitsByDateResult,
+    FailedRepository,
+)
 from app.github.application.use_cases.push_retrospective import PushOutcome
 from app.github.domain.models.github_repository import GitHubRepository
 from app.github.infrastructure.api.github_api_client import GitHubRepoData
@@ -95,7 +99,7 @@ class CommitResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
     @classmethod
-    def from_commit(cls, c: TodayCommit) -> "CommitResponse":
+    def from_commit(cls, c: CommitItem) -> "CommitResponse":
         return cls(
             repository_id=c.repository_id,
             full_name=c.full_name,
@@ -104,6 +108,40 @@ class CommitResponse(BaseModel):
             html_url=c.html_url,
             author=c.author,
             committed_at=c.committed_at,
+        )
+
+
+class FailedRepositoryResponse(BaseModel):
+    repository_id: str = Field(serialization_alias="repositoryId")
+    full_name: str = Field(serialization_alias="fullName")
+    reason: str  # 'not_found' | 'unknown'
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_entity(cls, f: FailedRepository) -> "FailedRepositoryResponse":
+        return cls(
+            repository_id=f.repository_id,
+            full_name=f.full_name,
+            reason=f.reason,
+        )
+
+
+class CommitListResponse(BaseModel):
+    commits: list[CommitResponse]
+    failed_repositories: list[FailedRepositoryResponse] = Field(
+        serialization_alias="failedRepositories"
+    )
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_result(cls, r: CommitsByDateResult) -> "CommitListResponse":
+        return cls(
+            commits=[CommitResponse.from_commit(c) for c in r.commits],
+            failed_repositories=[
+                FailedRepositoryResponse.from_entity(f) for f in r.failed_repositories
+            ],
         )
 
 

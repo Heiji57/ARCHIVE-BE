@@ -61,7 +61,7 @@
 | 비동기 워커 | Celery 5 |
 | IoC Container | dishka |
 | 인증 | python-jose (JWT), pwdlib[argon2] |
-| AI | anthropic, openai |
+| AI | gemini
 | 외부 API | httpx (GitHub API, OAuth — async only) |
 | 설정 관리 | pydantic-settings |
 | 코드 품질 | ruff (lint + format), mypy (타입 체크) |
@@ -1362,6 +1362,95 @@ Redis 키 형식: `auth:onboarding:{token} → JSON {provider, provider_user_id,
 
 AI 자동 요약은 **사용자 tz 기준 새벽 1시** 에 트리거.
 
+### GitHub commits 조회 (`GET /github/commits`)
+
+회고 작성 화면이 사용자의 그 날 commit 을 끌어다 보여주는 핵심 경로.
+
+#### 흐름 (`GetCommitsByDateUseCase`)
+```
+1. user 조회 → user.timezone 추출
+2. target_date 결정 (없으면 user tz 기준 오늘)
+3. 사용자 tz 의 [00:00, 24:00) → UTC ISO 변환 (since/until)
+4. GitHub credentials 획득 (access_token + login)
+   - oauth_connections.provider_login 캐시 우선
+   - 없으면 /user 한 번 호출 → DB backfill (lazy)
+5. commit_read_enabled=true 저장소 N개 → asyncio.gather 로 병렬 list_commits
+6. 결과 분류:
+   - 성공: commits 누적
+   - GitHubRepositoryNotFoundException: failedRepositories[reason="not_found"]
+   - 기타 예외: failedRepositories[reason="unknown"] + structlog warning
+   - GitHubTokenInvalid / RateLimited / ApiUnavailable: 전체 raise (한 repo 만 발생해도)
+7. commits 시간 내림차순 정렬 → CommitsByDateResult 반환
+```
+
+#### 정책 결정
+- **public repo only**: OAuth scope 가 `user:email,public_repo` 라 private repo 는 link 자체가 안 됨. 어쩌다 등록돼도 404 → `failedRepositories` 로 사용자에게 노출.
+- **silent skip 금지**: 옛 구현은 단일 repo 실패를 조용히 무시했으나, 신정책은 응답에 `failedRepositories` 로 노출하고 백엔드에도 `github.commits.*` 채널로 warning 로깅.
+- **fatal vs per-repo 구분**: 토큰/제한/외부 가용성 문제는 사용자 전체 흐름 차단(전체 raise) 이 더 유익. 저장소 단위 문제는 다른 결과 보존.
+- **login 캐싱**: `oauth_connections.provider_login` (migration 012) 에 GitHub `login` 저장. callback/link/onboarding 시 자동 저장. 구 데이터는 첫 commits 호출 시 lazy backfill.
+
+#### 빈 access_token 처리 (P3 — OAuth 신규 사용자)
+OAuth 온보딩 직후 사용자는 `oauth_connections.access_token=""` 상태일 수 있다. `_token.py:get_github_access_token` 이 빈 토큰을 `None` 과 동등하게 취급 → `GITHUB_CONNECTION_NOT_FOUND` (400). FE 는 "GitHub 다시 연결" 안내 후 `POST /auth/oauth/github/link/init` 흐름으로 유도.
+
+### GitHubApiClient — httpx 풀링
+
+`GitHubApiClient` 는 APP scope 단일 인스턴스로 `httpx.AsyncClient` 를 멤버 보유. 메서드마다 `async with httpx.AsyncClient()` 를 새로 만들지 않아 커넥션 풀 재사용. 종료 시 `main.py` 의 lifespan 에서 `await api_client.close()` 호출.
+
+### 회고록 GitHub push 상태 (retrospective_pushes)
+
+`POST /github/retrospectives/push` 성공 시 백엔드가 push 레코드를 영속화. 이후 `GET /entries(/{id})`, `GET /summaries(/{id})` 응답에 `githubPush` 필드로 노출.
+
+#### 데이터 모델
+```
+retrospective_pushes
+├ id                     (rp_*)
+├ user_id                FK users(id) ON DELETE CASCADE
+├ period_type            VARCHAR(16)   -- 'daily' | 'weekly' | 'monthly' | 'annual'
+├ period_key             VARCHAR(32)   -- 'YYYY-MM-DD' | 'YYYY-MM-WN' | 'YYYY-MM' | 'YYYY'
+├ repository_id          TEXT          -- 백엔드 github_repositories.id
+├ repository_full_name   VARCHAR(255)  -- denormalized (repo unlink 후에도 표시)
+├ path                   VARCHAR(512)
+├ commit_sha             VARCHAR(64)
+├ html_url               TEXT
+├ pushed_at              TIMESTAMPTZ
+├ created_at / updated_at
+└ UNIQUE (user_id, period_type, period_key)
+```
+인덱스: `ix_retro_pushes_user_pushed_at (user_id, pushed_at)` — 향후 "내 push 이력" 화면용.
+
+#### 키 단위는 period — entity 가 아님 (의도된 모델)
+GitHub 측 파일은 `{period_folder}/{period_key}.md` 단일이므로, push 상태도 1:1로 (user, period_type, period_key) 단위로만 의미가 있다. 같은 주에 JournalEntry(weekly) 와 RetroSummary(weekly) 가 함께 있으면 **둘 다 같은 push 레코드를 가리킨다** — 이는 거짓이 아니라 진실(파일이 하나) 의 반영.
+
+#### 매핑 헬퍼 — `app.github.domain.utils.period_mapping`
+```python
+entry_to_period(entry) -> (period_type, period_key)
+summary_to_period(summary) -> (period_type, period_key)
+```
+- `RetroType.YEARLY` → `'annual'` 로 정규화 (push API 명명과 일치).
+- weekly 는 `shared.domain.utils.period.week_of_month` 사용 (majority-day 방식).
+
+#### Enrich 흐름 (라우터)
+```
+1. use_case.execute(...) → entries / summaries
+2. keys = [entry_to_period(e) for e in entries]
+3. pushes = push_repo.find_many(user_id, keys)   # 한 번의 batch SELECT
+4. push_map = {(p.period_type, p.period_key): p for p in pushes}
+5. responses 빌드 시 push_map.get((pt, pk)) 주입
+```
+N+1 없음 — 항상 한 번의 batch query.
+
+#### `githubPush` 응답 필드
+```json
+{
+  "pushedAt": "...",
+  "commitSha": "...",
+  "htmlUrl": "...",
+  "path": "daily/2026-06-08.md",
+  "repositoryFullName": "owner/archive"
+}
+```
+미푸시면 `null`.
+
 ---
 
 ## 19. Celery Worker
@@ -1440,6 +1529,38 @@ celery_app.conf.beat_schedule = {
 **기간 계산**:
 - 주차 산정은 majority-day 방식 (월~일 7일 중 더 많은 날이 속한 달의 주차)
 - `shared/domain/utils/period.py`의 `weeks_owned_by_month`, `week_of_month` 사용
+
+### Summary 생성 task — 단일 task + Strategy 패턴
+
+수동(`RequestSummaryUseCase`) / 자동(`dispatch_summaries_for_tz_task`) **모든 경로가 동일한 task** `worker.generate_summary` 를 호출한다. summary_type 별 데이터 소스 선택은 `retrospective/infrastructure/ai/strategies.py` 의 strategy 가 결정 — task 본체는 공통 골격(mark in_progress → AI 호출 → complete + notify, 실패 시 fail + notify) 만 담는다.
+
+**Strategy 매트릭스** (`strategies.get_strategy(summary_type)`):
+
+| summary_type | Strategy | 데이터 소스 |
+|---|---|---|
+| `weekly`  | `EntriesOnlyStrategy`   | 그 주의 일일 entry 전부 |
+| `monthly` | `MonthlyHybridStrategy` | 주마다: weekly summary 있으면 그것, 없으면 entries. weekly 가 있어도 갱신 이후 추가된 entry 가 있으면 자동 첨부 (방식 B) — 데이터 손실 0 |
+| `annual`  | `AnnualHybridStrategy`  | 월마다: monthly summary 있으면 그것, 없으면 그 달의 weekly summaries 로 보강. 둘 다 없으면 해당 월 스킵 |
+
+자동 dispatcher 의 chain 구조는 weekly → monthly → annual 순서로 enqueue 되므로, 하위 단계 결과가 상위 단계에서 자동 활용된다.
+
+### Summary 생성 사전 점검 — `GET /summaries/readiness`
+
+monthly/annual 생성 직전에 FE 가 호출하는 사전 점검 API. **child summary 존재 여부가 아닌 entry 밀도** 기반.
+
+| summary_type | expected | covered |
+|---|---|---|
+| monthly | 그 달의 일수 (28~31) | entry 가 있는 unique 날짜 수 |
+| annual  | 12                  | entry 가 있는 월 수 |
+
+`completenessRatio = covered / expected`. `< 0.7` 이면 `recommendation: "insufficient"` 반환 → FE 가 "데이터 부족, 그대로 진행?" 다이얼로그 띄움. 임계값은 `READINESS_THRESHOLD` 상수 (`get_summary_readiness.py`). weekly 호출은 `422 RETRO_SUMMARY_READINESS_UNSUPPORTED` 반환.
+
+### 배포 순서 — worker → web
+
+`worker.generate_summary` task 시그니처가 변경되거나 strategy 가 추가될 때는 항상 **worker 컨테이너를 먼저 배포한 뒤 web 컨테이너를 배포**한다.
+
+- 반대 순서로 배포하면 web 이 신규 인자/strategy 로 task 를 enqueue 하지만 구 worker 가 그것을 처리하지 못해 실패.
+- 진행 중 task 가 있을 수 있으니 worker 종료 전에 graceful shutdown (`celery worker --time-limit`) 활용.
 
 ---
 

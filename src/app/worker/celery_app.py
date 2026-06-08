@@ -11,7 +11,6 @@ _QUEUES = (
 
 _TASK_ROUTES = {
     "worker.generate_summary": {"queue": "ai_tasks"},
-    "worker.generate_from_child_summaries": {"queue": "ai_tasks"},
     "worker.dispatch_summaries_for_tz": {"queue": "default"},
 }
 
@@ -43,7 +42,6 @@ def create_celery_app() -> Celery:
     )
     app.autodiscover_tasks([
         "app.worker.tasks.generate_summary",
-        "app.worker.tasks.generate_from_child_summaries",
         "app.worker.tasks.dispatch_summaries_for_tz",
     ])
     return app

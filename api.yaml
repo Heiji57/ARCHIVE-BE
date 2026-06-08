@@ -806,6 +806,19 @@ paths:
         - COMPLETED 요약이 있으면 그대로 반환 (재실행하지 않음)
         - FAILED 요약은 자동으로 PENDING 리셋 후 재실행
         - Gemini 호출은 rate_limit `60/min` 적용
+
+        ### 데이터 소스 정책 (수동·자동 동일)
+        - **weekly** : 그 주의 일일 회고(JournalEntry) 직접 사용
+        - **monthly**: **하이브리드** — 주마다 weekly 요약 있으면 그것 사용,
+          없으면 그 주 entries 첨부. weekly 요약이 있더라도 갱신 이후 추가된 entry 가
+          있으면 보강(방식 B) — 데이터 손실 0.
+        - **annual** : **2단계 하이브리드** — 월마다 monthly 요약 있으면 그것,
+          없으면 그 달의 weekly 요약들로 보강. 둘 다 없으면 해당 월 스킵.
+
+        ### 사전 점검 권장
+        monthly/annual 생성 전에 `GET /summaries/readiness` 호출 권장 — 데이터가
+        부족(`recommendation: insufficient`)하면 사용자에게 다이얼로그를 띄워
+        확인 받기.
       parameters:
         - in: query
           name: type
@@ -830,6 +843,51 @@ paths:
       x-error-codes:
         - RETRO_SUMMARY_ALREADY_IN_PROGRESS
         - RETRO_SUMMARY_INVALID_STATE
+
+  /summaries/readiness:
+    get:
+      tags: [summaries]
+      summary: 요약 생성 사전 점검 (entry 밀도 기반)
+      description: |
+        monthly/annual 요약을 생성하기 전에 사용자의 회고 **원천 데이터 밀도**를
+        측정해 FE 가 "데이터 부족" 다이얼로그를 띄울지 결정하게 한다.
+
+        - **측정 지표**: child summary 존재 여부 아님 — **entry 밀도** 기반
+          - monthly: `expectedUnits` = 그 달의 일수, `coveredUnits` = entry 가 있는 unique 날짜 수
+          - annual : `expectedUnits` = 12, `coveredUnits` = entry 가 있는 월 수
+        - **임계값**: `completenessRatio < 0.7` 이면 `recommendation: "insufficient"`,
+          이상이면 `"ok"`.
+        - **weekly 는 지원 안 함** — 호출 시 `422 RETRO_SUMMARY_READINESS_UNSUPPORTED`
+
+        ### 권장 FE 흐름
+        1. 사용자가 [회고 생성] 클릭 → 이 API 호출
+        2. `recommendation == "insufficient"` → 다이얼로그 띄우기
+           ("entry 가 X일/30일 작성됨. 그대로 진행하시겠습니까?")
+        3. 사용자가 "진행" → `POST /summaries/generate`
+      parameters:
+        - in: query
+          name: type
+          required: true
+          schema:
+            type: string
+            enum: [monthly, annual]
+          description: weekly 는 422 반환.
+        - in: query
+          name: periodStart
+          schema: { type: string, format: date }
+          description: 생략 시 직전 기간(지난 달 / 작년).
+      responses:
+        '200':
+          description: 점검 성공
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiResponseSummaryReadiness' }
+        '401':
+          $ref: '#/components/responses/Unauthorized_401'
+        '422':
+          $ref: '#/components/responses/ValidationError_422'
+      x-error-codes:
+        - RETRO_SUMMARY_READINESS_UNSUPPORTED
 
   /summaries:
     get:
@@ -1356,15 +1414,36 @@ paths:
   /github/commits:
     get:
       tags: [github]
-      summary: 오늘(또는 특정 날짜)의 커밋 모음
+      summary: 지정 날짜(기본=오늘)의 커밋 모음
       description: |
-        사용자의 `commitReadEnabled=true` 저장소들에서 지정 날짜의 커밋을 모아 시간 내림차순으로 반환한다.
+        사용자의 `commitReadEnabled=true` 저장소들에서 지정 날짜의 커밋을 모아
+        시간 내림차순으로 반환한다.
 
+        ### 규칙
         - **타임존**: 항상 `user.timezone` 기준. 별도 `tz` 쿼리 파라미터를 받지 않는다.
-        - **author 필터**: 사용자 본인의 GitHub 계정(login) 커밋만 (`/user` API로 자동 조회)
+        - **author 필터**: 사용자 본인의 GitHub 계정(`login`) 커밋만. 첫 호출 시 `/user`
+          API 로 한 번 조회 후 `oauth_connections.provider_login` 에 캐시 (lazy backfill).
+          이후 호출은 캐시 사용 — 별도 API 호출 없음.
         - **`date` 생략 시**: `user.timezone` 기준 오늘
-        - **범위**: `[date 00:00, date+1 00:00)` 사용자 tz → UTC 변환 후 GitHub API `since`/`until`
-        - **단일 저장소 실패**: rate limit·서버오류 외 오류는 해당 저장소만 skip, 나머지 결과 반환
+        - **범위**: `[date 00:00, date+1 00:00)` 사용자 tz → UTC 변환 후 `since`/`until`
+        - **scope 정책**: GitHub OAuth scope 가 `public_repo` 만 요청되므로 **public repo
+          만 지원**. private repo 는 `repositories/available` 목록에 나오지 않으며,
+          어떻게든 등록되어도 GitHub 가 404 → `failedRepositories` 에 포함.
+
+        ### 에러 분류
+        | 상황 | 동작 |
+        |---|---|
+        | GitHub 미연결 / 빈 토큰 | `GITHUB_CONNECTION_NOT_FOUND` (전체 400) |
+        | OAuth 토큰 만료/폐기 | `GITHUB_TOKEN_INVALID` (전체 401) |
+        | Rate limit | `GITHUB_RATE_LIMITED` (전체 429) |
+        | GitHub 5xx | `GITHUB_API_UNAVAILABLE` (전체 503) |
+        | 단일 저장소 404 (삭제/private+scope부족) | 해당 repo 만 skip → `failedRepositories[reason="not_found"]` |
+        | 단일 저장소 기타 예외 | 해당 repo 만 skip → `failedRepositories[reason="unknown"]`. 백엔드 logger 에 warning |
+
+        ### 응답
+        - `commits`: 시간 내림차순. 비어 있어도 200.
+        - `failedRepositories`: 부분 실패한 저장소 목록. FE 는 사용자에게 "X개 repo 에서
+          커밋을 가져오지 못함" 식으로 표시 권장.
       parameters:
         - in: query
           name: date
@@ -1419,6 +1498,10 @@ paths:
         - GitHub commit history가 자체 버전 관리 역할 — 덮어써도 이력 유지
         - 푸시 브랜치는 저장소의 `defaultBranch` 사용
         - 커밋 메시지는 사용자 locale로 자동 생성 (prefix `docs(retro):` 영문 고정)
+        - 성공 시 백엔드가 `retrospective_pushes` 테이블에 (user_id, period_type, period_key)
+          단위로 push 레코드를 upsert. 이후 `GET /entries`, `GET /entries/{id}`,
+          `GET /summaries`, `GET /summaries/{id}` 응답에 `githubPush` 필드로 노출됨.
+        - `periodType` 'YEARLY' (entry 측 표기) 가 들어오면 BE 가 'annual' 로 정규화해 저장.
       requestBody:
         required: true
         content:
@@ -1613,6 +1696,7 @@ components:
           - `AUTH_COUNTRY_INVALID` — ISO 3166-1 미등록 국가, 또는 tz 데이터 없는 국가
           - `AUTH_COUNTRY_TIMEZONE_REQUIRED` — 다중 tz 국가에서 timezone 누락
           - `AUTH_TIMEZONE_INVALID` — IANA 형식 아니거나 해당 국가의 옵션 밖
+          - `RETRO_SUMMARY_READINESS_UNSUPPORTED` — readiness 점검은 monthly/annual 만 지원, weekly 는 거부
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -2014,6 +2098,22 @@ components:
     EntryUpsertRequest:
       $ref: '#/components/schemas/EntryCreateRequest'
 
+    GithubPushResponse:
+      type: object
+      required: [pushedAt, commitSha, htmlUrl, path, repositoryFullName]
+      description: |
+        해당 회고록이 GitHub 에 push 되어 있다는 신호. push 단위는 (period_type, period_key)
+        — 같은 period 에 entry/summary 가 같이 있으면 둘 다 동일한 push 레코드를 가리킨다.
+        (GitHub 측 파일이 단일이므로 의도된 동작.)
+      properties:
+        pushedAt:           { type: string, format: date-time }
+        commitSha:          { type: string }
+        htmlUrl:            { type: string, format: uri }
+        path:
+          type: string
+          description: 저장소 내 파일 경로 (예 'daily/2026-06-08.md')
+        repositoryFullName: { type: string, example: 'owner/archive' }
+
     EntryResponse:
       type: object
       required: [id, user_id, date_key, title, content, retro_type, created_at]
@@ -2024,6 +2124,11 @@ components:
         title:      { type: string }
         content:    { type: string }
         retro_type: { $ref: '#/components/schemas/RetroType' }
+        githubPush:
+          allOf:
+            - $ref: '#/components/schemas/GithubPushResponse'
+          nullable: true
+          description: 해당 (retro_type, date_key) 기반 period 에 push 된 적이 없으면 null
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time, nullable: true }
 
@@ -2065,6 +2170,11 @@ components:
         content:
           $ref: '#/components/schemas/SummaryContentResponse'
           nullable: true
+        githubPush:
+          allOf:
+            - $ref: '#/components/schemas/GithubPushResponse'
+          nullable: true
+          description: 해당 summary 의 (summary_type, period_start) 기반 period 에 push 된 적이 없으면 null
         created_at:   { type: string, format: date-time }
         updated_at:   { type: string, format: date-time, nullable: true }
 
@@ -2083,6 +2193,50 @@ components:
             data:
               type: array
               items: { $ref: '#/components/schemas/SummaryResponse' }
+
+    SummaryReadinessResponse:
+      type: object
+      required:
+        - summaryType
+        - periodStart
+        - periodEnd
+        - expectedUnits
+        - coveredUnits
+        - entryCount
+        - completenessRatio
+        - recommendation
+      properties:
+        summaryType:
+          type: string
+          enum: [monthly, annual]
+        periodStart:        { type: string, format: date }
+        periodEnd:          { type: string, format: date }
+        expectedUnits:
+          type: integer
+          description: monthly = 그 달의 일수, annual = 12
+        coveredUnits:
+          type: integer
+          description: monthly = entry 있는 unique 날짜 수, annual = entry 있는 월 수
+        entryCount:
+          type: integer
+          description: 기간 내 총 entry 수 (참고용, 임계값에 직접 영향 없음)
+        completenessRatio:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: coveredUnits / expectedUnits, 소수 4자리 반올림
+        recommendation:
+          type: string
+          enum: [ok, insufficient]
+          description: completenessRatio >= 0.7 이면 ok, 미만이면 insufficient
+
+    ApiResponseSummaryReadiness:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/SummaryReadinessResponse' }
 
     # ── Notification ───────────────────────────────────────────────────────
     NotificationResponse:
@@ -2281,14 +2435,36 @@ components:
         author:       { type: string, description: 작성자 GitHub login }
         committedAt:  { type: string, format: date-time }
 
+    FailedRepositoryResponse:
+      type: object
+      required: [repositoryId, fullName, reason]
+      properties:
+        repositoryId: { type: string, description: 백엔드 저장소 연결 ID }
+        fullName:     { type: string, example: octocat/Hello-World }
+        reason:
+          type: string
+          enum: [not_found, unknown]
+          description: |
+            - `not_found`: GitHub 가 404 응답. 저장소 삭제, 또는 private+scope 부족.
+            - `unknown`: 예기치 못한 예외. 백엔드 logger 의 `github.commits.unknown_error` 참조.
+
+    CommitListResponse:
+      type: object
+      required: [commits, failedRepositories]
+      properties:
+        commits:
+          type: array
+          items: { $ref: '#/components/schemas/CommitResponse' }
+        failedRepositories:
+          type: array
+          items: { $ref: '#/components/schemas/FailedRepositoryResponse' }
+
     ApiResponseCommitList:
       allOf:
         - $ref: '#/components/schemas/ApiResponseEmpty'
         - type: object
           properties:
-            data:
-              type: array
-              items: { $ref: '#/components/schemas/CommitResponse' }
+            data: { $ref: '#/components/schemas/CommitListResponse' }
 
     # ── GitHub Retrospective Push ──────────────────────────────────────────
     PushRetrospectiveRequest:

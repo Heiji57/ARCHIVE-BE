@@ -19,3 +19,7 @@ class SummaryAlreadyInProgressException(BaseAppException):
 
 class SummaryInvalidStateException(BaseAppException):
     code = "RETRO_SUMMARY_INVALID_STATE"
+
+
+class SummaryReadinessUnsupportedException(BaseAppException):
+    code = "RETRO_SUMMARY_READINESS_UNSUPPORTED"

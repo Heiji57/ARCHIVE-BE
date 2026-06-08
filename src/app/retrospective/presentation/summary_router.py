@@ -5,12 +5,23 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, Query, status
 from sse_starlette.sse import EventSourceResponse
 
+from app.github.domain.repositories.retrospective_push_repository import (
+    IRetrospectivePushRepository,
+)
+from app.github.domain.utils.period_mapping import summary_to_period
 from app.retrospective.application.dtos.summary_commands import RequestSummaryCommand
+from app.retrospective.application.dtos.summary_queries import SummaryReadinessQuery
 from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
 from app.retrospective.application.use_cases.get_summary import GetSummaryUseCase
+from app.retrospective.application.use_cases.get_summary_readiness import (
+    GetSummaryReadinessUseCase,
+)
 from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
 from app.retrospective.domain.models.value_objects import SummaryStatus, SummaryType
-from app.retrospective.presentation.responses.summary_responses import SummaryResponse
+from app.retrospective.presentation.responses.summary_responses import (
+    SummaryReadinessResponse,
+    SummaryResponse,
+)
 from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import get_current_user
@@ -50,12 +61,39 @@ async def generate_summary(
 
 
 @router.get(
+    "/readiness",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[SummaryReadinessResponse],
+)
+async def get_summary_readiness(
+    use_case: FromDishka[GetSummaryReadinessUseCase],
+    current_user: UserContext = Depends(get_current_user),
+    summary_type: str = Query(alias="type"),
+    period_start: str | None = Query(default=None, alias="periodStart"),
+) -> ApiResponse[SummaryReadinessResponse]:
+    parsed_start = None
+    if period_start:
+        from datetime import date
+        parsed_start = date.fromisoformat(period_start)
+
+    readiness = await use_case.execute(
+        SummaryReadinessQuery(
+            user_id=current_user.id,
+            summary_type=SummaryType(summary_type),
+            period_start=parsed_start,
+        )
+    )
+    return ApiResponse.ok(SummaryReadinessResponse.from_entity(readiness))
+
+
+@router.get(
     "",
     status_code=status.HTTP_200_OK,
     response_model=ApiResponse[list[SummaryResponse]],
 )
 async def get_summaries(
     use_case: FromDishka[GetSummariesUseCase],
+    push_repo: FromDishka[IRetrospectivePushRepository],
     current_user: UserContext = Depends(get_current_user),
     summary_type: str = Query(alias="type"),
 ) -> ApiResponse[list[SummaryResponse]]:
@@ -63,7 +101,13 @@ async def get_summaries(
         user_id=current_user.id,
         summary_type=SummaryType(summary_type),
     )
-    return ApiResponse.ok([SummaryResponse.from_entity(s) for s in summaries])
+    keys = [summary_to_period(s) for s in summaries]
+    pushes = await push_repo.find_many(current_user.id, keys)
+    push_map = {(p.period_type, p.period_key): p for p in pushes}
+    return ApiResponse.ok([
+        SummaryResponse.from_entity(s, push_map.get(summary_to_period(s)))
+        for s in summaries
+    ])
 
 
 @router.get(
@@ -74,10 +118,13 @@ async def get_summaries(
 async def get_summary(
     summary_id: str,
     use_case: FromDishka[GetSummaryUseCase],
+    push_repo: FromDishka[IRetrospectivePushRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[SummaryResponse]:
     summary = await use_case.execute(summary_id, current_user.id)
-    return ApiResponse.ok(SummaryResponse.from_entity(summary))
+    period_type, period_key = summary_to_period(summary)
+    push = await push_repo.find_by_period(current_user.id, period_type, period_key)
+    return ApiResponse.ok(SummaryResponse.from_entity(summary, push))
 
 
 @router.get("/{summary_id}/stream")

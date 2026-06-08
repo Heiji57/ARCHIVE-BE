@@ -24,6 +24,14 @@ from app.shared.infrastructure.container.providers import AppProvider, RequestPr
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
+    # dishka 가 만든 APP-scope 인스턴스 중 명시적으로 close 가 필요한 것들 정리.
+    # GitHubApiClient 는 httpx.AsyncClient 를 멤버로 유지하므로 lifespan 종료 시 닫는다.
+    try:
+        from app.github.infrastructure.api.github_api_client import GitHubApiClient
+        api_client: GitHubApiClient = await app.state.dishka_container.get(GitHubApiClient)
+        await api_client.close()
+    except Exception:
+        pass
     # dishka가 app.state.dishka_container에 컨테이너를 저장함
     await app.state.dishka_container.close()
 

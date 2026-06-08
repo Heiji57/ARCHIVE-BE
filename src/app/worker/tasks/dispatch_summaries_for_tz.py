@@ -100,10 +100,19 @@ async def _build_chain_for_user(
     schedule_type: str,
     local_today: date,
 ) -> list:
-    from app.worker.tasks.generate_from_child_summaries import (
-        generate_from_child_summaries_task,
-    )
+    """모든 summary 단계가 동일한 `generate_summary_task` 사용.
+
+    데이터 소스 정책은 task 내부 strategy 에서 결정 (weekly=entries,
+    monthly=hybrid, annual=hybrid). 따라서 dispatcher 는 fan-out 만 담당.
+    """
     from app.worker.tasks.generate_summary import generate_summary_task
+
+    def _enqueue(summary, *, notify: bool):
+        tasks.append(
+            generate_summary_task.si(
+                summary.id, user_id, send_notification=notify
+            ).set(queue="ai_tasks", priority=2)
+        )
 
     tasks: list = []
 
@@ -115,11 +124,7 @@ async def _build_chain_for_user(
                     summary_repo, user_id, SummaryType.WEEKLY, w_start, w_end
                 )
                 if week_summary:
-                    tasks.append(
-                        generate_summary_task.si(
-                            week_summary.id, user_id, send_notification=False
-                        ).set(queue="ai_tasks", priority=2)
-                    )
+                    _enqueue(week_summary, notify=False)
             month_summary = await _get_or_create_summary(
                 summary_repo,
                 user_id,
@@ -128,11 +133,7 @@ async def _build_chain_for_user(
                 _month_end(m_start),
             )
             if month_summary:
-                tasks.append(
-                    generate_from_child_summaries_task.si(
-                        month_summary.id, user_id, send_notification=False
-                    ).set(queue="ai_tasks", priority=2)
-                )
+                _enqueue(month_summary, notify=False)
         annual_summary = await _get_or_create_summary(
             summary_repo,
             user_id,
@@ -141,11 +142,7 @@ async def _build_chain_for_user(
             date(year, 12, 31),
         )
         if annual_summary:
-            tasks.append(
-                generate_from_child_summaries_task.si(
-                    annual_summary.id, user_id, send_notification=True
-                ).set(queue="ai_tasks", priority=2)
-            )
+            _enqueue(annual_summary, notify=True)
 
     elif schedule_type == "monthly":
         last_month_last_day = local_today - timedelta(days=1)
@@ -156,20 +153,12 @@ async def _build_chain_for_user(
                 summary_repo, user_id, SummaryType.WEEKLY, w_start, w_end
             )
             if week_summary:
-                tasks.append(
-                    generate_summary_task.si(
-                        week_summary.id, user_id, send_notification=False
-                    ).set(queue="ai_tasks", priority=2)
-                )
+                _enqueue(week_summary, notify=False)
         month_summary = await _get_or_create_summary(
             summary_repo, user_id, SummaryType.MONTHLY, m_start, m_end
         )
         if month_summary:
-            tasks.append(
-                generate_from_child_summaries_task.si(
-                    month_summary.id, user_id, send_notification=True
-                ).set(queue="ai_tasks", priority=2)
-            )
+            _enqueue(month_summary, notify=True)
 
     elif schedule_type == "weekly":
         last_sunday = local_today - timedelta(days=1)
@@ -178,11 +167,7 @@ async def _build_chain_for_user(
             summary_repo, user_id, SummaryType.WEEKLY, last_monday, last_sunday
         )
         if week_summary:
-            tasks.append(
-                generate_summary_task.si(
-                    week_summary.id, user_id, send_notification=True
-                ).set(queue="ai_tasks", priority=2)
-            )
+            _enqueue(week_summary, notify=True)
 
     return tasks
 

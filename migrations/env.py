@@ -14,6 +14,8 @@ import app.todo.infrastructure.persistence.models.todo_model  # noqa: F401
 import app.retrospective.infrastructure.persistence.models.journal_entry_model  # noqa: F401
 import app.retrospective.infrastructure.persistence.models.retro_summary_model  # noqa: F401
 import app.notification.infrastructure.persistence.models.notification_model  # noqa: F401
+import app.github.infrastructure.persistence.models.github_repository_model  # noqa: F401
+import app.github.infrastructure.persistence.models.retrospective_push_model  # noqa: F401
 
 config = context.config
 

@@ -80,6 +80,8 @@ class HandleOAuthCallbackUseCase:
 
         if existing_connection:
             existing_connection.access_token = provider_token
+            if user_info.login:
+                existing_connection.provider_login = user_info.login
             existing_connection.updated_at = now
             await self._oauth_connection_repo.save(existing_connection)
             user = await self._user_repo.find_by_id(existing_connection.user_id)
@@ -95,6 +97,7 @@ class HandleOAuthCallbackUseCase:
                 provider=provider,
                 provider_user_id=user_info.provider_user_id,
                 access_token=provider_token,
+                provider_login=user_info.login,
                 created_at=now,
             )
             await self._oauth_connection_repo.save(connection)
@@ -137,6 +140,8 @@ class HandleOAuthCallbackUseCase:
             # 동일 provider_user_id면 token만 갱신 (멱등)
             if same_provider_existing.provider_user_id == user_info.provider_user_id:
                 same_provider_existing.access_token = provider_token
+                if user_info.login:
+                    same_provider_existing.provider_login = user_info.login
                 same_provider_existing.updated_at = now
                 await self._oauth_connection_repo.save(same_provider_existing)
                 return OAuthCallbackResult(
@@ -155,6 +160,7 @@ class HandleOAuthCallbackUseCase:
             provider=provider,
             provider_user_id=user_info.provider_user_id,
             access_token=provider_token,
+            provider_login=user_info.login,
             created_at=now,
         )
         await self._oauth_connection_repo.save(connection)

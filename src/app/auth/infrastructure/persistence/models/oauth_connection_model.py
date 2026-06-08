@@ -17,5 +17,6 @@ class OAuthConnectionModel(Base):
     provider: Mapped[str] = mapped_column(String(20), nullable=False)
     provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_login: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

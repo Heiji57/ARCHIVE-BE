@@ -5,6 +5,7 @@
 """
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.github.application.dtos.commands import PushRetrospectiveCommand
@@ -13,13 +14,18 @@ from app.github.domain.exceptions.exceptions import (
     GitHubPushTargetNotSetException,
     GitHubRepositoryNotLinkedException,
 )
+from app.github.domain.models.retrospective_push import RetrospectivePush
 from app.github.domain.repositories.repository import IGitHubRepositoryRepository
+from app.github.domain.repositories.retrospective_push_repository import (
+    IRetrospectivePushRepository,
+)
 from app.github.infrastructure.api.github_api_client import (
     GitHubApiClient,
     GitHubPushResult,
 )
 from app.github.infrastructure.i18n.path_labels import get_labels
 from app.settings.domain.repositories.repository import IUserSettingsRepository
+from app.shared.domain.utils.id import generate_id
 
 _DAILY_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _WEEKLY_RE = re.compile(r"^(\d{4})-(\d{2})-W([1-6])$")
@@ -99,11 +105,13 @@ class PushRetrospectiveUseCase:
         oauth_repo: IOAuthConnectionRepository,
         repo: IGitHubRepositoryRepository,
         api_client: GitHubApiClient,
+        push_repo: IRetrospectivePushRepository,
     ) -> None:
         self._settings_repo = settings_repo
         self._oauth_repo = oauth_repo
         self._repo = repo
         self._api_client = api_client
+        self._push_repo = push_repo
 
     async def execute(self, cmd: PushRetrospectiveCommand) -> PushOutcome:
         settings = await self._settings_repo.find_by_user_id(cmd.user_id)
@@ -151,6 +159,28 @@ class PushRetrospectiveUseCase:
             message=commit_message,
             branch=target.default_branch,
             sha=existing_sha,
+        )
+
+        # period_type 정규화 — JournalEntry 의 'yearly' 와 push API 의 'annual' 표기 차이 흡수
+        normalized_period_type = cmd.period_type.lower()
+        if normalized_period_type == "yearly":
+            normalized_period_type = "annual"
+
+        now = datetime.now(timezone.utc)
+        await self._push_repo.upsert(
+            RetrospectivePush(
+                id=generate_id("rp"),
+                user_id=cmd.user_id,
+                period_type=normalized_period_type,
+                period_key=cmd.period_key,
+                repository_id=target.id,
+                repository_full_name=target.full_name,
+                path=result.path,
+                commit_sha=result.commit_sha,
+                html_url=result.html_url,
+                pushed_at=now,
+                created_at=now,
+            )
         )
 
         return PushOutcome(

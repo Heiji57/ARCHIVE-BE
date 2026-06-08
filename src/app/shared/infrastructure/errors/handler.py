@@ -42,6 +42,7 @@ from app.retrospective.domain.exceptions.exceptions import (
     RetroSummaryNotFoundException,
     SummaryAlreadyInProgressException,
     SummaryInvalidStateException,
+    SummaryReadinessUnsupportedException,
 )
 from app.shared.domain.exceptions.base import BaseAppException
 from app.todo.domain.exceptions.exceptions import (
@@ -99,6 +100,7 @@ _STATUS_MAP: dict[str, int] = {
     CountryInvalidException.code: 422,
     CountryTimezoneRequiredException.code: 422,
     TimezoneInvalidException.code: 422,
+    SummaryReadinessUnsupportedException.code: 422,
     # 429
     GitHubRateLimitedException.code: 429,
     # 502

@@ -8,6 +8,7 @@ from app.auth.domain.models.value_objects import OAuthProvider
 class OAuthUserInfo:
     provider_user_id: str
     email: str
+    login: str | None = None    # provider 사용자명 (GitHub `login` 등). 없는 provider 는 None.
 
 
 class IOAuthClient(ABC):

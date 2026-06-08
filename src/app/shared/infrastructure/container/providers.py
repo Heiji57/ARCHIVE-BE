@@ -35,8 +35,8 @@ from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
 from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
 from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
 from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import OAuthConnectionRepository
+from app.github.application.use_cases.get_commits_by_date import GetCommitsByDateUseCase
 from app.github.application.use_cases.get_connection_status import GetConnectionStatusUseCase
-from app.github.application.use_cases.get_today_commits import GetTodayCommitsUseCase
 from app.github.application.use_cases.link_repository import LinkRepositoryUseCase
 from app.github.application.use_cases.list_available_repositories import ListAvailableRepositoriesUseCase
 from app.github.application.use_cases.list_linked_repositories import ListLinkedRepositoriesUseCase
@@ -46,8 +46,14 @@ from app.github.application.use_cases.unlink_all_repositories import UnlinkAllRe
 from app.github.application.use_cases.unlink_repository import UnlinkRepositoryUseCase
 from app.github.application.use_cases.update_repository import UpdateRepositoryUseCase
 from app.github.domain.repositories.repository import IGitHubRepositoryRepository
+from app.github.domain.repositories.retrospective_push_repository import (
+    IRetrospectivePushRepository,
+)
 from app.github.infrastructure.api.github_api_client import GitHubApiClient
 from app.github.infrastructure.persistence.repositories.github_repository_repo import GitHubRepositoryRepository
+from app.github.infrastructure.persistence.repositories.retrospective_push_repo import (
+    RetrospectivePushRepository,
+)
 from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
 from app.settings.application.use_cases.get_settings import GetSettingsUseCase
 from app.settings.application.use_cases.list_country_timezones import (
@@ -71,6 +77,9 @@ from app.retrospective.application.use_cases.get_entries import GetEntriesUseCas
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
 from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
 from app.retrospective.application.use_cases.get_summary import GetSummaryUseCase
+from app.retrospective.application.use_cases.get_summary_readiness import (
+    GetSummaryReadinessUseCase,
+)
 from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository, IRetroSummaryRepository
@@ -202,6 +211,12 @@ class RequestProvider(Provider):
     @provide
     def github_repository_repo(self, session: AsyncSession) -> IGitHubRepositoryRepository:
         return GitHubRepositoryRepository(session)
+
+    @provide
+    def retrospective_push_repo(
+        self, session: AsyncSession
+    ) -> IRetrospectivePushRepository:
+        return RetrospectivePushRepository(session)
 
     @provide
     def country_history_repo(self, session: AsyncSession) -> ICountryHistoryRepository:
@@ -481,6 +496,12 @@ class RequestProvider(Provider):
     ) -> GetSummariesUseCase:
         return GetSummariesUseCase(summary_repo)
 
+    @provide
+    def get_summary_readiness_use_case(
+        self, entry_repo: IJournalEntryRepository
+    ) -> GetSummaryReadinessUseCase:
+        return GetSummaryReadinessUseCase(entry_repo)
+
     # ── GitHub Use Cases ──────────────────────────────────────────────────────
 
     @provide
@@ -543,14 +564,14 @@ class RequestProvider(Provider):
         return UpdateRepositoryUseCase(repo)
 
     @provide
-    def get_today_commits_use_case(
+    def get_commits_by_date_use_case(
         self,
         user_repo: IUserRepository,
         oauth_repo: IOAuthConnectionRepository,
         repo: IGitHubRepositoryRepository,
         api_client: GitHubApiClient,
-    ) -> GetTodayCommitsUseCase:
-        return GetTodayCommitsUseCase(user_repo, oauth_repo, repo, api_client)
+    ) -> GetCommitsByDateUseCase:
+        return GetCommitsByDateUseCase(user_repo, oauth_repo, repo, api_client)
 
     @provide
     def push_retrospective_use_case(
@@ -559,5 +580,8 @@ class RequestProvider(Provider):
         oauth_repo: IOAuthConnectionRepository,
         repo: IGitHubRepositoryRepository,
         api_client: GitHubApiClient,
+        push_repo: IRetrospectivePushRepository,
     ) -> PushRetrospectiveUseCase:
-        return PushRetrospectiveUseCase(settings_repo, oauth_repo, repo, api_client)
+        return PushRetrospectiveUseCase(
+            settings_repo, oauth_repo, repo, api_client, push_repo
+        )

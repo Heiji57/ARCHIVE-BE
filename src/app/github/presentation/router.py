@@ -10,7 +10,7 @@ from app.github.application.dtos.commands import (
     UnlinkRepositoryCommand,
 )
 from app.github.application.use_cases.get_connection_status import GetConnectionStatusUseCase
-from app.github.application.use_cases.get_today_commits import GetTodayCommitsUseCase
+from app.github.application.use_cases.get_commits_by_date import GetCommitsByDateUseCase
 from app.github.application.use_cases.link_repository import LinkRepositoryUseCase
 from app.github.application.use_cases.list_available_repositories import (
     ListAvailableRepositoriesUseCase,
@@ -33,7 +33,7 @@ from app.github.presentation.requests.requests import (
 )
 from app.github.presentation.responses.responses import (
     AvailableRepositoryResponse,
-    CommitResponse,
+    CommitListResponse,
     ConnectionStatusResponse,
     PushResultResponse,
     RepositoryResponse,
@@ -172,15 +172,15 @@ async def unlink_all_repositories(
 @router.get(
     "/commits",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[list[CommitResponse]],
+    response_model=ApiResponse[CommitListResponse],
 )
-async def get_today_commits(
-    use_case: FromDishka[GetTodayCommitsUseCase],
+async def get_commits(
+    use_case: FromDishka[GetCommitsByDateUseCase],
     target_date: date | None = Query(default=None, alias="date"),
     current_user: UserContext = Depends(get_current_user),
-) -> ApiResponse[list[CommitResponse]]:
-    commits = await use_case.execute(current_user.id, target_date)
-    return ApiResponse.ok([CommitResponse.from_commit(c) for c in commits])
+) -> ApiResponse[CommitListResponse]:
+    result = await use_case.execute(current_user.id, target_date)
+    return ApiResponse.ok(CommitListResponse.from_result(result))
 
 
 # ── Retrospectives Push ────────────────────────────────────────────────────

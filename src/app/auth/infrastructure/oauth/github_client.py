@@ -63,7 +63,9 @@ class GitHubOAuthClient(IOAuthClient):
         if not primary_email:
             raise OAuthStateInvalidException()
 
+        user_data = user_resp.json()
         return OAuthUserInfo(
-            provider_user_id=str(user_resp.json()["id"]),
+            provider_user_id=str(user_data["id"]),
             email=primary_email,
+            login=user_data.get("login"),
         )
