@@ -79,7 +79,7 @@ def _is_user_commit(
         return True
     if commit.committer_email and commit.committer_email in verified_emails:
         return True
-    return True
+    return False
 
 
 class GetCommitsByDateUseCase:
