@@ -1371,23 +1371,45 @@ AI 자동 요약은 **사용자 tz 기준 새벽 1시** 에 트리거.
 1. user 조회 → user.timezone 추출
 2. target_date 결정 (없으면 user tz 기준 오늘)
 3. 사용자 tz 의 [00:00, 24:00) → UTC ISO 변환 (since/until)
-4. GitHub credentials 획득 (access_token + login)
-   - oauth_connections.provider_login 캐시 우선
-   - 없으면 /user 한 번 호출 → DB backfill (lazy)
+4. GitHub credentials 획득 (access_token + login + verified_emails)
+   - oauth_connections.provider_login / provider_verified_emails 캐시 우선
+   - 둘 중 하나라도 없으면 /user 또는 /user/emails 호출 → DB backfill (lazy)
 5. commit_read_enabled=true 저장소 N개 → asyncio.gather 로 병렬 list_commits
-6. 결과 분류:
-   - 성공: commits 누적
+   - `?author=` 필터 사용하지 않음 — 그 repo 의 모든 commit 을 받음
+6. 각 commit 에 대해 _is_user_commit 으로 본인 매칭 판정 (login OR verified email)
+7. 결과 분류:
+   - 성공: 매칭된 commit 만 누적
    - GitHubRepositoryNotFoundException: failedRepositories[reason="not_found"]
    - 기타 예외: failedRepositories[reason="unknown"] + structlog warning
    - GitHubTokenInvalid / RateLimited / ApiUnavailable: 전체 raise (한 repo 만 발생해도)
-7. commits 시간 내림차순 정렬 → CommitsByDateResult 반환
+8. commits 시간 내림차순 정렬 → CommitsByDateResult 반환
 ```
 
 #### 정책 결정
 - **public repo only**: OAuth scope 가 `user:email,public_repo` 라 private repo 는 link 자체가 안 됨. 어쩌다 등록돼도 404 → `failedRepositories` 로 사용자에게 노출.
 - **silent skip 금지**: 옛 구현은 단일 repo 실패를 조용히 무시했으나, 신정책은 응답에 `failedRepositories` 로 노출하고 백엔드에도 `github.commits.*` 채널로 warning 로깅.
 - **fatal vs per-repo 구분**: 토큰/제한/외부 가용성 문제는 사용자 전체 흐름 차단(전체 raise) 이 더 유익. 저장소 단위 문제는 다른 결과 보존.
-- **login 캐싱**: `oauth_connections.provider_login` (migration 012) 에 GitHub `login` 저장. callback/link/onboarding 시 자동 저장. 구 데이터는 첫 commits 호출 시 lazy backfill.
+- **login + verified emails 캐싱**: `oauth_connections.provider_login` (migration 012) + `provider_verified_emails` (migration 014) 에 저장. callback/link/onboarding 시 자동 저장. 구 데이터는 첫 commits 호출 시 lazy backfill.
+
+#### 본인 commit 매칭 정책 (Phase 1 — migration 014)
+
+**문제**: 이전 정책은 GitHub `?author=<login>` 쿼리 필터를 사용했다. GitHub 는 commit author email 이 그 GitHub 계정에 verified 등록돼 있을 때만 매칭하므로, gitbash 등 로컬 `git config user.email` 이 GitHub 에 등록 안 됐으면 본인이 push 한 commit 도 0건 반환.
+
+**해결**: `?author=` 필터를 빼고 모든 commit 을 받은 뒤 서버사이드 OR 필터.
+
+`get_commits_by_date.py:_is_user_commit`:
+```
+match = (
+    commit.author.login == creds.login
+    OR commit.committer.login == creds.login
+    OR commit.author.email ∈ creds.verified_emails
+    OR commit.committer.email ∈ creds.verified_emails
+)
+```
+
+`verified_emails` 는 `/user/emails` 응답 중 `verified=true` 만. OAuth scope 에 `user:email` 포함. 사용자가 gitbash 의 `git config user.email` 을 GitHub Settings → Emails 에 verified 로 등록만 해두면 자동으로 본인 commit 으로 잡힌다.
+
+**노출 신호**: `GET /github/connection` 응답의 `hasVerifiedEmails: bool` 로 FE 가 verified emails 보유 여부 확인. false 면 사용자에게 GitHub 재연결 또는 emails 등록 안내.
 
 #### 빈 access_token 처리 (P3 — OAuth 신규 사용자)
 OAuth 온보딩 직후 사용자는 `oauth_connections.access_token=""` 상태일 수 있다. `_token.py:get_github_access_token` 이 빈 토큰을 `None` 과 동등하게 취급 → `GITHUB_CONNECTION_NOT_FOUND` (400). FE 는 "GitHub 다시 연결" 안내 후 `POST /auth/oauth/github/link/init` 흐름으로 유도.

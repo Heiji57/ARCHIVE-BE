@@ -10,6 +10,9 @@ from app.github.infrastructure.api.github_api_client import GitHubApiClient
 class GitHubCredentials:
     access_token: str
     login: str
+    verified_emails: list[str]
+    """GitHub 계정의 verified emails. commit author 매칭에 사용.
+    빈 list 면 사용자가 GitHub 에 등록한 verified email 이 없는 상태."""
 
 
 async def get_github_access_token(
@@ -35,9 +38,11 @@ async def get_github_credentials(
     api_client: GitHubApiClient,
     user_id: str,
 ) -> GitHubCredentials:
-    """GitHub access_token + login 동시 반환. login 이 캐시돼 있으면 API 호출 생략.
+    """GitHub access_token + login + verified emails 반환.
 
-    구 사용자는 provider_login=NULL 상태 → 첫 호출 시 /user API 로 fetch & 저장 (lazy backfill).
+    캐시 우선. 비어있으면 lazy backfill:
+    - login: `/user` API
+    - verified_emails: `/user/emails` API (`user:email` scope 필요)
     """
     connections = await oauth_repo.find_by_user_id(user_id)
     github_conn = next(
@@ -47,17 +52,23 @@ async def get_github_credentials(
     if github_conn is None or not github_conn.access_token:
         raise GitHubConnectionNotFoundException("Connect GitHub account first.")
 
-    if github_conn.provider_login:
-        return GitHubCredentials(
-            access_token=github_conn.access_token,
-            login=github_conn.provider_login,
-        )
+    dirty = False
 
-    # Lazy backfill
-    user = await api_client.get_authenticated_user(github_conn.access_token)
-    github_conn.provider_login = user.login
-    await oauth_repo.save(github_conn)
+    if github_conn.provider_login is None:
+        user = await api_client.get_authenticated_user(github_conn.access_token)
+        github_conn.provider_login = user.login
+        dirty = True
+
+    if github_conn.provider_verified_emails is None:
+        emails = await api_client.get_user_verified_emails(github_conn.access_token)
+        github_conn.provider_verified_emails = emails
+        dirty = True
+
+    if dirty:
+        await oauth_repo.save(github_conn)
+
     return GitHubCredentials(
         access_token=github_conn.access_token,
-        login=user.login,
+        login=github_conn.provider_login,
+        verified_emails=list(github_conn.provider_verified_emails or []),
     )

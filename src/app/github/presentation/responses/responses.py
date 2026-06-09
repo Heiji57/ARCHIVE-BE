@@ -75,6 +75,7 @@ class ConnectionStatusResponse(BaseModel):
     push_target_repository_id: str | None = Field(
         default=None, serialization_alias="pushTargetRepositoryId"
     )
+    has_verified_emails: bool = Field(serialization_alias="hasVerifiedEmails")
 
     model_config = {"populate_by_name": True}
 
@@ -84,6 +85,7 @@ class ConnectionStatusResponse(BaseModel):
             connected=status.connected,
             login=status.login,
             push_target_repository_id=status.push_target_repository_id,
+            has_verified_emails=status.has_verified_emails,
         )
 
 

@@ -1,5 +1,15 @@
 """사용자 tz 기준 특정 날짜의 커밋을 commit_read_enabled 저장소들에서 집계.
 
+매칭 정책 (Phase 1):
+- GitHub `?author=` 필터는 사용 안 함 — 그 repo 의 모든 commit 을 일단 받음
+- 서버사이드 필터: 다음 중 하나라도 매칭되면 본인 commit 으로 간주
+    1. commit author 의 GitHub login 이 `creds.login`
+    2. commit committer 의 GitHub login 이 `creds.login`
+    3. commit author email 이 `creds.verified_emails` 에 포함
+    4. commit committer email 이 `creds.verified_emails` 에 포함
+- 이 정책으로 gitbash 등 로컬 git config email 이 GitHub 계정에 verified 등록돼
+  있으면 본인 commit 으로 잡힌다.
+
 에러 분류 정책:
 - **Fatal** (전체 raise): `GitHubTokenInvalidException`, `GitHubRateLimitedException`,
   `GitHubApiUnavailableException`. 토큰/제한/외부 가용성 문제는 사용자가 알아야 한다.
@@ -55,6 +65,23 @@ class CommitsByDateResult:
     failed_repositories: list[FailedRepository]
 
 
+def _is_user_commit(
+    commit: GitHubCommitData,
+    github_login: str,
+    verified_emails: set[str],
+) -> bool:
+    """본인 commit 판정 — login 또는 verified email 매칭."""
+    if commit.author_login == github_login:
+        return True
+    if commit.committer_login == github_login:
+        return True
+    if commit.author_email and commit.author_email in verified_emails:
+        return True
+    if commit.committer_email and commit.committer_email in verified_emails:
+        return True
+    return True
+
+
 class GetCommitsByDateUseCase:
     def __init__(
         self,
@@ -88,18 +115,21 @@ class GetCommitsByDateUseCase:
         until_iso = local_end.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         creds = await get_github_credentials(self._oauth_repo, self._api_client, user_id)
+        verified_emails_set = set(creds.verified_emails)
+
         repos = await self._repo.find_commit_read_enabled_by_user(user_id)
         if not repos:
             return CommitsByDateResult(commits=[], failed_repositories=[])
 
         async def fetch(repo) -> tuple[str, str, list[GitHubCommitData]]:
+            # author 필터 없이 모든 commit 을 받아온 뒤 서버사이드 필터링
             commits = await self._api_client.list_commits(
                 access_token=creds.access_token,
                 owner=repo.owner,
                 name=repo.name,
                 since_iso=since_iso,
                 until_iso=until_iso,
-                author_login=creds.login,
+                author_login=None,
             )
             return repo.id, repo.full_name, commits
 
@@ -152,6 +182,8 @@ class GetCommitsByDateUseCase:
 
             _, full_name, commit_list = r
             for c in commit_list:
+                if not _is_user_commit(c, creds.login, verified_emails_set):
+                    continue
                 commits.append(
                     CommitItem(
                         repository_id=repo.id,

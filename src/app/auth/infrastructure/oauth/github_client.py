@@ -25,6 +25,8 @@ class GitHubOAuthClient(IOAuthClient):
         params = urlencode({
             "client_id": self._config.client_id,
             "redirect_uri": self._config.redirect_uri,
+            # user:email — verified emails 캐시 (commit author 매칭용)
+            # public_repo — 회고록 push 및 commit 조회
             "scope": "user:email,public_repo",
             "state": state,
         })

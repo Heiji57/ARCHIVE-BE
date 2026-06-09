@@ -39,6 +39,11 @@ class GitHubCommitData:
     html_url: str
     author: str
     committed_at: datetime
+    # 본인 commit 매칭용 — get_commits_by_date.py 의 서버사이드 필터가 사용
+    author_email: str | None
+    committer_email: str | None
+    author_login: str | None
+    committer_login: str | None
 
 
 @dataclass(frozen=True)
@@ -75,16 +80,28 @@ def _parse_repo(item: dict) -> GitHubRepoData:
 
 def _parse_commit(item: dict) -> GitHubCommitData:
     commit = item["commit"]
-    author = commit.get("author", {}) or {}
-    committed_at_raw = author.get("date") or commit.get("committer", {}).get("date")
+    commit_author = commit.get("author") or {}
+    commit_committer = commit.get("committer") or {}
+    committed_at_raw = commit_author.get("date") or commit_committer.get("date")
     committed_at = datetime.fromisoformat(committed_at_raw.replace("Z", "+00:00"))
-    author_login = (item.get("author") or {}).get("login") or author.get("name") or "unknown"
+
+    top_author = item.get("author") or {}
+    top_committer = item.get("committer") or {}
+    author_login = top_author.get("login")
+    committer_login = top_committer.get("login")
+
+    display_author = author_login or commit_author.get("name") or "unknown"
+
     return GitHubCommitData(
         sha=item["sha"],
         message=(commit.get("message") or "").splitlines()[0][:200],
         html_url=item["html_url"],
-        author=author_login,
+        author=display_author,
         committed_at=committed_at,
+        author_email=commit_author.get("email"),
+        committer_email=commit_committer.get("email"),
+        author_login=author_login,
+        committer_login=committer_login,
     )
 
 
@@ -152,6 +169,20 @@ class GitHubApiClient:
         _raise_for_status(response)
         data = response.json()
         return GitHubAuthenticatedUser(login=data["login"])
+
+    async def get_user_verified_emails(self, access_token: str) -> list[str]:
+        """GitHub 계정에 등록된 verified emails 목록.
+
+        `user:email` scope 필수. scope 부족 시 GitHub 가 401/404 등 반환 →
+        `_raise_for_status` 에서 예외 raise. caller 가 처리.
+        """
+        response = await self._client.get(
+            f"{_GITHUB_API}/user/emails",
+            headers=_headers(access_token),
+        )
+        _raise_for_status(response)
+        items = response.json()
+        return [item["email"] for item in items if item.get("verified")]
 
     async def list_commits(
         self,

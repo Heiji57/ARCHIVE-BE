@@ -48,6 +48,7 @@ class OAuthConnectionRepository(IOAuthConnectionRepository):
             provider_user_id=entity.provider_user_id,
             access_token=entity.access_token,
             provider_login=entity.provider_login,
+            provider_verified_emails=entity.provider_verified_emails,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -60,6 +61,7 @@ class OAuthConnectionRepository(IOAuthConnectionRepository):
             provider_user_id=model.provider_user_id,
             access_token=model.access_token,
             provider_login=model.provider_login,
+            provider_verified_emails=model.provider_verified_emails,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

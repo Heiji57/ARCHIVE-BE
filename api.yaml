@@ -1271,13 +1271,15 @@ paths:
   /github/connection:
     get:
       tags: [github]
-      summary: GitHub 연결 상태 + push target 통합 조회
+      summary: GitHub 연결 상태 + push target + verified emails 보유 통합 조회
       description: |
         FE가 GitHub 화면 진입 시 한 번에 상태를 파악할 수 있도록 묶어 반환한다.
 
         - `connected`: GitHub OAuth 연결 + 토큰 유효성 검증 결과
         - `login`: GitHub username (connected=true일 때만)
         - `pushTargetRepositoryId`: 회고 push 대상 저장소 id (없으면 null)
+        - `hasVerifiedEmails`: verified emails 캐시 보유 여부 — false 면 FE 가 사용자에게
+          재연결 또는 GitHub email 등록 안내 (commit author 매칭 정확도 신호)
       responses:
         "200":
           description: 조회 성공
@@ -1472,14 +1474,23 @@ paths:
 
         ### 규칙
         - **타임존**: 항상 `user.timezone` 기준. 별도 `tz` 쿼리 파라미터를 받지 않는다.
-        - **author 필터**: 사용자 본인의 GitHub 계정(`login`) 커밋만. 첫 호출 시 `/user`
-          API 로 한 번 조회 후 `oauth_connections.provider_login` 에 캐시 (lazy backfill).
-          이후 호출은 캐시 사용 — 별도 API 호출 없음.
+        - **본인 commit 매칭** (Phase 1): GitHub `?author=` 필터 미사용 — 그 repo 의 모든
+          commit 을 받은 뒤 서버사이드 OR 필터로 본인 commit 만 추림.
+          매칭 조건 (하나라도 true 면 본인):
+          - `commit.author.login == user.github_login`
+          - `commit.committer.login == user.github_login`
+          - `commit.author.email ∈ verified_emails`
+          - `commit.committer.email ∈ verified_emails`
+
+          `verified_emails` 는 GitHub `/user/emails` 의 verified=true 만 캐시
+          (`oauth_connections.provider_verified_emails`, lazy backfill). 사용자가
+          gitbash 의 `git config user.email` 을 GitHub Settings → Emails 에 verified 로
+          추가만 해두면 본인 commit 으로 자동 매칭.
+        - **scope 정책**: OAuth scope = `user:email,public_repo`. **public repo only**
+          (private repo 는 `repositories/available` 에 없고, 등록돼도 GitHub 404 →
+          `failedRepositories` 에 포함).
         - **`date` 생략 시**: `user.timezone` 기준 오늘
         - **범위**: `[date 00:00, date+1 00:00)` 사용자 tz → UTC 변환 후 `since`/`until`
-        - **scope 정책**: GitHub OAuth scope 가 `public_repo` 만 요청되므로 **public repo
-          만 지원**. private repo 는 `repositories/available` 목록에 나오지 않으며,
-          어떻게든 등록되어도 GitHub 가 404 → `failedRepositories` 에 포함.
 
         ### 에러 분류
         | 상황 | 동작 |
@@ -2506,7 +2517,7 @@ components:
     # ── GitHub Connection ──────────────────────────────────────────────────
     ConnectionStatusResponse:
       type: object
-      required: [connected]
+      required: [connected, hasVerifiedEmails]
       properties:
         connected:
           type: boolean
@@ -2521,6 +2532,14 @@ components:
           nullable: true
           example: ghrepo_01HXYZ...
           description: 회고 push 대상 저장소 id. 미설정 시 null.
+        hasVerifiedEmails:
+          type: boolean
+          description: |
+            GitHub 계정의 verified emails 가 1개 이상 캐시돼 있는지 (`provider_verified_emails`).
+            **false** 면 `GET /github/commits` 의 author 매칭이 login 으로만 동작 → 사용자가
+            gitbash 등 로컬 `git config user.email` 로 push 한 commit 이 표시 안 될 수 있음.
+            FE 는 false 이면 "GitHub 재연결" 또는 "GitHub Settings → Emails 에 commit email 추가"
+            안내 권장.
 
     ApiResponseConnectionStatus:
       allOf:
