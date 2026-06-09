@@ -60,7 +60,7 @@ security:
 
 # ────────────────────────────────────────────────────────────────────────────────
 paths:
-# ────────────────────────────────────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────────
 
   # ════════════════════════════════════════════════════════════════════════════
   # AUTH
@@ -77,17 +77,17 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SendVerificationRequest'
+              $ref: "#/components/schemas/SendVerificationRequest"
             example:
               email: user@example.com
       responses:
-        '200':
+        "200":
           description: 코드 발송 성공
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiResponseEmpty'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+                $ref: "#/components/schemas/ApiResponseEmpty"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
 
   /auth/email/verify/confirm:
     post:
@@ -100,19 +100,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/VerifyCodeRequest'
+              $ref: "#/components/schemas/VerifyCodeRequest"
             example:
               email: user@example.com
               code: "123456"
       responses:
-        '200':
+        "200":
           description: 인증 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_2FA_CODE_INVALID
 
@@ -143,16 +143,16 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RequestPasswordResetRequest'
+              $ref: "#/components/schemas/RequestPasswordResetRequest"
             example:
               email: user@example.com
       responses:
-        '200':
+        "200":
           description: 항상 성공 응답 (실제 발송 여부와 무관)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "422": { $ref: "#/components/responses/ValidationError_422" }
 
   /auth/password/reset/confirm:
     post:
@@ -169,24 +169,24 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ResetPasswordRequest'
+              $ref: "#/components/schemas/ResetPasswordRequest"
             example:
-              token: 'abc123...'
+              token: "abc123..."
               newPassword: NewStrongPass1!
               newPasswordConfirm: NewStrongPass1!
       responses:
-        '200':
+        "200":
           description: 재설정 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_PASSWORD_RESET_TOKEN_INVALID
         - AUTH_PASSWORD_RESET_TOKEN_EXPIRED
@@ -206,29 +206,42 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RegisterRequest'
+              $ref: "#/components/schemas/RegisterRequest"
             examples:
               kr:
                 summary: 단일 tz 국가 (timezone 생략 가능)
-                value: { email: user@example.com, password: strongPass1!, passwordConfirm: strongPass1!, country: KR }
+                value:
+                  {
+                    email: user@example.com,
+                    password: strongPass1!,
+                    passwordConfirm: strongPass1!,
+                    country: KR,
+                  }
               us_la:
                 summary: 다중 tz 국가 (timezone 필수)
-                value: { email: user@example.com, password: strongPass1!, passwordConfirm: strongPass1!, country: US, timezone: America/Los_Angeles }
+                value:
+                  {
+                    email: user@example.com,
+                    password: strongPass1!,
+                    passwordConfirm: strongPass1!,
+                    country: US,
+                    timezone: America/Los_Angeles,
+                  }
       responses:
-        '201':
+        "201":
           description: 가입 성공
           headers:
             Set-Cookie:
-              description: '`refresh_token` HttpOnly cookie (7d)'
+              description: "`refresh_token` HttpOnly cookie (7d)"
               schema: { type: string }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseToken' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '409':
-          $ref: '#/components/responses/Conflict_409'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseToken" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_EMAIL_NOT_VERIFIED
         - USER_EMAIL_INVALID
@@ -246,23 +259,23 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/LoginRequest'
+              $ref: "#/components/schemas/LoginRequest"
             example:
               email: user@example.com
               password: strongPass1!
       responses:
-        '200':
+        "200":
           description: 로그인 성공
           headers:
             Set-Cookie:
-              description: '`refresh_token` HttpOnly cookie (7d)'
+              description: "`refresh_token` HttpOnly cookie (7d)"
               schema: { type: string }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseToken' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseToken" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_INVALID_CREDENTIALS
 
@@ -276,17 +289,17 @@ paths:
       security:
         - RefreshCookie: []
       responses:
-        '200':
+        "200":
           description: 재발급 성공
           headers:
             Set-Cookie:
-              description: '회전된 새 `refresh_token` Cookie'
+              description: "회전된 새 `refresh_token` Cookie"
               schema: { type: string }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseToken' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseToken" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
       x-error-codes:
         - AUTH_REFRESH_TOKEN_INVALID
         - AUTH_REFRESH_TOKEN_REVOKED
@@ -303,13 +316,13 @@ paths:
         통신은 server-side trust anchor 정책에 따라 Redis 세션 레코드에서 직접 조회된다.
         각 세션의 device 메타데이터는 발급 시점 User-Agent 에서 파싱된 값이다.
       responses:
-        '200':
+        "200":
           description: 활성 세션 목록
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSessionList' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseSessionList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
     delete:
       tags: [auth]
       summary: 현재 세션 외 모든 세션 폐기 (다른 기기 전부 로그아웃)
@@ -317,13 +330,13 @@ paths:
         현재 요청을 보낸 세션은 유지하고 다른 모든 세션을 즉시 폐기한다.
         다른 기기에서는 다음 refresh 시도 시 401.
       responses:
-        '200':
+        "200":
           description: 폐기 완료
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseRevokeOthers' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseRevokeOthers" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /auth/sessions/{sessionId}:
     delete:
@@ -338,15 +351,15 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        '200':
+        "200":
           description: 폐기 완료
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - AUTH_SESSION_NOT_FOUND
 
@@ -359,28 +372,28 @@ paths:
         - BearerAuth: []
         - RefreshCookie: []
       responses:
-        '200':
+        "200":
           description: 로그아웃 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /auth/me:
     get:
       tags: [auth]
       summary: 내 정보 조회
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseUser' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseUser" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - USER_NOT_FOUND
 
@@ -392,19 +405,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpdateProfileRequest'
+              $ref: "#/components/schemas/UpdateProfileRequest"
             example:
               display_name: 변경된 이름
       responses:
-        '200':
+        "200":
           description: 수정 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseUser' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseUser" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
 
   /auth/oauth/{provider}/authorize:
     get:
@@ -418,9 +431,9 @@ paths:
         이미 로그인된 사용자가 계정 연결만 추가하려면 `POST /auth/oauth/{provider}/link/init`를 사용.
       security: []
       parameters:
-        - $ref: '#/components/parameters/OAuthProviderPath'
+        - $ref: "#/components/parameters/OAuthProviderPath"
       responses:
-        '302':
+        "302":
           description: OAuth provider로 리다이렉트
           headers:
             Location:
@@ -459,15 +472,15 @@ paths:
         { type: "oauth_linked", provider: "github" }
         ```
       parameters:
-        - $ref: '#/components/parameters/OAuthProviderPath'
+        - $ref: "#/components/parameters/OAuthProviderPath"
       responses:
-        '200':
+        "200":
           description: authorize URL 반환
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseOAuthLinkInit' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseOAuthLinkInit" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /auth/oauth/{provider}/callback:
     get:
@@ -496,7 +509,7 @@ paths:
         ```
       security: []
       parameters:
-        - $ref: '#/components/parameters/OAuthProviderPath'
+        - $ref: "#/components/parameters/OAuthProviderPath"
         - in: query
           name: code
           schema: { type: string }
@@ -510,7 +523,7 @@ paths:
           schema: { type: string }
           description: provider가 에러를 반환한 경우의 코드
       responses:
-        '200':
+        "200":
           description: HTML 응답 (postMessage 스크립트 포함)
           headers:
             Set-Cookie:
@@ -544,7 +557,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/OnboardingCompleteRequest' }
+            schema: { $ref: "#/components/schemas/OnboardingCompleteRequest" }
             examples:
               korea:
                 summary: 한국 (단일 tz)
@@ -556,20 +569,20 @@ paths:
                 summary: 브라질 상파울루 (다중 tz)
                 value: { country: BR, timezone: America/Sao_Paulo }
       responses:
-        '201':
+        "201":
           description: 가입 완료
           headers:
             Set-Cookie:
-              description: '`refresh_token` HttpOnly cookie (7d) + `onboarding_token` 삭제'
+              description: "`refresh_token` HttpOnly cookie (7d) + `onboarding_token` 삭제"
               schema: { type: string }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseToken' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '409':
-          $ref: '#/components/responses/Conflict_409'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseToken" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_ONBOARDING_TOKEN_INVALID
         - AUTH_ONBOARDING_TOKEN_EXPIRED
@@ -602,13 +615,13 @@ paths:
           name: to
           schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseTodoList' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseTodoList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
     post:
       tags: [todos]
@@ -617,25 +630,25 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/TodoCreateRequest' }
+            schema: { $ref: "#/components/schemas/TodoCreateRequest" }
             example:
               title: 회의 자료 준비
               date_key: "2026-05-31"
               description: 회의 슬라이드 작성
               status: not-start
       responses:
-        '201':
+        "201":
           description: 생성 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseTodo' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseTodo" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
 
   /todos/{todo_id}:
     parameters:
-      - $ref: '#/components/parameters/TodoIdPath'
+      - $ref: "#/components/parameters/TodoIdPath"
 
     patch:
       tags: [todos]
@@ -644,22 +657,22 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/TodoUpdateRequest' }
+            schema: { $ref: "#/components/schemas/TodoUpdateRequest" }
             example:
               status: done
       responses:
-        '200':
+        "200":
           description: 수정 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseTodo' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
-        '409':
-          $ref: '#/components/responses/Conflict_409'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseTodo" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - TODO_NOT_FOUND
         - TODO_ALREADY_COMPLETED
@@ -669,15 +682,15 @@ paths:
       tags: [todos]
       summary: 할 일 삭제
       responses:
-        '200':
+        "200":
           description: 삭제 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - TODO_NOT_FOUND
 
@@ -693,7 +706,7 @@ paths:
       parameters:
         - in: query
           name: retroType
-          schema: { $ref: '#/components/schemas/RetroType' }
+          schema: { $ref: "#/components/schemas/RetroType" }
         - in: query
           name: from
           schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
@@ -701,13 +714,13 @@ paths:
           name: to
           schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEntryList' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseEntryList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
     post:
       tags: [entries]
@@ -716,43 +729,43 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EntryCreateRequest' }
+            schema: { $ref: "#/components/schemas/EntryCreateRequest" }
             example:
               date_key: "2026-05-31"
               title: 5월 31일 회고
               content: 오늘은 ...
               retro_type: daily
       responses:
-        '201':
+        "201":
           description: 생성 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEntry' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '409':
-          $ref: '#/components/responses/Conflict_409'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseEntry" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - JOURNAL_ENTRY_ALREADY_EXISTS
 
   /entries/{entry_id}:
     parameters:
-      - $ref: '#/components/parameters/EntryIdPath'
+      - $ref: "#/components/parameters/EntryIdPath"
 
     get:
       tags: [entries]
       summary: 단일 엔트리 조회
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEntry' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEntry" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - JOURNAL_ENTRY_NOT_FOUND
 
@@ -764,30 +777,30 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/EntryUpsertRequest' }
+            schema: { $ref: "#/components/schemas/EntryUpsertRequest" }
       responses:
-        '200':
+        "200":
           description: Upsert 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEntry' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseEntry" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
 
     delete:
       tags: [entries]
       summary: 엔트리 삭제
       responses:
-        '200':
+        "200":
           description: 삭제 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - JOURNAL_ENTRY_NOT_FOUND
 
@@ -823,7 +836,7 @@ paths:
         - in: query
           name: type
           required: true
-          schema: { $ref: '#/components/schemas/SummaryType' }
+          schema: { $ref: "#/components/schemas/SummaryType" }
         - in: query
           name: periodStart
           schema: { type: string, format: date }
@@ -831,15 +844,15 @@ paths:
             생략 시 직전 기간 자동 계산 (지난 주 월~일 / 지난 달 / 작년).
             지정 시 해당 기간의 시작일 (월요일/1일/1월1일).
       responses:
-        '202':
+        "202":
           description: 요청 접수
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSummary' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '409':
-          $ref: '#/components/responses/Conflict_409'
+              schema: { $ref: "#/components/schemas/ApiResponseSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
       x-error-codes:
         - RETRO_SUMMARY_ALREADY_IN_PROGRESS
         - RETRO_SUMMARY_INVALID_STATE
@@ -877,15 +890,16 @@ paths:
           schema: { type: string, format: date }
           description: 생략 시 직전 기간(지난 달 / 작년).
       responses:
-        '200':
+        "200":
           description: 점검 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSummaryReadiness' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422':
-          $ref: '#/components/responses/ValidationError_422'
+              schema:
+                { $ref: "#/components/schemas/ApiResponseSummaryReadiness" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422":
+          $ref: "#/components/responses/ValidationError_422"
       x-error-codes:
         - RETRO_SUMMARY_READINESS_UNSUPPORTED
 
@@ -897,39 +911,39 @@ paths:
         - in: query
           name: type
           required: true
-          schema: { $ref: '#/components/schemas/SummaryType' }
+          schema: { $ref: "#/components/schemas/SummaryType" }
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSummaryList' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseSummaryList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /summaries/{summary_id}:
     parameters:
-      - $ref: '#/components/parameters/SummaryIdPath'
+      - $ref: "#/components/parameters/SummaryIdPath"
 
     get:
       tags: [summaries]
       summary: 단일 요약 조회
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSummary' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - RETRO_SUMMARY_NOT_FOUND
 
   /summaries/{summary_id}/stream:
     parameters:
-      - $ref: '#/components/parameters/SummaryIdPath'
+      - $ref: "#/components/parameters/SummaryIdPath"
 
     get:
       tags: [summaries]
@@ -948,15 +962,15 @@ paths:
         data: {"status": "error",     "error": "<ERROR_CODE>"}
         ```
       responses:
-        '200':
+        "200":
           description: SSE 스트림
           content:
             text/event-stream:
               schema:
                 type: string
                 example: 'data: {"status":"completed","summary_id":"summ_abc"}\n\n'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   # ════════════════════════════════════════════════════════════════════════════
   # NOTIFICATIONS
@@ -972,15 +986,15 @@ paths:
         - **타임아웃**: 5분 (이후 `{"type": "timeout"}` 전송)
         - 페이로드는 `NotificationResponse`와 동일 + (`type`/`category` 포함)
       responses:
-        '200':
+        "200":
           description: SSE 스트림
           content:
             text/event-stream:
               schema:
                 type: string
                 example: 'data: {"id":"noti_abc","type":"success","category":"summary","title":"...","message":"..."}\n\n'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /notifications:
     get:
@@ -991,13 +1005,14 @@ paths:
           name: unreadOnly
           schema: { type: boolean, default: false }
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseNotificationList' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema:
+                { $ref: "#/components/schemas/ApiResponseNotificationList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
     delete:
       tags: [notifications]
@@ -1008,64 +1023,64 @@ paths:
           schema: { type: boolean, default: false }
           description: true면 읽은 알림만 삭제, false면 전체 삭제
       responses:
-        '200':
+        "200":
           description: 삭제 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /notifications/read-all:
     patch:
       tags: [notifications]
       summary: 모든 알림 읽음 처리
       responses:
-        '200':
+        "200":
           description: 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /notifications/{notification_id}/read:
     parameters:
-      - $ref: '#/components/parameters/NotificationIdPath'
+      - $ref: "#/components/parameters/NotificationIdPath"
 
     patch:
       tags: [notifications]
       summary: 단일 알림 읽음 처리
       responses:
-        '200':
+        "200":
           description: 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - NOTIFICATION_NOT_FOUND
 
   /notifications/{notification_id}:
     parameters:
-      - $ref: '#/components/parameters/NotificationIdPath'
+      - $ref: "#/components/parameters/NotificationIdPath"
 
     delete:
       tags: [notifications]
       summary: 단일 알림 삭제
       responses:
-        '200':
+        "200":
           description: 삭제 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - NOTIFICATION_NOT_FOUND
 
@@ -1078,13 +1093,13 @@ paths:
       tags: [settings]
       summary: 유저 설정 조회
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSettings' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseSettings" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
     put:
       tags: [settings]
@@ -1093,7 +1108,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UpdateSettingsRequest' }
+            schema: { $ref: "#/components/schemas/UpdateSettingsRequest" }
             example:
               locale: ko
               autoSummaryWeekly: true
@@ -1101,14 +1116,14 @@ paths:
               autoSummaryYearly: false
               notificationRetentionDays: 30
       responses:
-        '200':
+        "200":
           description: 수정 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseSettings' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseSettings" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
 
   /settings/country:
     patch:
@@ -1132,23 +1147,23 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UpdateCountryRequest' }
+            schema: { $ref: "#/components/schemas/UpdateCountryRequest" }
             examples:
-              korea:    { value: { country: KR } }
-              japan:    { value: { country: JP } }
-              us_la:    { value: { country: US, timezone: America/Los_Angeles } }
-              brazil:   { value: { country: BR, timezone: America/Sao_Paulo } }
+              korea: { value: { country: KR } }
+              japan: { value: { country: JP } }
+              us_la: { value: { country: US, timezone: America/Los_Angeles } }
+              brazil: { value: { country: BR, timezone: America/Sao_Paulo } }
       responses:
-        '200':
+        "200":
           description: 수정 성공 (timezone 포함된 user 응답)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseUser' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseUser" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_COUNTRY_INVALID
         - AUTH_COUNTRY_TIMEZONE_REQUIRED
@@ -1170,19 +1185,53 @@ paths:
           in: path
           required: true
           description: ISO 3166-1 alpha-2 국가 코드 (대소문자 무관)
-          schema: { type: string, pattern: '^[A-Za-z]{2}$' }
+          schema: { type: string, pattern: "^[A-Za-z]{2}$" }
       responses:
-        '200':
+        "200":
           description: 국가의 timezone 옵션
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseCountryTimezones' }
+              schema:
+                { $ref: "#/components/schemas/ApiResponseCountryTimezones" }
               examples:
-                kr: { value: { status: success, code: OK, data: { country: KR, timezones: [Asia/Seoul], multi: false } } }
-                us: { value: { status: success, code: OK, data: { country: US, timezones: [America/New_York, America/Chicago, America/Denver, America/Los_Angeles, "..."], multi: true } } }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+                kr:
+                  {
+                    value:
+                      {
+                        status: success,
+                        code: OK,
+                        data:
+                          {
+                            country: KR,
+                            timezones: [Asia/Seoul],
+                            multi: false,
+                          },
+                      },
+                  }
+                us:
+                  {
+                    value:
+                      {
+                        status: success,
+                        code: OK,
+                        data:
+                          {
+                            country: US,
+                            timezones:
+                              [
+                                America/New_York,
+                                America/Chicago,
+                                America/Denver,
+                                America/Los_Angeles,
+                                "...",
+                              ],
+                            multi: true,
+                          },
+                      },
+                  }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_COUNTRY_INVALID
 
@@ -1197,20 +1246,20 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UpdateTimezoneRequest' }
+            schema: { $ref: "#/components/schemas/UpdateTimezoneRequest" }
             example:
               timezone: America/Los_Angeles
       responses:
-        '200':
+        "200":
           description: 수정 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseUser' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseUser" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - AUTH_TIMEZONE_INVALID
         - USER_NOT_FOUND
@@ -1230,13 +1279,14 @@ paths:
         - `login`: GitHub username (connected=true일 때만)
         - `pushTargetRepositoryId`: 회고 push 대상 저장소 id (없으면 null)
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseConnectionStatus' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema:
+                { $ref: "#/components/schemas/ApiResponseConnectionStatus" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /github/repositories/available:
     get:
@@ -1248,19 +1298,20 @@ paths:
         - `public_repo` scope 기준
         - 페이지네이션 자동 처리 (최대 2000개)
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseAvailableRepoList' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '429':
-          $ref: '#/components/responses/RateLimited_429'
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable_503'
+              schema:
+                { $ref: "#/components/schemas/ApiResponseAvailableRepoList" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable_503"
       x-error-codes:
         - GITHUB_CONNECTION_NOT_FOUND
         - GITHUB_TOKEN_INVALID
@@ -1273,13 +1324,13 @@ paths:
       summary: 연결된 저장소 목록 조회
       description: DB에 저장된, 현재 사용자가 연결한 GitHub 저장소 목록.
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseRepositoryList' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseRepositoryList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
     post:
       tags: [github]
@@ -1291,26 +1342,26 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/LinkRepositoryRequest' }
+            schema: { $ref: "#/components/schemas/LinkRepositoryRequest" }
             example:
               githubRepoId: 1296269
       responses:
-        '201':
+        "201":
           description: 연결 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseRepository' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
-        '409':
-          $ref: '#/components/responses/Conflict_409'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
-        '429':
-          $ref: '#/components/responses/RateLimited_429'
+              schema: { $ref: "#/components/schemas/ApiResponseRepository" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
       x-error-codes:
         - GITHUB_CONNECTION_NOT_FOUND
         - GITHUB_TOKEN_INVALID
@@ -1323,13 +1374,13 @@ paths:
       summary: 모든 저장소 연결 해제
       description: 현재 사용자의 모든 GitHub 저장소 연결을 일괄 삭제.
       responses:
-        '200':
+        "200":
           description: 삭제 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /github/repositories/sync-all:
     post:
@@ -1340,19 +1391,19 @@ paths:
         이후 새로 생긴 repo는 사용자가 다시 호출해야 추가됨 (자동 갱신 없음).
         이미 연결된 저장소는 유지되며, 메타데이터가 바뀌었다면 갱신된다.
       responses:
-        '200':
+        "200":
           description: sync 성공. 응답에는 현재 시점에 연결된 모든 저장소 목록이 담긴다.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseRepositoryList' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '429':
-          $ref: '#/components/responses/RateLimited_429'
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable_503'
+              schema: { $ref: "#/components/schemas/ApiResponseRepositoryList" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable_503"
       x-error-codes:
         - GITHUB_CONNECTION_NOT_FOUND
         - GITHUB_TOKEN_INVALID
@@ -1378,20 +1429,20 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/UpdateRepositoryRequest' }
+            schema: { $ref: "#/components/schemas/UpdateRepositoryRequest" }
             example:
               commitReadEnabled: false
       responses:
-        '200':
+        "200":
           description: 수정 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseRepository' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
+              schema: { $ref: "#/components/schemas/ApiResponseRepository" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
       x-error-codes:
         - GITHUB_REPOSITORY_NOT_FOUND
 
@@ -1399,15 +1450,15 @@ paths:
       tags: [github]
       summary: 단일 저장소 연결 해제
       responses:
-        '200':
+        "200":
           description: 해제 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseEmpty' }
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '404':
-          $ref: '#/components/responses/NotFound_404'
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - GITHUB_REPOSITORY_NOT_FOUND
 
@@ -1449,23 +1500,23 @@ paths:
           name: date
           required: false
           schema: { type: string, format: date, pattern: '^\d{4}-\d{2}-\d{2}$' }
-          example: '2026-06-12'
+          example: "2026-06-12"
           description: 생략 시 user.timezone 기준 오늘
       responses:
-        '200':
+        "200":
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponseCommitList' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
-        '429':
-          $ref: '#/components/responses/RateLimited_429'
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable_503'
+              schema: { $ref: "#/components/schemas/ApiResponseCommitList" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable_503"
       x-error-codes:
         - GITHUB_CONNECTION_NOT_FOUND
         - GITHUB_TOKEN_INVALID
@@ -1506,47 +1557,47 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PushRetrospectiveRequest' }
+            schema: { $ref: "#/components/schemas/PushRetrospectiveRequest" }
             examples:
               daily_ko:
                 summary: 일간 회고 (한국)
                 value:
                   periodType: DAILY
-                  periodKey: '2026-06-12'
+                  periodKey: "2026-06-12"
                   contentMarkdown: '# 오늘의 회고\n...'
               weekly:
                 summary: 주간 회고
                 value:
                   periodType: WEEKLY
-                  periodKey: '2026-06-W2'
+                  periodKey: "2026-06-W2"
                   contentMarkdown: '# 이번 주 회고\n...'
               monthly:
                 summary: 월간 회고
                 value:
                   periodType: MONTHLY
-                  periodKey: '2026-06'
+                  periodKey: "2026-06"
                   contentMarkdown: '# 6월 회고\n...'
               annual:
                 summary: 년간 회고
                 value:
                   periodType: ANNUAL
-                  periodKey: '2026'
+                  periodKey: "2026"
                   contentMarkdown: '# 2026년 회고\n...'
       responses:
-        '201':
+        "201":
           description: push 성공
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ApiResponsePushResult' }
-        '400':
-          $ref: '#/components/responses/BadRequest_400'
-        '401':
-          $ref: '#/components/responses/Unauthorized_401'
-        '422': { $ref: '#/components/responses/ValidationError_422' }
-        '502':
-          $ref: '#/components/responses/BadGateway_502'
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable_503'
+              schema: { $ref: "#/components/schemas/ApiResponsePushResult" }
+        "400":
+          $ref: "#/components/responses/BadRequest_400"
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+        "502":
+          $ref: "#/components/responses/BadGateway_502"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable_503"
       x-error-codes:
         - GITHUB_CONNECTION_NOT_FOUND
         - GITHUB_TOKEN_INVALID
@@ -1557,16 +1608,16 @@ paths:
 
 # ────────────────────────────────────────────────────────────────────────────────
 components:
-# ────────────────────────────────────────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────────
 
   # ════════════════════════════════════════════════════════════════════════════
   securitySchemes:
-  # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════════
     BearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: '`Authorization: Bearer <access_token>` (만료 15분)'
+      description: "`Authorization: Bearer <access_token>` (만료 15분)"
     RefreshCookie:
       type: apiKey
       in: cookie
@@ -1583,7 +1634,7 @@ components:
 
   # ════════════════════════════════════════════════════════════════════════════
   parameters:
-  # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════════
     TodoIdPath:
       in: path
       name: todo_id
@@ -1612,11 +1663,11 @@ components:
       in: path
       name: provider
       required: true
-      schema: { $ref: '#/components/schemas/OAuthProvider' }
+      schema: { $ref: "#/components/schemas/OAuthProvider" }
 
   # ════════════════════════════════════════════════════════════════════════════
   responses:
-  # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════════
     BadRequest_400:
       description: |
         잘못된 요청. 가능한 도메인 코드:
@@ -1629,7 +1680,7 @@ components:
         - `AUTH_PASSWORD_RESET_NOT_ALLOWED` — OAuth 전용 계정은 비밀번호 재설정 불가
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: RETRO_SUMMARY_INVALID_STATE
@@ -1651,7 +1702,7 @@ components:
         - `GITHUB_TOKEN_INVALID` — GitHub OAuth 토큰 만료/폐기 (FE는 GitHub OAuth 재인증 유도)
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: AUTH_TOKEN_EXPIRED
@@ -1664,7 +1715,7 @@ components:
         - `AUTH_SESSION_NOT_FOUND` — 폐기 대상 sessionId 가 본인 소유가 아니거나 이미 만료됨
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: TODO_NOT_FOUND
@@ -1682,7 +1733,7 @@ components:
         - `AUTH_OAUTH_PROVIDER_ALREADY_LINKED` — 현재 사용자가 같은 provider에 다른 계정으로 이미 연결됨
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: USER_EMAIL_DUPLICATED
@@ -1699,7 +1750,7 @@ components:
           - `RETRO_SUMMARY_READINESS_UNSUPPORTED` — readiness 점검은 monthly/annual 만 지원, weekly 는 거부
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: VALIDATION_ERROR
@@ -1711,7 +1762,7 @@ components:
       description: GitHub API rate limit 초과. 잠시 후 재시도.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: GITHUB_RATE_LIMITED
@@ -1723,7 +1774,7 @@ components:
         FE는 사용자에게 "다시 시도" 안내. 자동 retry는 금지(중복 commit 위험).
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: GITHUB_PUSH_FAILED
@@ -1733,7 +1784,7 @@ components:
       description: 외부 서비스(GitHub API) 일시적 장애
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
             code: GITHUB_API_UNAVAILABLE
@@ -1742,7 +1793,7 @@ components:
 
   # ════════════════════════════════════════════════════════════════════════════
   schemas:
-  # ════════════════════════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════════════════
 
     # ── 공통 래퍼 ────────────────────────────────────────────────────────────
     ApiResponseEmpty:
@@ -1750,8 +1801,8 @@ components:
       required: [status, code, data]
       properties:
         status: { type: string, enum: [success, accepted] }
-        code:   { type: string, example: OK }
-        data:   { type: 'null' }
+        code: { type: string, example: OK }
+        data: { type: "null" }
 
     ErrorResponse:
       type: object
@@ -1761,13 +1812,13 @@ components:
         code:
           type: string
           description: 도메인 에러 코드 (예 `AUTH_TOKEN_EXPIRED`, `TODO_NOT_FOUND`, `VALIDATION_ERROR`)
-        data: { type: 'null' }
+        data: { type: "null" }
         details:
           type: array
           items:
             type: object
             properties:
-              field:   { type: string }
+              field: { type: string }
               message: { type: string }
 
     # ── Enum 정의 ───────────────────────────────────────────────────────────
@@ -1815,19 +1866,19 @@ components:
         email: { type: string, format: email }
         code:
           type: string
-          pattern: '^[A-Z0-9]{6}$'
+          pattern: "^[A-Z0-9]{6}$"
           description: 영문 대문자 또는 숫자 6자리 (서버에서 strip + upper 정규화 후 검증)
 
     RegisterRequest:
       type: object
       required: [email, password, passwordConfirm, country]
       properties:
-        email:            { type: string, format: email }
-        password:         { type: string, minLength: 8 }
-        passwordConfirm:  { type: string, minLength: 8 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8 }
+        passwordConfirm: { type: string, minLength: 8 }
         country:
           type: string
-          pattern: '^[A-Z]{2}$'
+          pattern: "^[A-Z]{2}$"
           description: |
             ISO 3166-1 alpha-2 국가 코드 (전 249개국 지원, pycountry 기반).
             예: `KR`, `US`, `JP`. 대소문자/공백은 BE 가 정규화.
@@ -1843,7 +1894,7 @@ components:
       type: object
       required: [email, password]
       properties:
-        email:    { type: string, format: email }
+        email: { type: string, format: email }
         password: { type: string }
 
     UpdateProfileRequest:
@@ -1857,7 +1908,7 @@ components:
       properties:
         country:
           type: string
-          pattern: '^[A-Z]{2}$'
+          pattern: "^[A-Z]{2}$"
           description: ISO 3166-1 alpha-2 국가 코드 (전 249개국 지원)
         timezone:
           type: string
@@ -1872,7 +1923,7 @@ components:
       properties:
         country:
           type: string
-          pattern: '^[A-Z]{2}$'
+          pattern: "^[A-Z]{2}$"
           description: ISO 3166-1 alpha-2 국가 코드 (전 249개국 지원)
         timezone:
           type: string
@@ -1894,7 +1945,7 @@ components:
       type: object
       required: [country, timezones, multi]
       properties:
-        country:   { type: string, pattern: '^[A-Z]{2}$' }
+        country: { type: string, pattern: "^[A-Z]{2}$" }
         timezones:
           type: array
           items: { type: string }
@@ -1905,10 +1956,10 @@ components:
 
     ApiResponseCountryTimezones:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/CountryTimezonesResponse' }
+            data: { $ref: "#/components/schemas/CountryTimezonesResponse" }
 
     RequestPasswordResetRequest:
       type: object
@@ -1943,16 +1994,16 @@ components:
       type: object
       required: [id, email, country, timezone]
       properties:
-        id:       { type: string }
-        email:    { type: string, format: email }
+        id: { type: string }
+        email: { type: string, format: email }
         country:
           type: string
-          pattern: '^[A-Z]{2}$'
+          pattern: "^[A-Z]{2}$"
           example: KR
         region:
           type: string
           nullable: true
-          pattern: '^[A-Z]{2}-[A-Z0-9]{1,3}$'
+          pattern: "^[A-Z]{2}-[A-Z0-9]{1,3}$"
           example: null
         timezone:
           type: string
@@ -1961,17 +2012,17 @@ components:
 
     ApiResponseToken:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/TokenResponse' }
+            data: { $ref: "#/components/schemas/TokenResponse" }
 
     ApiResponseUser:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/UserResponse' }
+            data: { $ref: "#/components/schemas/UserResponse" }
 
     OAuthLinkInitResponse:
       type: object
@@ -1986,23 +2037,35 @@ components:
 
     ApiResponseOAuthLinkInit:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/OAuthLinkInitResponse' }
+            data: { $ref: "#/components/schemas/OAuthLinkInitResponse" }
 
     SessionResponse:
       type: object
       required: [sessionId, issuedAt, lastUsedAt, rotationCounter, isCurrent]
       properties:
-        sessionId:        { type: string }
-        deviceLabel:      { type: string, nullable: true, description: "User-Agent 파싱 결과 (예: 'Chrome on Windows')" }
-        deviceInfo:       { type: string, nullable: true, description: "User-Agent 원문" }
-        ipPrefix:         { type: string, nullable: true, description: "IPv4 /24 또는 IPv6 /48 prefix. 통계용." }
-        issuedAt:         { type: string, format: date-time }
-        lastUsedAt:       { type: string, format: date-time }
-        rotationCounter:  { type: integer, description: "이 세션에서 발생한 refresh 횟수" }
-        isCurrent:        { type: boolean, description: "이 요청을 보낸 세션 여부" }
+        sessionId: { type: string }
+        deviceLabel:
+          {
+            type: string,
+            nullable: true,
+            description: "User-Agent 파싱 결과 (예: 'Chrome on Windows')",
+          }
+        deviceInfo:
+          { type: string, nullable: true, description: "User-Agent 원문" }
+        ipPrefix:
+          {
+            type: string,
+            nullable: true,
+            description: "IPv4 /24 또는 IPv6 /48 prefix. 통계용.",
+          }
+        issuedAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time }
+        rotationCounter:
+          { type: integer, description: "이 세션에서 발생한 refresh 횟수" }
+        isCurrent: { type: boolean, description: "이 요청을 보낸 세션 여부" }
 
     SessionListResponse:
       type: object
@@ -2010,14 +2073,14 @@ components:
       properties:
         sessions:
           type: array
-          items: { $ref: '#/components/schemas/SessionResponse' }
+          items: { $ref: "#/components/schemas/SessionResponse" }
 
     ApiResponseSessionList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/SessionListResponse' }
+            data: { $ref: "#/components/schemas/SessionListResponse" }
 
     RevokeOthersResponse:
       type: object
@@ -2027,76 +2090,87 @@ components:
 
     ApiResponseRevokeOthers:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/RevokeOthersResponse' }
+            data: { $ref: "#/components/schemas/RevokeOthersResponse" }
 
     # ── Todo ───────────────────────────────────────────────────────────────
     TodoCreateRequest:
       type: object
       required: [title, date_key]
       properties:
-        title:       { type: string }
-        date_key:    { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+        title: { type: string }
+        date_key: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
         description: { type: string, default: "" }
         status:
-          $ref: '#/components/schemas/TodoStatus'
+          $ref: "#/components/schemas/TodoStatus"
           default: not-start
 
     TodoUpdateRequest:
       type: object
       properties:
-        title:       { type: string, nullable: true }
-        status:      { $ref: '#/components/schemas/TodoStatus', nullable: true }
+        title: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/TodoStatus", nullable: true }
         description: { type: string, nullable: true }
-        date_key:    { type: string, pattern: '^\d{4}-\d{2}-\d{2}$', nullable: true }
+        date_key:
+          { type: string, pattern: '^\d{4}-\d{2}-\d{2}$', nullable: true }
 
     TodoResponse:
       type: object
-      required: [id, user_id, title, status, date_key, description, completed, created_at]
+      required:
+        [
+          id,
+          user_id,
+          title,
+          status,
+          date_key,
+          description,
+          completed,
+          created_at,
+        ]
       properties:
-        id:           { type: string }
-        user_id:      { type: string }
-        title:        { type: string }
-        status:       { $ref: '#/components/schemas/TodoStatus' }
-        date_key:     { type: string }
-        description:  { type: string }
-        completed:    { type: boolean, description: 'status == "done"' }
-        created_at:   { type: string, format: date-time }
-        updated_at:   { type: string, format: date-time, nullable: true }
+        id: { type: string }
+        user_id: { type: string }
+        title: { type: string }
+        status: { $ref: "#/components/schemas/TodoStatus" }
+        date_key: { type: string }
+        description: { type: string }
+        completed: { type: boolean, description: 'status == "done"' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
         completed_at: { type: string, format: date-time, nullable: true }
 
     ApiResponseTodo:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/TodoResponse' }
+            data: { $ref: "#/components/schemas/TodoResponse" }
 
     ApiResponseTodoList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
             data:
               type: array
-              items: { $ref: '#/components/schemas/TodoResponse' }
+              items: { $ref: "#/components/schemas/TodoResponse" }
 
     # ── Entry ──────────────────────────────────────────────────────────────
     EntryCreateRequest:
       type: object
       required: [date_key, title]
       properties:
-        date_key:   { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
-        title:      { type: string }
-        content:    { type: string, default: "" }
+        date_key: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+        title: { type: string }
+        content: { type: string, default: "" }
         retro_type:
-          $ref: '#/components/schemas/RetroType'
+          $ref: "#/components/schemas/RetroType"
           default: daily
 
     EntryUpsertRequest:
-      $ref: '#/components/schemas/EntryCreateRequest'
+      $ref: "#/components/schemas/EntryCreateRequest"
 
     GithubPushResponse:
       type: object
@@ -2106,27 +2180,27 @@ components:
         — 같은 period 에 entry/summary 가 같이 있으면 둘 다 동일한 push 레코드를 가리킨다.
         (GitHub 측 파일이 단일이므로 의도된 동작.)
       properties:
-        pushedAt:           { type: string, format: date-time }
-        commitSha:          { type: string }
-        htmlUrl:            { type: string, format: uri }
+        pushedAt: { type: string, format: date-time }
+        commitSha: { type: string }
+        htmlUrl: { type: string, format: uri }
         path:
           type: string
           description: 저장소 내 파일 경로 (예 'daily/2026-06-08.md')
-        repositoryFullName: { type: string, example: 'owner/archive' }
+        repositoryFullName: { type: string, example: "owner/archive" }
 
     EntryResponse:
       type: object
       required: [id, user_id, date_key, title, content, retro_type, created_at]
       properties:
-        id:         { type: string }
-        user_id:    { type: string }
-        date_key:   { type: string }
-        title:      { type: string }
-        content:    { type: string }
-        retro_type: { $ref: '#/components/schemas/RetroType' }
+        id: { type: string }
+        user_id: { type: string }
+        date_key: { type: string }
+        title: { type: string }
+        content: { type: string }
+        retro_type: { $ref: "#/components/schemas/RetroType" }
         githubPush:
           allOf:
-            - $ref: '#/components/schemas/GithubPushResponse'
+            - $ref: "#/components/schemas/GithubPushResponse"
           nullable: true
           description: 해당 (retro_type, date_key) 기반 period 에 push 된 적이 없으면 null
         created_at: { type: string, format: date-time }
@@ -2134,65 +2208,74 @@ components:
 
     ApiResponseEntry:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/EntryResponse' }
+            data: { $ref: "#/components/schemas/EntryResponse" }
 
     ApiResponseEntryList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
             data:
               type: array
-              items: { $ref: '#/components/schemas/EntryResponse' }
+              items: { $ref: "#/components/schemas/EntryResponse" }
 
     # ── Summary ────────────────────────────────────────────────────────────
     SummaryContentResponse:
       type: object
       properties:
         achievements: { type: array, items: { type: string } }
-        challenges:   { type: array, items: { type: string } }
-        learnings:    { type: array, items: { type: string } }
-        next_focus:   { type: array, items: { type: string } }
+        challenges: { type: array, items: { type: string } }
+        learnings: { type: array, items: { type: string } }
+        next_focus: { type: array, items: { type: string } }
 
     SummaryResponse:
       type: object
-      required: [id, user_id, summary_type, period_start, period_end, status, created_at]
+      required:
+        [
+          id,
+          user_id,
+          summary_type,
+          period_start,
+          period_end,
+          status,
+          created_at,
+        ]
       properties:
-        id:           { type: string }
-        user_id:      { type: string }
-        summary_type: { $ref: '#/components/schemas/SummaryType' }
+        id: { type: string }
+        user_id: { type: string }
+        summary_type: { $ref: "#/components/schemas/SummaryType" }
         period_start: { type: string, format: date }
-        period_end:   { type: string, format: date }
-        status:       { $ref: '#/components/schemas/SummaryStatus' }
+        period_end: { type: string, format: date }
+        status: { $ref: "#/components/schemas/SummaryStatus" }
         content:
-          $ref: '#/components/schemas/SummaryContentResponse'
+          $ref: "#/components/schemas/SummaryContentResponse"
           nullable: true
         githubPush:
           allOf:
-            - $ref: '#/components/schemas/GithubPushResponse'
+            - $ref: "#/components/schemas/GithubPushResponse"
           nullable: true
           description: 해당 summary 의 (summary_type, period_start) 기반 period 에 push 된 적이 없으면 null
-        created_at:   { type: string, format: date-time }
-        updated_at:   { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time, nullable: true }
 
     ApiResponseSummary:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/SummaryResponse' }
+            data: { $ref: "#/components/schemas/SummaryResponse" }
 
     ApiResponseSummaryList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
             data:
               type: array
-              items: { $ref: '#/components/schemas/SummaryResponse' }
+              items: { $ref: "#/components/schemas/SummaryResponse" }
 
     SummaryReadinessResponse:
       type: object
@@ -2209,8 +2292,8 @@ components:
         summaryType:
           type: string
           enum: [monthly, annual]
-        periodStart:        { type: string, format: date }
-        periodEnd:          { type: string, format: date }
+        periodStart: { type: string, format: date }
+        periodEnd: { type: string, format: date }
         expectedUnits:
           type: integer
           description: monthly = 그 달의 일수, annual = 12
@@ -2233,32 +2316,32 @@ components:
 
     ApiResponseSummaryReadiness:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/SummaryReadinessResponse' }
+            data: { $ref: "#/components/schemas/SummaryReadinessResponse" }
 
     # ── Notification ───────────────────────────────────────────────────────
     NotificationResponse:
       type: object
       required: [id, type, category, title, message, is_read, created_at]
       properties:
-        id:         { type: string }
-        type:       { $ref: '#/components/schemas/NotificationType' }
-        category:   { $ref: '#/components/schemas/NotificationCategory' }
-        title:      { type: string }
-        message:    { type: string }
-        is_read:    { type: boolean }
+        id: { type: string }
+        type: { $ref: "#/components/schemas/NotificationType" }
+        category: { $ref: "#/components/schemas/NotificationCategory" }
+        title: { type: string }
+        message: { type: string }
+        is_read: { type: boolean }
         created_at: { type: string, format: date-time }
 
     ApiResponseNotificationList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
             data:
               type: array
-              items: { $ref: '#/components/schemas/NotificationResponse' }
+              items: { $ref: "#/components/schemas/NotificationResponse" }
 
     # ── Settings ───────────────────────────────────────────────────────────
     GitHubSettingsBlock:
@@ -2283,9 +2366,9 @@ components:
           type: string
           maxLength: 10
           default: ko
-        autoSummaryWeekly:         { type: boolean, default: false }
-        autoSummaryMonthly:        { type: boolean, default: false }
-        autoSummaryYearly:         { type: boolean, default: false }
+        autoSummaryWeekly: { type: boolean, default: false }
+        autoSummaryMonthly: { type: boolean, default: false }
+        autoSummaryYearly: { type: boolean, default: false }
         notificationRetentionDays:
           type: integer
           minimum: 1
@@ -2296,30 +2379,38 @@ components:
           format: date-time
           nullable: true
         github:
-          $ref: '#/components/schemas/GitHubSettingsBlock'
+          $ref: "#/components/schemas/GitHubSettingsBlock"
 
     SettingsResponse:
       type: object
-      required: [locale, autoSummaryWeekly, autoSummaryMonthly, autoSummaryYearly, notificationRetentionDays, github]
+      required:
+        [
+          locale,
+          autoSummaryWeekly,
+          autoSummaryMonthly,
+          autoSummaryYearly,
+          notificationRetentionDays,
+          github,
+        ]
       properties:
-        locale:                    { type: string }
-        autoSummaryWeekly:         { type: boolean }
-        autoSummaryMonthly:        { type: boolean }
-        autoSummaryYearly:         { type: boolean }
+        locale: { type: string }
+        autoSummaryWeekly: { type: boolean }
+        autoSummaryMonthly: { type: boolean }
+        autoSummaryYearly: { type: boolean }
         notificationRetentionDays: { type: integer }
         lastScheduleCheckAt:
           type: string
           format: date-time
           nullable: true
         github:
-          $ref: '#/components/schemas/GitHubSettingsBlock'
+          $ref: "#/components/schemas/GitHubSettingsBlock"
 
     ApiResponseSettings:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/SettingsResponse' }
+            data: { $ref: "#/components/schemas/SettingsResponse" }
 
     # ── GitHub Repository ──────────────────────────────────────────────────
     LinkRepositoryRequest:
@@ -2334,22 +2425,38 @@ components:
 
     RepositoryResponse:
       type: object
-      required: [id, githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl, commitReadEnabled, createdAt]
+      required:
+        [
+          id,
+          githubRepoId,
+          owner,
+          name,
+          fullName,
+          isPrivate,
+          defaultBranch,
+          htmlUrl,
+          commitReadEnabled,
+          createdAt,
+        ]
       properties:
-        id:                { type: string, description: 백엔드에서 발급한 연결 ID (`ghrepo_...`) }
-        githubRepoId:      { type: integer, format: int64 }
-        owner:             { type: string }
-        name:              { type: string }
-        fullName:          { type: string, example: octocat/Hello-World }
-        isPrivate:         { type: boolean }
-        defaultBranch:     { type: string, example: main }
-        htmlUrl:           { type: string, format: uri }
+        id:
+          {
+            type: string,
+            description: 백엔드에서 발급한 연결 ID (`ghrepo_...`),
+          }
+        githubRepoId: { type: integer, format: int64 }
+        owner: { type: string }
+        name: { type: string }
+        fullName: { type: string, example: octocat/Hello-World }
+        isPrivate: { type: boolean }
+        defaultBranch: { type: string, example: main }
+        htmlUrl: { type: string, format: uri }
         commitReadEnabled:
           type: boolean
           default: true
           description: 회고 화면 "오늘의 커밋" 집계 대상 여부 (PATCH로 토글)
-        createdAt:         { type: string, format: date-time }
-        updatedAt:         { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, nullable: true }
 
     UpdateRepositoryRequest:
       type: object
@@ -2359,40 +2466,42 @@ components:
 
     AvailableRepositoryResponse:
       type: object
-      required: [githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl]
+      required:
+        [githubRepoId, owner, name, fullName, isPrivate, defaultBranch, htmlUrl]
       properties:
-        githubRepoId:   { type: integer, format: int64 }
-        owner:          { type: string }
-        name:           { type: string }
-        fullName:       { type: string }
-        isPrivate:      { type: boolean }
-        defaultBranch:  { type: string }
-        htmlUrl:        { type: string, format: uri }
+        githubRepoId: { type: integer, format: int64 }
+        owner: { type: string }
+        name: { type: string }
+        fullName: { type: string }
+        isPrivate: { type: boolean }
+        defaultBranch: { type: string }
+        htmlUrl: { type: string, format: uri }
 
     ApiResponseRepository:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/RepositoryResponse' }
+            data: { $ref: "#/components/schemas/RepositoryResponse" }
 
     ApiResponseRepositoryList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
             data:
               type: array
-              items: { $ref: '#/components/schemas/RepositoryResponse' }
+              items: { $ref: "#/components/schemas/RepositoryResponse" }
 
     ApiResponseAvailableRepoList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
             data:
               type: array
-              items: { $ref: '#/components/schemas/AvailableRepositoryResponse' }
+              items:
+                { $ref: "#/components/schemas/AvailableRepositoryResponse" }
 
     # ── GitHub Connection ──────────────────────────────────────────────────
     ConnectionStatusResponse:
@@ -2415,32 +2524,33 @@ components:
 
     ApiResponseConnectionStatus:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/ConnectionStatusResponse' }
+            data: { $ref: "#/components/schemas/ConnectionStatusResponse" }
 
     # ── GitHub Commits ─────────────────────────────────────────────────────
     CommitResponse:
       type: object
-      required: [repositoryId, fullName, sha, message, htmlUrl, author, committedAt]
+      required:
+        [repositoryId, fullName, sha, message, htmlUrl, author, committedAt]
       properties:
         repositoryId: { type: string, description: 백엔드 저장소 연결 ID }
-        fullName:     { type: string, example: octocat/Hello-World }
-        sha:          { type: string, example: 8f23c41 }
+        fullName: { type: string, example: octocat/Hello-World }
+        sha: { type: string, example: 8f23c41 }
         message:
           type: string
           description: 커밋 메시지 첫 줄만 (서버에서 200자 자름)
-        htmlUrl:      { type: string, format: uri }
-        author:       { type: string, description: 작성자 GitHub login }
-        committedAt:  { type: string, format: date-time }
+        htmlUrl: { type: string, format: uri }
+        author: { type: string, description: 작성자 GitHub login }
+        committedAt: { type: string, format: date-time }
 
     FailedRepositoryResponse:
       type: object
       required: [repositoryId, fullName, reason]
       properties:
         repositoryId: { type: string, description: 백엔드 저장소 연결 ID }
-        fullName:     { type: string, example: octocat/Hello-World }
+        fullName: { type: string, example: octocat/Hello-World }
         reason:
           type: string
           enum: [not_found, unknown]
@@ -2454,17 +2564,17 @@ components:
       properties:
         commits:
           type: array
-          items: { $ref: '#/components/schemas/CommitResponse' }
+          items: { $ref: "#/components/schemas/CommitResponse" }
         failedRepositories:
           type: array
-          items: { $ref: '#/components/schemas/FailedRepositoryResponse' }
+          items: { $ref: "#/components/schemas/FailedRepositoryResponse" }
 
     ApiResponseCommitList:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/CommitListResponse' }
+            data: { $ref: "#/components/schemas/CommitListResponse" }
 
     # ── GitHub Retrospective Push ──────────────────────────────────────────
     PushRetrospectiveRequest:
@@ -2493,12 +2603,17 @@ components:
       required: [commitSha, htmlUrl, path]
       properties:
         commitSha: { type: string, example: 8f23c41abcd... }
-        htmlUrl:   { type: string, format: uri, description: GitHub 상 파일 또는 커밋 링크 }
-        path:      { type: string, example: 일간/2026-06-12 회고록.md }
+        htmlUrl:
+          {
+            type: string,
+            format: uri,
+            description: GitHub 상 파일 또는 커밋 링크,
+          }
+        path: { type: string, example: 일간/2026-06-12 회고록.md }
 
     ApiResponsePushResult:
       allOf:
-        - $ref: '#/components/schemas/ApiResponseEmpty'
+        - $ref: "#/components/schemas/ApiResponseEmpty"
         - type: object
           properties:
-            data: { $ref: '#/components/schemas/PushResultResponse' }
+            data: { $ref: "#/components/schemas/PushResultResponse" }
