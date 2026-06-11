@@ -80,11 +80,41 @@ from app.retrospective.application.use_cases.get_summary import GetSummaryUseCas
 from app.retrospective.application.use_cases.get_summary_readiness import (
     GetSummaryReadinessUseCase,
 )
+from app.retrospective.application.use_cases.create_summary_template import (
+    CreateSummaryTemplateUseCase,
+)
+from app.retrospective.application.use_cases.delete_summary_template import (
+    DeleteSummaryTemplateUseCase,
+)
+from app.retrospective.application.use_cases.get_summary_template import (
+    GetSummaryTemplateUseCase,
+)
+from app.retrospective.application.use_cases.get_summary_usage import (
+    GetSummaryUsageUseCase,
+)
+from app.retrospective.application.use_cases.list_summary_templates import (
+    ListSummaryTemplatesUseCase,
+)
 from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
+from app.retrospective.application.use_cases.set_active_summary_template import (
+    SetActiveSummaryTemplateUseCase,
+)
+from app.retrospective.application.use_cases.update_summary_template import (
+    UpdateSummaryTemplateUseCase,
+)
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
-from app.retrospective.domain.repositories.repository import IJournalEntryRepository, IRetroSummaryRepository
+from app.retrospective.domain.repositories.repository import (
+    IJournalEntryRepository,
+    IRetroSummaryRepository,
+    IUserSummaryTemplateRepository,
+)
+from app.retrospective.infrastructure.cache.summary_rate_limiter import SummaryRateLimiter
 from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import JournalEntryRepository
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import RetroSummaryRepository
+from app.retrospective.infrastructure.persistence.repositories.summary_template_repo import (
+    UserSummaryTemplateRepository,
+)
+from app.shared.infrastructure.config.retrospective import RetrospectiveConfig
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
@@ -165,6 +195,15 @@ class AppProvider(Provider):
     def github_api_client(self) -> GitHubApiClient:
         return GitHubApiClient()
 
+    @provide
+    def summary_rate_limiter(self, config: AppConfig) -> SummaryRateLimiter:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return SummaryRateLimiter(redis)
+
+    @provide
+    def retrospective_config(self, config: AppConfig) -> RetrospectiveConfig:
+        return config.retrospective
+
 
 class RequestProvider(Provider):
     """REQUEST scope — 요청마다 생성·소멸하는 의존성."""
@@ -195,6 +234,12 @@ class RequestProvider(Provider):
     @provide
     def retro_summary_repo(self, session: AsyncSession) -> IRetroSummaryRepository:
         return RetroSummaryRepository(session)
+
+    @provide
+    def summary_template_repo(
+        self, session: AsyncSession
+    ) -> IUserSummaryTemplateRepository:
+        return UserSummaryTemplateRepository(session)
 
     @provide
     def notification_repo(self, session: AsyncSession) -> INotificationRepository:
@@ -480,9 +525,59 @@ class RequestProvider(Provider):
 
     @provide
     def request_summary_use_case(
-        self, summary_repo: IRetroSummaryRepository
+        self,
+        summary_repo: IRetroSummaryRepository,
+        rate_limiter: SummaryRateLimiter,
     ) -> RequestSummaryUseCase:
-        return RequestSummaryUseCase(summary_repo)
+        return RequestSummaryUseCase(summary_repo, rate_limiter)
+
+    @provide
+    def get_summary_usage_use_case(
+        self, rate_limiter: SummaryRateLimiter
+    ) -> GetSummaryUsageUseCase:
+        return GetSummaryUsageUseCase(rate_limiter)
+
+    @provide
+    def create_summary_template_use_case(
+        self,
+        repo: IUserSummaryTemplateRepository,
+        config: RetrospectiveConfig,
+    ) -> CreateSummaryTemplateUseCase:
+        return CreateSummaryTemplateUseCase(repo, config)
+
+    @provide
+    def update_summary_template_use_case(
+        self, repo: IUserSummaryTemplateRepository
+    ) -> UpdateSummaryTemplateUseCase:
+        return UpdateSummaryTemplateUseCase(repo)
+
+    @provide
+    def delete_summary_template_use_case(
+        self,
+        template_repo: IUserSummaryTemplateRepository,
+        settings_repo: IUserSettingsRepository,
+    ) -> DeleteSummaryTemplateUseCase:
+        return DeleteSummaryTemplateUseCase(template_repo, settings_repo)
+
+    @provide
+    def list_summary_templates_use_case(
+        self, repo: IUserSummaryTemplateRepository
+    ) -> ListSummaryTemplatesUseCase:
+        return ListSummaryTemplatesUseCase(repo)
+
+    @provide
+    def get_summary_template_use_case(
+        self, repo: IUserSummaryTemplateRepository
+    ) -> GetSummaryTemplateUseCase:
+        return GetSummaryTemplateUseCase(repo)
+
+    @provide
+    def set_active_summary_template_use_case(
+        self,
+        template_repo: IUserSummaryTemplateRepository,
+        settings_repo: IUserSettingsRepository,
+    ) -> SetActiveSummaryTemplateUseCase:
+        return SetActiveSummaryTemplateUseCase(template_repo, settings_repo)
 
     @provide
     def get_summary_use_case(

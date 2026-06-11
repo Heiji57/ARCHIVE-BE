@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -23,5 +24,8 @@ class UserSettingsModel(Base):
     last_summary_date_local: Mapped[date | None] = mapped_column(Date, nullable=True)
     github_push_target_repository_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("github_repositories.id", ondelete="SET NULL"), nullable=True
+    )
+    active_summary_template_ids: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

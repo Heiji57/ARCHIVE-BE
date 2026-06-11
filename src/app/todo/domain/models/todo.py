@@ -17,6 +17,8 @@ class Todo(BaseEntity):
     date_key: str  # YYYY-MM-DD
     description: str = ""
     completed_at: datetime | None = None
+    start_time: str | None = None  # "HH:mm" 24h
+    end_time: str | None = None  # "HH:mm" 24h
 
     def complete(self) -> None:
         if self.status == TaskStatus.DONE:

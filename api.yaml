@@ -816,17 +816,39 @@ paths:
         Celery worker(`ai_tasks` 큐, priority=9)로 요약 작업을 enqueue하고 **즉시 202를 반환**한다.
 
         - 같은 기간에 PENDING/IN_PROGRESS 요약이 있으면 `409 RETRO_SUMMARY_ALREADY_IN_PROGRESS` 반환
-        - COMPLETED 요약이 있으면 그대로 반환 (재실행하지 않음)
+        - COMPLETED 요약이 있으면 그대로 반환 (재실행하지 않음). `force=true` 면 강제 재생성.
         - FAILED 요약은 자동으로 PENDING 리셋 후 재실행
         - Gemini 호출은 rate_limit `60/min` 적용
 
+        ### 사용자별 호출 한도 (7일 sliding window)
+        실제로 AI 호출이 enqueue 되는 경로(신규 / FAILED 재시도 / force 재생성)에만 카운트.
+        COMPLETED 그대로 반환 / 409 충돌은 카운트하지 않는다.
+
+        | type | 한도 / 7일 |
+        |---|---|
+        | weekly  | 10 |
+        | monthly |  3 |
+        | annual  |  1 |
+
+        한도 초과 시 `429 RETRO_SUMMARY_RATE_LIMIT_EXCEEDED` 반환. 응답 `details[0]` 에
+        `{ summaryType, limit, windowSeconds, retryAfterSeconds }` 포함.
+        FE 가 사전에 잔여 한도를 알고 싶으면 `GET /summaries/usage` 호출.
+
         ### 데이터 소스 정책 (수동·자동 동일)
-        - **weekly** : 그 주의 일일 회고(JournalEntry) 직접 사용
+        - **weekly** : 그 주의 일일 회고(JournalEntry) + 그 주의 **`in-progress` / `done` 상태 todo** 직접 사용.
+          `not-start` todo 는 제외.
         - **monthly**: **하이브리드** — 주마다 weekly 요약 있으면 그것 사용,
           없으면 그 주 entries 첨부. weekly 요약이 있더라도 갱신 이후 추가된 entry 가
           있으면 보강(방식 B) — 데이터 손실 0.
         - **annual** : **2단계 하이브리드** — 월마다 monthly 요약 있으면 그것,
           없으면 그 달의 weekly 요약들로 보강. 둘 다 없으면 해당 월 스킵.
+
+        ### 프롬프트 / 출력 언어 정책
+        - 시스템 지시문은 **영어**로 작성 — LLM 안정성 확보.
+        - 출력 콘텐츠 언어는 사용자 `locale` (PUT /settings) 기준 (`ko` → 한국어, `en` → 영어, 그 외 best-effort).
+        - JSON 키는 항상 영어 (`achievements`, `challenges`, `learnings`, `next_focus`). Gemini `response_schema` 로 형태 강제.
+        - 사용자 템플릿(`autoSummaryTemplates.{weekly|monthly|annual}`)은 스타일 가이드로만 적용되며
+          `<USER_TEMPLATE>` 태그로 격리. JSON 스키마 / 언어 규칙은 사용자 템플릿으로 변경 불가 (시스템 메시지가 명시 거부).
 
         ### 사전 점검 권장
         monthly/annual 생성 전에 `GET /summaries/readiness` 호출 권장 — 데이터가
@@ -843,9 +865,16 @@ paths:
           description: |
             생략 시 직전 기간 자동 계산 (지난 주 월~일 / 지난 달 / 작년).
             지정 시 해당 기간의 시작일 (월요일/1일/1월1일).
+        - in: query
+          name: force
+          schema: { type: boolean, default: false }
+          description: |
+            `true` 면 같은 기간의 COMPLETED 요약이 있어도 강제로 재생성한다 (status 리셋 후 enqueue).
+            기본값 `false` — COMPLETED 면 기존 요약을 그대로 반환.
+            rate limit 카운트 대상.
       responses:
         "202":
-          description: 요청 접수
+          description: 요청 접수 (신규 생성 / FAILED 재시도 / force 재생성)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiResponseSummary" }
@@ -853,9 +882,196 @@ paths:
           $ref: "#/components/responses/Unauthorized_401"
         "409":
           $ref: "#/components/responses/Conflict_409"
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
       x-error-codes:
         - RETRO_SUMMARY_ALREADY_IN_PROGRESS
         - RETRO_SUMMARY_INVALID_STATE
+        - RETRO_SUMMARY_RATE_LIMIT_EXCEEDED
+
+  /summaries/usage:
+    get:
+      tags: [summaries]
+      summary: 사용자별 AI 요약 생성 사용량 조회
+      description: |
+        `POST /summaries/generate` 의 7일 sliding window 사용량을 summary_type 별로 반환.
+
+        FE 가 [회고 생성] 버튼의 활성/비활성, 잔여 횟수 표시, 다음 가능 시각 안내 등에 사용.
+
+        한도가 0 인 type 도 응답에 포함된다 (`used == limit`). `retryAfterSeconds` 는
+        한도가 남아 있으면 `0`, 초과 상태면 가장 오래된 사용량이 윈도우에서 빠지는 시각까지
+        남은 초.
+      responses:
+        "200":
+          description: 사용량
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSummaryUsage" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+
+  /summaries/templates:
+    get:
+      tags: [summary-templates]
+      summary: 사용자 AI 요약 템플릿 목록
+      description: |
+        지정 summary_type 의 사용자 템플릿 목록을 created_at 오름차순으로 반환.
+        각 항목의 `isActive` 는 `user_settings.active_summary_template_ids[type]` 과
+        ID 가 일치하는 단 1개만 true.
+      parameters:
+        - in: query
+          name: type
+          required: true
+          schema: { $ref: "#/components/schemas/SummaryType" }
+      responses:
+        "200":
+          description: 목록
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSummaryTemplateList" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+    post:
+      tags: [summary-templates]
+      summary: 사용자 AI 요약 템플릿 생성
+      description: |
+        지정 summary_type 에 새 템플릿 생성. 다음 정책 적용:
+        - **이름 중복 금지** (같은 `user_id` + `summary_type` 안에서 unique). 위반 시 `409 RETRO_SUMMARY_TEMPLATE_NAME_DUPLICATED`.
+        - **개수 한도**: 한 (user, type) 당 N 개 (기본 5, env `SUMMARY_TEMPLATE_MAX_PER_TYPE`).
+          초과 시 `409 RETRO_SUMMARY_TEMPLATE_LIMIT_REACHED`. 응답 `details[0]` 에
+          `{ summaryType, limit }`.
+        - 생성된 템플릿은 기본적으로 비활성. 활성화하려면 `PUT /settings/auto-summary/active`.
+      parameters:
+        - in: query
+          name: type
+          required: true
+          schema: { $ref: "#/components/schemas/SummaryType" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSummaryTemplateRequest" }
+      responses:
+        "201":
+          description: 생성됨
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSummaryTemplate" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NAME_DUPLICATED
+        - RETRO_SUMMARY_TEMPLATE_LIMIT_REACHED
+
+  /summaries/templates/{templateId}:
+    get:
+      tags: [summary-templates]
+      summary: 단일 템플릿 조회
+      parameters:
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSummaryTemplate" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
+    patch:
+      tags: [summary-templates]
+      summary: 템플릿 수정 (이름·내용)
+      description: |
+        - 이름 변경 시 같은 (user, summary_type) 안에서 중복 금지.
+        - summary_type 변경 불가 — 변경하려면 새 템플릿 생성 후 기존 삭제.
+      parameters:
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateSummaryTemplateRequest" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSummaryTemplate" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
+        - RETRO_SUMMARY_TEMPLATE_NAME_DUPLICATED
+    delete:
+      tags: [summary-templates]
+      summary: 템플릿 삭제
+      description: |
+        **현재 활성으로 지정된 템플릿은 삭제할 수 없다** — 비활성화 후 삭제하거나
+        다른 템플릿을 활성으로 바꾸어야 함. 활성 보호 위반 시 `409 RETRO_SUMMARY_TEMPLATE_IN_USE`.
+      parameters:
+        - in: path
+          name: templateId
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: 삭제됨
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
+        - RETRO_SUMMARY_TEMPLATE_IN_USE
+
+  /settings/auto-summary/active:
+    put:
+      tags: [summary-templates]
+      summary: summary_type 별 활성 템플릿 설정
+      description: |
+        Body 에 명시된 필드만 갱신 — 미전송 필드는 변경 없음. 각 필드의 의미:
+        - 문자열 → 해당 type 의 활성 ID 로 설정. 소유 / 타입 일치 검증 후 적용.
+        - 명시적 `null` → 해당 type 비활성화 → 시스템 기본 템플릿 사용.
+
+        활성 ID 가 가리키는 템플릿이 사라지면 (race 등) AI 자동 요약 생성 시점에
+        시스템 기본으로 자동 fallback.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetActiveSummaryTemplatesRequest" }
+            example:
+              weekly: tmpl_01HXYZ...
+              monthly: null
+      responses:
+        "200":
+          description: ok — 갱신된 SettingsResponse
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSettings" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
 
   /summaries/readiness:
     get:
@@ -1474,7 +1690,11 @@ paths:
 
         ### 규칙
         - **타임존**: 항상 `user.timezone` 기준. 별도 `tz` 쿼리 파라미터를 받지 않는다.
-        - **본인 commit 매칭** (Phase 1): GitHub `?author=` 필터 미사용 — 그 repo 의 모든
+        - **모든 branch 조회**: 이전엔 GitHub 의 default branch only 가 default 동작이라
+          feature/topic branch 의 commit 이 누락됐다. 신정책은 repo 마다 `list_branches`
+          로 모든 branch 를 가져와 branch 별 commit 을 병렬 fetch → commit SHA 로 dedup.
+          IDE 가 feature branch 로 push 한 commit 도 잡힘.
+        - **본인 commit 매칭**: GitHub `?author=` 필터 미사용 — 그 repo 의 모든
           commit 을 받은 뒤 서버사이드 OR 필터로 본인 commit 만 추림.
           매칭 조건 (하나라도 true 면 본인):
           - `commit.author.login == user.github_login`
@@ -1491,6 +1711,7 @@ paths:
           `failedRepositories` 에 포함).
         - **`date` 생략 시**: `user.timezone` 기준 오늘
         - **범위**: `[date 00:00, date+1 00:00)` 사용자 tz → UTC 변환 후 `since`/`until`
+          (GitHub commits API 는 commit 의 **committer.date** 기준 필터링 — push 일시 아님)
 
         ### 에러 분류
         | 상황 | 동작 |
@@ -1724,6 +1945,7 @@ components:
         리소스를 찾을 수 없음. 가능한 코드:
         - 도메인별 NOT_FOUND (`TODO_NOT_FOUND`, `JOURNAL_ENTRY_NOT_FOUND`, `RETRO_SUMMARY_NOT_FOUND`, `NOTIFICATION_NOT_FOUND`, `USER_NOT_FOUND`, `GITHUB_REPOSITORY_NOT_FOUND`)
         - `AUTH_SESSION_NOT_FOUND` — 폐기 대상 sessionId 가 본인 소유가 아니거나 이미 만료됨
+        - `RETRO_SUMMARY_TEMPLATE_NOT_FOUND` — 템플릿이 존재하지 않거나 본인 소유가 아니거나 활성 설정의 키와 summary_type 이 불일치
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1742,6 +1964,9 @@ components:
         - `GITHUB_REPOSITORY_ALREADY_LINKED`
         - `AUTH_OAUTH_ACCOUNT_ALREADY_LINKED` — link 시도한 OAuth 계정이 다른 사용자에 이미 연결됨
         - `AUTH_OAUTH_PROVIDER_ALREADY_LINKED` — 현재 사용자가 같은 provider에 다른 계정으로 이미 연결됨
+        - `RETRO_SUMMARY_TEMPLATE_NAME_DUPLICATED` — 같은 (user, summary_type) 안에서 이름 중복
+        - `RETRO_SUMMARY_TEMPLATE_LIMIT_REACHED` — (user, summary_type) 별 개수 한도 초과. `details[0]` 에 `{summaryType, limit}`
+        - `RETRO_SUMMARY_TEMPLATE_IN_USE` — 활성 지정된 템플릿 삭제 시도
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -1770,15 +1995,23 @@ components:
               - field: email
                 message: value is not a valid email address
     RateLimited_429:
-      description: GitHub API rate limit 초과. 잠시 후 재시도.
+      description: |
+        호출 한도 초과. 가능한 코드:
+        - `GITHUB_RATE_LIMITED` — GitHub API rate limit 초과 (잠시 후 재시도)
+        - `RETRO_SUMMARY_RATE_LIMIT_EXCEEDED` — 사용자별 AI 요약 생성 한도(7일 sliding window) 초과.
+          `details[0]` 에 `{ summaryType, limit, windowSeconds, retryAfterSeconds }` 포함.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
           example:
             status: error
-            code: GITHUB_RATE_LIMITED
+            code: RETRO_SUMMARY_RATE_LIMIT_EXCEEDED
             data: null
-            details: []
+            details:
+              - summaryType: weekly
+                limit: 10
+                windowSeconds: 604800
+                retryAfterSeconds: 12345
     BadGateway_502:
       description: |
         외부 서비스(GitHub) push 실패. sha 충돌 / 권한 / 네트워크 오류 등.
@@ -2117,6 +2350,16 @@ components:
         status:
           $ref: "#/components/schemas/TodoStatus"
           default: not-start
+        start_time:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          nullable: true
+          description: 'optional "HH:mm" 24h. independent of end_time.'
+        end_time:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          nullable: true
+          description: 'optional "HH:mm" 24h. if both provided, must be > start_time.'
 
     TodoUpdateRequest:
       type: object
@@ -2126,6 +2369,16 @@ components:
         description: { type: string, nullable: true }
         date_key:
           { type: string, pattern: '^\d{4}-\d{2}-\d{2}$', nullable: true }
+        start_time:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          nullable: true
+          description: 'omit = unchanged, null = clear, "HH:mm" = set.'
+        end_time:
+          type: string
+          pattern: '^([01]\d|2[0-3]):[0-5]\d$'
+          nullable: true
+          description: 'omit = unchanged, null = clear, "HH:mm" = set. if both fields provided non-null, must be > start_time.'
 
     TodoResponse:
       type: object
@@ -2148,6 +2401,8 @@ components:
         date_key: { type: string }
         description: { type: string }
         completed: { type: boolean, description: 'status == "done"' }
+        start_time: { type: string, nullable: true, description: '"HH:mm" or null' }
+        end_time: { type: string, nullable: true, description: '"HH:mm" or null' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time, nullable: true }
         completed_at: { type: string, format: date-time, nullable: true }
@@ -2332,6 +2587,119 @@ components:
           properties:
             data: { $ref: "#/components/schemas/SummaryReadinessResponse" }
 
+    # ── Summary Template ──────────────────────────────────────────────────
+    CreateSummaryTemplateRequest:
+      type: object
+      required: [name, content]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: 사용자 식별용 이름. 같은 (user, summary_type) 안에서 unique.
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          description: markdown 본문. AI 프롬프트의 `<USER_TEMPLATE>` 블록에 그대로 들어간다.
+
+    UpdateSummaryTemplateRequest:
+      type: object
+      required: [name, content]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+
+    SetActiveSummaryTemplatesRequest:
+      type: object
+      description: |
+        summary_type 별 활성 ID 부분 갱신. 미전송 필드는 변경 없음.
+        명시적 null 은 해당 type 비활성화 (시스템 기본 사용).
+      properties:
+        weekly:  { type: string, nullable: true }
+        monthly: { type: string, nullable: true }
+        annual:  { type: string, nullable: true }
+
+    SummaryTemplateResponse:
+      type: object
+      required:
+        [id, userId, summaryType, name, content, isActive, createdAt]
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        summaryType: { $ref: "#/components/schemas/SummaryType" }
+        name: { type: string }
+        content: { type: string }
+        isActive:
+          type: boolean
+          description: |
+            true 이면 이 템플릿이 user_settings.active_summary_template_ids[type] 으로 지정되어
+            AI 자동 요약 생성 시 사용된다. 한 (user, type) 당 최대 1개.
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, nullable: true }
+
+    ApiResponseSummaryTemplate:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponseEmpty"
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/SummaryTemplateResponse" }
+
+    ApiResponseSummaryTemplateList:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponseEmpty"
+        - type: object
+          properties:
+            data:
+              type: array
+              items: { $ref: "#/components/schemas/SummaryTemplateResponse" }
+
+    UsageStateResponse:
+      type: object
+      required:
+        - summaryType
+        - used
+        - limit
+        - windowSeconds
+        - retryAfterSeconds
+      properties:
+        summaryType: { $ref: "#/components/schemas/SummaryType" }
+        used:
+          type: integer
+          description: 현재 7일 윈도우 안의 사용 횟수
+        limit:
+          type: integer
+          description: 한도. weekly=10, monthly=3, annual=1
+        windowSeconds:
+          type: integer
+          description: rolling window 길이(초). 현재 7일 = 604800
+        retryAfterSeconds:
+          type: integer
+          description: |
+            남은 한도 있으면 0. 초과 상태면 가장 오래된 사용량이 윈도우에서
+            빠지는 시각까지의 남은 초.
+
+    SummaryUsageResponse:
+      type: object
+      required: [weekly, monthly, annual]
+      properties:
+        weekly: { $ref: "#/components/schemas/UsageStateResponse" }
+        monthly: { $ref: "#/components/schemas/UsageStateResponse" }
+        annual: { $ref: "#/components/schemas/UsageStateResponse" }
+
+    ApiResponseSummaryUsage:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponseEmpty"
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/SummaryUsageResponse" }
+
     # ── Notification ───────────────────────────────────────────────────────
     NotificationResponse:
       type: object
@@ -2370,6 +2738,16 @@ components:
             연결 안 된 id 지정 시 `GITHUB_REPOSITORY_NOT_LINKED` (400).
             null로 명시하면 push target 해제.
 
+    ActiveSummaryTemplateIdsBlock:
+      type: object
+      description: |
+        summary_type 별 활성 템플릿 ID. null 이면 시스템 기본 사용.
+        변경은 `PUT /settings/auto-summary/active` 로만 가능 (보안 / 검증 일원화).
+      properties:
+        weekly:  { type: string, nullable: true }
+        monthly: { type: string, nullable: true }
+        annual:  { type: string, nullable: true }
+
     UpdateSettingsRequest:
       type: object
       properties:
@@ -2377,6 +2755,9 @@ components:
           type: string
           maxLength: 10
           default: ko
+          description: |
+            BCP 47 prefix (ko, en, ja 등). AI 자동 요약 출력 언어를 결정한다.
+            매핑 없는 코드는 best-effort 로 SDK 에 전달.
         autoSummaryWeekly: { type: boolean, default: false }
         autoSummaryMonthly: { type: boolean, default: false }
         autoSummaryYearly: { type: boolean, default: false }
@@ -2402,6 +2783,7 @@ components:
           autoSummaryYearly,
           notificationRetentionDays,
           github,
+          activeSummaryTemplateIds,
         ]
       properties:
         locale: { type: string }
@@ -2415,6 +2797,8 @@ components:
           nullable: true
         github:
           $ref: "#/components/schemas/GitHubSettingsBlock"
+        activeSummaryTemplateIds:
+          $ref: "#/components/schemas/ActiveSummaryTemplateIdsBlock"
 
     ApiResponseSettings:
       allOf:

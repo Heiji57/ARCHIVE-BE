@@ -184,6 +184,32 @@ class GitHubApiClient:
         items = response.json()
         return [item["email"] for item in items if item.get("verified")]
 
+    async def list_branches(
+        self,
+        access_token: str,
+        owner: str,
+        name: str,
+    ) -> list[str]:
+        """저장소의 모든 branch 이름 반환."""
+        results: list[str] = []
+        for page in range(1, _MAX_PAGES + 1):
+            response = await self._client.get(
+                f"{_GITHUB_API}/repos/{owner}/{name}/branches",
+                headers=_headers(access_token),
+                params={"per_page": _PAGE_SIZE, "page": page},
+            )
+            # 빈 저장소 → 409
+            if response.status_code == 409:
+                break
+            _raise_for_status(response)
+            items = response.json()
+            if not items:
+                break
+            results.extend(item["name"] for item in items)
+            if len(items) < _PAGE_SIZE:
+                break
+        return results
+
     async def list_commits(
         self,
         access_token: str,
@@ -192,8 +218,12 @@ class GitHubApiClient:
         since_iso: str,
         until_iso: str,
         author_login: str | None = None,
+        sha: str | None = None,
     ) -> list[GitHubCommitData]:
-        """List commits in [since, until) — caller must format ISO 8601 UTC strings."""
+        """List commits in [since, until) — caller must format ISO 8601 UTC strings.
+
+        sha: branch 이름 또는 commit sha. 미지정 시 default branch.
+        """
         results: list[GitHubCommitData] = []
         for page in range(1, _COMMITS_MAX_PAGES + 1):
             params: dict[str, str | int] = {
@@ -204,6 +234,8 @@ class GitHubApiClient:
             }
             if author_login:
                 params["author"] = author_login
+            if sha:
+                params["sha"] = sha
             response = await self._client.get(
                 f"{_GITHUB_API}/repos/{owner}/{name}/commits",
                 headers=_headers(access_token),

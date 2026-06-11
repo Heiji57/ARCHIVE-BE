@@ -42,7 +42,12 @@ from app.retrospective.domain.exceptions.exceptions import (
     RetroSummaryNotFoundException,
     SummaryAlreadyInProgressException,
     SummaryInvalidStateException,
+    SummaryRateLimitExceededException,
     SummaryReadinessUnsupportedException,
+    SummaryTemplateInUseException,
+    SummaryTemplateLimitReachedException,
+    SummaryTemplateNameDuplicatedException,
+    SummaryTemplateNotFoundException,
 )
 from app.shared.domain.exceptions.base import BaseAppException
 from app.todo.domain.exceptions.exceptions import (
@@ -87,6 +92,7 @@ _STATUS_MAP: dict[str, int] = {
     NotificationNotFoundException.code: 404,
     GitHubRepositoryNotFoundException.code: 404,
     SessionNotFoundException.code: 404,
+    SummaryTemplateNotFoundException.code: 404,
     # 409
     UserEmailDuplicatedException.code: 409,
     TodoAlreadyCompletedException.code: 409,
@@ -96,6 +102,9 @@ _STATUS_MAP: dict[str, int] = {
     GitHubRepositoryAlreadyLinkedException.code: 409,
     OAuthAccountAlreadyLinkedException.code: 409,
     OAuthProviderAlreadyLinkedException.code: 409,
+    SummaryTemplateNameDuplicatedException.code: 409,
+    SummaryTemplateLimitReachedException.code: 409,
+    SummaryTemplateInUseException.code: 409,
     # 422
     CountryInvalidException.code: 422,
     CountryTimezoneRequiredException.code: 422,
@@ -103,6 +112,7 @@ _STATUS_MAP: dict[str, int] = {
     SummaryReadinessUnsupportedException.code: 422,
     # 429
     GitHubRateLimitedException.code: 429,
+    SummaryRateLimitExceededException.code: 429,
     # 502
     GitHubPushFailedException.code: 502,
     # 503

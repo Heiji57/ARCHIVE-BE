@@ -1,6 +1,11 @@
 """사용자 tz 기준 특정 날짜의 커밋을 commit_read_enabled 저장소들에서 집계.
 
-매칭 정책 (Phase 1):
+조회 범위 (Phase 2):
+- 저장소의 **모든 branch** 의 commit 을 조회 (default branch 제한 없음).
+- 각 repo: list_branches 로 branch 목록 fetch → branch 별 list_commits 병렬 호출
+  → 모든 결과를 commit sha 로 dedup.
+
+매칭 정책:
 - GitHub `?author=` 필터는 사용 안 함 — 그 repo 의 모든 commit 을 일단 받음
 - 서버사이드 필터: 다음 중 하나라도 매칭되면 본인 commit 으로 간주
     1. commit author 의 GitHub login 이 `creds.login`
@@ -65,6 +70,13 @@ class CommitsByDateResult:
     failed_repositories: list[FailedRepository]
 
 
+_FATAL_EXCEPTIONS = (
+    GitHubTokenInvalidException,
+    GitHubRateLimitedException,
+    GitHubApiUnavailableException,
+)
+
+
 def _is_user_commit(
     commit: GitHubCommitData,
     github_login: str,
@@ -121,29 +133,54 @@ class GetCommitsByDateUseCase:
         if not repos:
             return CommitsByDateResult(commits=[], failed_repositories=[])
 
-        async def fetch(repo) -> tuple[str, str, list[GitHubCommitData]]:
-            # author 필터 없이 모든 commit 을 받아온 뒤 서버사이드 필터링
-            commits = await self._api_client.list_commits(
+        async def fetch_repo_commits(repo) -> tuple[str, str, list[GitHubCommitData]]:
+            """단일 repo 의 모든 branch 에서 commit 수집 + sha dedup."""
+            branches = await self._api_client.list_branches(
                 access_token=creds.access_token,
                 owner=repo.owner,
                 name=repo.name,
-                since_iso=since_iso,
-                until_iso=until_iso,
-                author_login=None,
             )
-            return repo.id, repo.full_name, commits
+            if not branches:
+                return repo.id, repo.full_name, []
+
+            branch_results = await asyncio.gather(
+                *(
+                    self._api_client.list_commits(
+                        access_token=creds.access_token,
+                        owner=repo.owner,
+                        name=repo.name,
+                        since_iso=since_iso,
+                        until_iso=until_iso,
+                        author_login=None,
+                        sha=branch,
+                    )
+                    for branch in branches
+                ),
+                return_exceptions=True,
+            )
+
+            seen: dict[str, GitHubCommitData] = {}
+            for r in branch_results:
+                if isinstance(r, _FATAL_EXCEPTIONS):
+                    raise r
+                if isinstance(r, Exception):
+                    # branch 단위 실패는 repo 전체 실패로 격상 — 상위 핸들러가 처리
+                    raise r
+                for c in r:
+                    if c.sha not in seen:
+                        seen[c.sha] = c
+
+            return repo.id, repo.full_name, list(seen.values())
 
         results = await asyncio.gather(
-            *(fetch(r) for r in repos), return_exceptions=True
+            *(fetch_repo_commits(r) for r in repos), return_exceptions=True
         )
 
         commits: list[CommitItem] = []
         failed: list[FailedRepository] = []
 
         for repo, r in zip(repos, results):
-            if isinstance(r, (GitHubTokenInvalidException,
-                              GitHubRateLimitedException,
-                              GitHubApiUnavailableException)):
+            if isinstance(r, _FATAL_EXCEPTIONS):
                 raise r
 
             if isinstance(r, GitHubRepositoryNotFoundException):

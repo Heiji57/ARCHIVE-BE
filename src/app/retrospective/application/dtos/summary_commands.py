@@ -9,3 +9,4 @@ class RequestSummaryCommand:
     user_id: str
     summary_type: SummaryType
     period_start: date | None = None
+    force: bool = False

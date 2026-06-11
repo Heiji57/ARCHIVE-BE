@@ -1374,19 +1374,23 @@ AI 자동 요약은 **사용자 tz 기준 새벽 1시** 에 트리거.
 4. GitHub credentials 획득 (access_token + login + verified_emails)
    - oauth_connections.provider_login / provider_verified_emails 캐시 우선
    - 둘 중 하나라도 없으면 /user 또는 /user/emails 호출 → DB backfill (lazy)
-5. commit_read_enabled=true 저장소 N개 → asyncio.gather 로 병렬 list_commits
-   - `?author=` 필터 사용하지 않음 — 그 repo 의 모든 commit 을 받음
-6. 각 commit 에 대해 _is_user_commit 으로 본인 매칭 판정 (login OR verified email)
-7. 결과 분류:
+5. commit_read_enabled=true 저장소 N개 → asyncio.gather 로 병렬 fetch_repo_commits
+6. 각 repo:
+   a. list_branches 로 branch 목록 fetch (default branch 제한 없음)
+   b. branch 별 list_commits(sha=branch, ?author=없음) 병렬 호출
+   c. SHA 키로 dedup (여러 branch 에 있는 동일 commit 은 한 번만)
+7. 각 commit 에 대해 _is_user_commit 으로 본인 매칭 판정 (login OR verified email)
+8. 결과 분류:
    - 성공: 매칭된 commit 만 누적
    - GitHubRepositoryNotFoundException: failedRepositories[reason="not_found"]
    - 기타 예외: failedRepositories[reason="unknown"] + structlog warning
    - GitHubTokenInvalid / RateLimited / ApiUnavailable: 전체 raise (한 repo 만 발생해도)
-8. commits 시간 내림차순 정렬 → CommitsByDateResult 반환
+9. commits 시간 내림차순 정렬 → CommitsByDateResult 반환
 ```
 
 #### 정책 결정
 - **public repo only**: OAuth scope 가 `user:email,public_repo` 라 private repo 는 link 자체가 안 됨. 어쩌다 등록돼도 404 → `failedRepositories` 로 사용자에게 노출.
+- **all branches**: 이전엔 GitHub 의 default branch only 가 default 동작이라 feature/topic branch 의 commit 이 누락됐다. 신정책은 `list_branches` 로 모든 branch 를 가져온 뒤 branch 별 `list_commits(sha=branch)` 병렬 호출 → SHA dedup. IDE 가 feature branch 로 push 한 commit 도 잡힘. API 호출 수가 늘지만 (repo 당 ~5배), 인증된 rate limit 5000/h 안에서 안전.
 - **silent skip 금지**: 옛 구현은 단일 repo 실패를 조용히 무시했으나, 신정책은 응답에 `failedRepositories` 로 노출하고 백엔드에도 `github.commits.*` 채널로 warning 로깅.
 - **fatal vs per-repo 구분**: 토큰/제한/외부 가용성 문제는 사용자 전체 흐름 차단(전체 raise) 이 더 유익. 저장소 단위 문제는 다른 결과 보존.
 - **login + verified emails 캐싱**: `oauth_connections.provider_login` (migration 012) + `provider_verified_emails` (migration 014) 에 저장. callback/link/onboarding 시 자동 저장. 구 데이터는 첫 commits 호출 시 lazy backfill.

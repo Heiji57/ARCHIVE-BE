@@ -17,6 +17,8 @@ class TodoModel(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     date_key: Mapped[str] = mapped_column(String(10), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    start_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    end_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

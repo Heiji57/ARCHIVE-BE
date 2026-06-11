@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
-from app.todo.application.dtos.commands import CreateTodoCommand, UpdateTodoCommand
+from app.todo.application.dtos.commands import UNSET, CreateTodoCommand, UpdateTodoCommand
 from app.todo.application.dtos.queries import GetTodosByDateQuery, GetTodosByRangeQuery
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
@@ -60,6 +60,8 @@ async def create_todo(
             date_key=body.date_key,
             description=body.description,
             status=body.status,
+            start_time=body.start_time,
+            end_time=body.end_time,
         )
     )
     return ApiResponse.created(TodoResponse.from_entity(todo))
@@ -76,6 +78,7 @@ async def update_todo(
     use_case: FromDishka[UpdateTodoUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[TodoResponse]:
+    provided = body.model_fields_set
     todo = await use_case.execute(
         UpdateTodoCommand(
             id=todo_id,
@@ -84,6 +87,8 @@ async def update_todo(
             status=body.status,
             description=body.description,
             date_key=body.date_key,
+            start_time=body.start_time if "start_time" in provided else UNSET,
+            end_time=body.end_time if "end_time" in provided else UNSET,
         )
     )
     return ApiResponse.ok(TodoResponse.from_entity(todo))

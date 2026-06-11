@@ -1,4 +1,4 @@
-from app.todo.application.dtos.commands import UpdateTodoCommand
+from app.todo.application.dtos.commands import UNSET, UpdateTodoCommand
 from app.todo.domain.exceptions.exceptions import TodoNotFoundException
 from app.todo.domain.models.todo import Todo
 from app.todo.domain.models.value_objects import TaskStatus
@@ -28,5 +28,11 @@ class UpdateTodoUseCase:
                 todo.start()
             else:
                 todo.status = TaskStatus.NOT_START
+
+        # sentinel 기반: 키가 전송된 경우에만 갱신 (None 도 적용 = clear)
+        if cmd.start_time is not UNSET:
+            todo.start_time = cmd.start_time  # type: ignore[assignment]
+        if cmd.end_time is not UNSET:
+            todo.end_time = cmd.end_time  # type: ignore[assignment]
 
         return await self._todo_repo.save(todo)

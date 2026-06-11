@@ -20,6 +20,8 @@ class CreateTodoUseCase:
             status=TaskStatus(cmd.status),
             date_key=cmd.date_key,
             description=cmd.description,
+            start_time=cmd.start_time,
+            end_time=cmd.end_time,
             created_at=now,
         )
         return await self._todo_repo.save(todo)

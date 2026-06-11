@@ -3,6 +3,7 @@ from datetime import date
 
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.retro_summary import RetroSummary
+from app.retrospective.domain.models.summary_template import UserSummaryTemplate
 from app.retrospective.domain.models.value_objects import SummaryType
 
 
@@ -61,3 +62,31 @@ class IRetroSummaryRepository(ABC):
     async def find_completed_in_range(
         self, user_id: str, summary_type: SummaryType, from_date: date, to_date: date
     ) -> list[RetroSummary]: ...
+
+
+class IUserSummaryTemplateRepository(ABC):
+    @abstractmethod
+    async def save(self, template: UserSummaryTemplate) -> UserSummaryTemplate: ...
+
+    @abstractmethod
+    async def find_by_id(
+        self, id: str, user_id: str
+    ) -> UserSummaryTemplate | None: ...
+
+    @abstractmethod
+    async def find_by_user_and_type(
+        self, user_id: str, summary_type: SummaryType
+    ) -> list[UserSummaryTemplate]: ...
+
+    @abstractmethod
+    async def find_by_name(
+        self, user_id: str, summary_type: SummaryType, name: str
+    ) -> UserSummaryTemplate | None: ...
+
+    @abstractmethod
+    async def count_by_user_and_type(
+        self, user_id: str, summary_type: SummaryType
+    ) -> int: ...
+
+    @abstractmethod
+    async def delete(self, id: str, user_id: str) -> None: ...

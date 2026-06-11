@@ -16,11 +16,15 @@ from app.retrospective.application.use_cases.get_summary import GetSummaryUseCas
 from app.retrospective.application.use_cases.get_summary_readiness import (
     GetSummaryReadinessUseCase,
 )
+from app.retrospective.application.use_cases.get_summary_usage import (
+    GetSummaryUsageUseCase,
+)
 from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
 from app.retrospective.domain.models.value_objects import SummaryStatus, SummaryType
 from app.retrospective.presentation.responses.summary_responses import (
     SummaryReadinessResponse,
     SummaryResponse,
+    SummaryUsageResponse,
 )
 from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
@@ -44,6 +48,7 @@ async def generate_summary(
     current_user: UserContext = Depends(get_current_user),
     summary_type: str = Query(alias="type"),
     period_start: str | None = Query(default=None, alias="periodStart"),
+    force: bool = Query(default=False),
 ) -> ApiResponse[SummaryResponse]:
     parsed_start = None
     if period_start:
@@ -55,9 +60,23 @@ async def generate_summary(
             user_id=current_user.id,
             summary_type=SummaryType(summary_type),
             period_start=parsed_start,
+            force=force,
         )
     )
     return ApiResponse.accepted(SummaryResponse.from_entity(summary))
+
+
+@router.get(
+    "/usage",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[SummaryUsageResponse],
+)
+async def get_summary_usage(
+    use_case: FromDishka[GetSummaryUsageUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[SummaryUsageResponse]:
+    report = await use_case.execute(current_user.id)
+    return ApiResponse.ok(SummaryUsageResponse.from_entity(report))
 
 
 @router.get(
