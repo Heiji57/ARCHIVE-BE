@@ -10,6 +10,7 @@ from app.auth.domain.models.oauth_connection import OAuthConnection
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
+from app.retrospective.application.use_cases.seed_retro_templates import SeedRetroTemplatesUseCase
 from app.shared.domain.utils.id import generate_id
 from app.shared.domain.utils.timezone import (
     is_multi_tz_country,
@@ -35,12 +36,14 @@ class CompleteOnboardingUseCase:
         oauth_connection_repo: IOAuthConnectionRepository,
         session_service: SessionService,
         country_history_repo: ICountryHistoryRepository,
+        seed_retro_templates: SeedRetroTemplatesUseCase,
     ) -> None:
         self._onboarding_cache = onboarding_cache
         self._user_repo = user_repo
         self._oauth_connection_repo = oauth_connection_repo
         self._session_service = session_service
         self._country_history_repo = country_history_repo
+        self._seed_retro_templates = seed_retro_templates
 
     async def execute(self, cmd: CompleteOnboardingCommand) -> dict[str, str]:
         if not is_supported_country(cmd.country):
@@ -92,6 +95,8 @@ class CompleteOnboardingUseCase:
             source=CountryChangeSource.OAUTH_ONBOARDING,
             at=now,
         )
+
+        await self._seed_retro_templates.execute(saved.id)
 
         issued = await self._session_service.issue(
             saved.id, RequestMeta(user_agent=cmd.device_info, ip=cmd.ip)

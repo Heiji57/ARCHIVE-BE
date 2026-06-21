@@ -8,6 +8,7 @@ from app.auth.domain.exceptions.exceptions import (
     EmailNotVerifiedException,
 )
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
+from app.retrospective.application.use_cases.seed_retro_templates import SeedRetroTemplatesUseCase
 from app.shared.domain.utils.id import generate_id
 from app.shared.domain.utils.timezone import (
     is_multi_tz_country,
@@ -33,11 +34,13 @@ class RegisterUseCase:
         verification_cache: EmailVerificationCache,
         session_service: SessionService,
         country_history_repo: ICountryHistoryRepository,
+        seed_retro_templates: SeedRetroTemplatesUseCase,
     ) -> None:
         self._user_repo = user_repo
         self._verification_cache = verification_cache
         self._session_service = session_service
         self._country_history_repo = country_history_repo
+        self._seed_retro_templates = seed_retro_templates
 
     async def execute(self, cmd: RegisterCommand) -> dict[str, str]:
         if not await self._verification_cache.is_verified(cmd.email):
@@ -78,6 +81,8 @@ class RegisterUseCase:
             source=CountryChangeSource.REGISTRATION,
             at=now,
         )
+
+        await self._seed_retro_templates.execute(saved.id)
 
         issued = await self._session_service.issue(
             saved.id, RequestMeta(user_agent=cmd.device_info, ip=cmd.ip)

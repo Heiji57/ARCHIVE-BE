@@ -28,4 +28,7 @@ class UserSettingsModel(Base):
     active_summary_template_ids: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
     )
+    active_retro_template_ids: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

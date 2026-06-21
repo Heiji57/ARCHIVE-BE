@@ -50,6 +50,22 @@ class SummaryTemplateInUseException(BaseAppException):
     code = "RETRO_SUMMARY_TEMPLATE_IN_USE"
 
 
+class RetroTemplateNotFoundException(BaseAppException):
+    code = "TEMPLATE_NOT_FOUND"
+
+
+class RetroTemplateDefaultNotDeletableException(BaseAppException):
+    code = "TEMPLATE_DEFAULT_NOT_DELETABLE"
+
+
+class RetroTemplateTypeMismatchException(BaseAppException):
+    code = "TEMPLATE_TYPE_MISMATCH"
+
+
+class RetroTemplateNameDuplicatedException(BaseAppException):
+    code = "TEMPLATE_NAME_DUPLICATED"
+
+
 class SummaryRateLimitExceededException(BaseAppException):
     code = "RETRO_SUMMARY_RATE_LIMIT_EXCEEDED"
 

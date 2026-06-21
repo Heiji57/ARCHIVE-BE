@@ -125,6 +125,7 @@ src/app/
 | Settings | `GET/PUT /settings`, `PATCH /settings/country`, `PATCH /settings/timezone`, `GET /settings/countries/{code}/timezones` |
 | GitHub | `GET /github/connection`, `GET /github/repositories/available`, `GET/POST/DELETE /github/repositories`, `POST /github/repositories/sync-all`, `PATCH/DELETE /github/repositories/{id}` |
 | GitHub | `GET /github/commits` (지정 날짜 / 기본=오늘, public repo only, failed repo 포함), `POST /github/retrospectives/push` |
+| RetroTemplate | `GET/POST /templates`, `PATCH/DELETE /templates/{id}`, `POST /templates/{id}/reset`, `PUT /templates/active` |
 
 ## API Contract — Single Source of Truth
 
@@ -147,6 +148,8 @@ src/app/
 - **인증**: 인증이 필요한 엔드포인트는 `current_user: UserContext = Depends(get_current_user)` 사용
 - **DB 마이그레이션**: 스키마 변경 시 `migrations/versions/` 에 Alembic 파일 추가
 - **사용자 타임존**: 사용자별 `users.timezone`(IANA tz) 보유. 모든 기간 계산("오늘", "이번 주" 등)은 이 tz 기준으로 처리한다. 절대 서버 UTC 기준으로 계산하지 않는다. `shared/domain/utils/period.py`의 `today_in_tz(tz)`, `now_in_tz(tz)` 사용.
+- **회고 템플릿 정책**: `retro_templates` 테이블에 retro_type별 마크다운 템플릿 저장. 회원가입/OAuth 온보딩 시 기본 4종(daily/weekly/monthly/yearly, `is_default=true`) 자동 시드 (`SeedRetroTemplatesUseCase`). 활성 선택은 `user_settings.active_retro_template_ids` (JSONB). 기본 표준 본문은 `retrospective/domain/constants/retro_template_defaults.py`. `is_default=true` 삭제 불가(400). 활성 템플릿 삭제 시 기본 템플릿으로 자동 폴백. `POST /templates/{id}/reset` 으로 기본 템플릿 내용 복원 가능 (커스텀 불가). 에러 코드: `TEMPLATE_NOT_FOUND`(404), `TEMPLATE_DEFAULT_NOT_DELETABLE`(400), `TEMPLATE_TYPE_MISMATCH`(422), `TEMPLATE_NAME_DUPLICATED`(409).
+- **Todo 시간 저장 정책**: `todos.start_time` / `todos.end_time` 은 UTC `TIMESTAMPTZ` 로 저장. 사용자 로컬 시각 복원을 위해 생성 시점 IANA timezone 을 `todos.timezone`(`VARCHAR(50)`) 에 함께 저장 (스냅샷). FE 는 로컬 시각을 UTC 로 변환해 전송하고, 응답의 `timezone` 으로 역변환. `start_time` 또는 `end_time` 이 non-null 이면 `timezone` 필수 (422). IANA 검증은 `shared/domain/utils/timezone.py`의 `validate_timezone` 사용.
 - **국가 → tz 매핑**: ISO 3166-1 alpha-2 전 249개국 지원 (`pycountry`). 국가→IANA tz 옵션은 `pytz.country_timezones` (CLDR-derived) 사용. 단일 tz 국가(예: KR, JP, FR)는 `country` 만으로 자동 결정, 다중 tz 국가(예: US, RU, BR)는 IANA `timezone` 명시 필수. 신규 국가/tz 추가는 `pytz`/system tzdata 업데이트로 자동 반영 — 코드 수정 불필요. 국가 입력 핸들러는 `shared/domain/utils/timezone.py`의 `is_supported_country`, `country_timezone_options`, `resolve_timezone` 사용. **`region` 컬럼은 deprecated**: 신규 입력 받지 않음, 기존 DB 컬럼은 호환 위해 유지.
 - **AI 자동 요약 스케줄링**: Celery beat은 매시간 정각 단일 dispatcher(`dispatch_summaries_for_tz`)만 발사. 각 사용자의 현지 1am 도달 시 fan-out. `last_summary_date_local`로 DST 중복 방지. `SUMMARY_JITTER_SECONDS` 환경 변수로 부하 분산 폭 제어 (기본 1800s).
 - **AI 요약 데이터 소스 정책**: 모든 경로(수동/자동)에서 단일 task `worker.generate_summary` 사용. summary_type 별 데이터 소스는 `retrospective/infrastructure/ai/strategies.py` 의 strategy 가 결정한다.

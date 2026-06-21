@@ -22,6 +22,7 @@ class CreateTodoUseCase:
             description=cmd.description,
             start_time=cmd.start_time,
             end_time=cmd.end_time,
+            timezone=cmd.timezone,
             created_at=now,
         )
         return await self._todo_repo.save(todo)

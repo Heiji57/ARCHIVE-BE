@@ -17,6 +17,8 @@ class UserSettings:
     # 활성 ID 가 가리키는 템플릿이 존재 / 동일 user 소유 / 동일 summary_type 인지는 set-active
     # use case 가 검증한다. delete-use-case 가 활성 보호로 임의 삭제를 차단한다.
     active_summary_template_ids: dict[str, str | None] = field(default_factory=dict)
+    # retro_type -> active retro template id. 키 부재 또는 null 이면 기본 템플릿으로 폴백.
+    active_retro_template_ids: dict[str, str | None] = field(default_factory=dict)
     updated_at: datetime | None = None
 
     @classmethod
@@ -26,3 +28,7 @@ class UserSettings:
     def active_template_id_for(self, summary_type: str) -> str | None:
         """summary_type 에 활성 지정된 템플릿 ID. 미설정/null 이면 None."""
         return self.active_summary_template_ids.get(summary_type)
+
+    def active_retro_template_id_for(self, retro_type: str) -> str | None:
+        """retro_type 에 활성 지정된 회고 템플릿 ID. 미설정/null 이면 None."""
+        return self.active_retro_template_ids.get(retro_type)

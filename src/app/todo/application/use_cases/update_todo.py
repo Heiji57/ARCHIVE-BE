@@ -34,5 +34,7 @@ class UpdateTodoUseCase:
             todo.start_time = cmd.start_time  # type: ignore[assignment]
         if cmd.end_time is not UNSET:
             todo.end_time = cmd.end_time  # type: ignore[assignment]
+        if cmd.timezone is not UNSET:
+            todo.timezone = cmd.timezone  # type: ignore[assignment]
 
         return await self._todo_repo.save(todo)

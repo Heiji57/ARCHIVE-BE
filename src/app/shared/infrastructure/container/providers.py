@@ -80,6 +80,13 @@ from app.retrospective.application.use_cases.get_summary import GetSummaryUseCas
 from app.retrospective.application.use_cases.get_summary_readiness import (
     GetSummaryReadinessUseCase,
 )
+from app.retrospective.application.use_cases.create_retro_template import CreateRetroTemplateUseCase
+from app.retrospective.application.use_cases.delete_retro_template import DeleteRetroTemplateUseCase
+from app.retrospective.application.use_cases.list_retro_templates import ListRetroTemplatesUseCase
+from app.retrospective.application.use_cases.reset_retro_template import ResetRetroTemplateUseCase
+from app.retrospective.application.use_cases.seed_retro_templates import SeedRetroTemplatesUseCase
+from app.retrospective.application.use_cases.set_active_retro_template import SetActiveRetroTemplateUseCase
+from app.retrospective.application.use_cases.update_retro_template import UpdateRetroTemplateUseCase
 from app.retrospective.application.use_cases.create_summary_template import (
     CreateSummaryTemplateUseCase,
 )
@@ -106,8 +113,10 @@ from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseC
 from app.retrospective.domain.repositories.repository import (
     IJournalEntryRepository,
     IRetroSummaryRepository,
+    IRetroTemplateRepository,
     IUserSummaryTemplateRepository,
 )
+from app.retrospective.infrastructure.persistence.repositories.retro_template_repo import RetroTemplateRepository
 from app.retrospective.infrastructure.cache.summary_rate_limiter import SummaryRateLimiter
 from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import JournalEntryRepository
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import RetroSummaryRepository
@@ -242,6 +251,10 @@ class RequestProvider(Provider):
         return UserSummaryTemplateRepository(session)
 
     @provide
+    def retro_template_repo(self, session: AsyncSession) -> IRetroTemplateRepository:
+        return RetroTemplateRepository(session)
+
+    @provide
     def notification_repo(self, session: AsyncSession) -> INotificationRepository:
         return NotificationRepository(session)
 
@@ -346,15 +359,24 @@ class RequestProvider(Provider):
         return VerifyEmailCodeUseCase(cache)
 
     @provide
+    def seed_retro_templates_use_case(
+        self,
+        template_repo: IRetroTemplateRepository,
+        settings_repo: IUserSettingsRepository,
+    ) -> SeedRetroTemplatesUseCase:
+        return SeedRetroTemplatesUseCase(template_repo, settings_repo)
+
+    @provide
     def register_use_case(
         self,
         user_repo: IUserRepository,
         verification_cache: EmailVerificationCache,
         session_service: SessionService,
         country_history_repo: ICountryHistoryRepository,
+        seed_retro_templates: SeedRetroTemplatesUseCase,
     ) -> RegisterUseCase:
         return RegisterUseCase(
-            user_repo, verification_cache, session_service, country_history_repo
+            user_repo, verification_cache, session_service, country_history_repo, seed_retro_templates
         )
 
     @provide
@@ -458,6 +480,7 @@ class RequestProvider(Provider):
         oauth_connection_repo: IOAuthConnectionRepository,
         session_service: SessionService,
         country_history_repo: ICountryHistoryRepository,
+        seed_retro_templates: SeedRetroTemplatesUseCase,
     ) -> CompleteOnboardingUseCase:
         return CompleteOnboardingUseCase(
             onboarding_cache,
@@ -465,6 +488,7 @@ class RequestProvider(Provider):
             oauth_connection_repo,
             session_service,
             country_history_repo,
+            seed_retro_templates,
         )
 
     # ── Todo Use Cases ────────────────────────────────────────────────────────
@@ -488,6 +512,48 @@ class RequestProvider(Provider):
     @provide
     def get_todos_by_range_use_case(self, todo_repo: ITodoRepository) -> GetTodosByRangeUseCase:
         return GetTodosByRangeUseCase(todo_repo)
+
+    # ── Retro Template Use Cases ──────────────────────────────────────────────
+
+    @provide
+    def list_retro_templates_use_case(
+        self, repo: IRetroTemplateRepository
+    ) -> ListRetroTemplatesUseCase:
+        return ListRetroTemplatesUseCase(repo)
+
+    @provide
+    def create_retro_template_use_case(
+        self, repo: IRetroTemplateRepository
+    ) -> CreateRetroTemplateUseCase:
+        return CreateRetroTemplateUseCase(repo)
+
+    @provide
+    def update_retro_template_use_case(
+        self, repo: IRetroTemplateRepository
+    ) -> UpdateRetroTemplateUseCase:
+        return UpdateRetroTemplateUseCase(repo)
+
+    @provide
+    def delete_retro_template_use_case(
+        self,
+        template_repo: IRetroTemplateRepository,
+        settings_repo: IUserSettingsRepository,
+    ) -> DeleteRetroTemplateUseCase:
+        return DeleteRetroTemplateUseCase(template_repo, settings_repo)
+
+    @provide
+    def reset_retro_template_use_case(
+        self, repo: IRetroTemplateRepository
+    ) -> ResetRetroTemplateUseCase:
+        return ResetRetroTemplateUseCase(repo)
+
+    @provide
+    def set_active_retro_template_use_case(
+        self,
+        template_repo: IRetroTemplateRepository,
+        settings_repo: IUserSettingsRepository,
+    ) -> SetActiveRetroTemplateUseCase:
+        return SetActiveRetroTemplateUseCase(template_repo, settings_repo)
 
     # ── Journal Entry Use Cases ───────────────────────────────────────────────
 

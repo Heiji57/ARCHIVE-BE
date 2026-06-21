@@ -15,6 +15,7 @@ from app.notification.presentation.router import router as notification_router
 from app.settings.presentation.router import router as settings_router
 from app.retrospective.presentation.router import router as entry_router
 from app.retrospective.presentation.summary_router import router as summary_router
+from app.retrospective.presentation.retro_template_router import router as retro_template_router
 from app.retrospective.presentation.template_router import (
     active_router as summary_active_router,
     template_router as summary_template_router,
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(summary_router, prefix="/api/v1")
     app.include_router(summary_template_router, prefix="/api/v1")
     app.include_router(summary_active_router, prefix="/api/v1")
+    app.include_router(retro_template_router, prefix="/api/v1")
     app.include_router(notification_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
     app.include_router(github_router, prefix="/api/v1")

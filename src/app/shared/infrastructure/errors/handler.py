@@ -40,6 +40,10 @@ from app.retrospective.domain.exceptions.exceptions import (
     JournalEntryAlreadyExistsException,
     JournalEntryNotFoundException,
     RetroSummaryNotFoundException,
+    RetroTemplateDefaultNotDeletableException,
+    RetroTemplateNameDuplicatedException,
+    RetroTemplateNotFoundException,
+    RetroTemplateTypeMismatchException,
     SummaryAlreadyInProgressException,
     SummaryInvalidStateException,
     SummaryRateLimitExceededException,
@@ -84,6 +88,8 @@ _STATUS_MAP: dict[str, int] = {
     OnboardingTokenExpiredException.code: 401,
     PasswordResetTokenInvalidException.code: 401,
     PasswordResetTokenExpiredException.code: 401,
+    # 400
+    RetroTemplateDefaultNotDeletableException.code: 400,
     # 404
     UserNotFoundException.code: 404,
     TodoNotFoundException.code: 404,
@@ -93,6 +99,7 @@ _STATUS_MAP: dict[str, int] = {
     GitHubRepositoryNotFoundException.code: 404,
     SessionNotFoundException.code: 404,
     SummaryTemplateNotFoundException.code: 404,
+    RetroTemplateNotFoundException.code: 404,
     # 409
     UserEmailDuplicatedException.code: 409,
     TodoAlreadyCompletedException.code: 409,
@@ -105,7 +112,9 @@ _STATUS_MAP: dict[str, int] = {
     SummaryTemplateNameDuplicatedException.code: 409,
     SummaryTemplateLimitReachedException.code: 409,
     SummaryTemplateInUseException.code: 409,
+    RetroTemplateNameDuplicatedException.code: 409,
     # 422
+    RetroTemplateTypeMismatchException.code: 422,
     CountryInvalidException.code: 422,
     CountryTimezoneRequiredException.code: 422,
     TimezoneInvalidException.code: 422,

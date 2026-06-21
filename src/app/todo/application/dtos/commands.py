@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Final
 
 
@@ -33,8 +34,9 @@ class CreateTodoCommand:
     date_key: str
     description: str = ""
     status: str = "not-start"
-    start_time: str | None = None
-    end_time: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    timezone: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,5 +48,6 @@ class UpdateTodoCommand:
     description: str | None = None
     date_key: str | None = None
     # 시간 필드는 sentinel — UNSET(미전송) vs None(명시 clear) 구분
-    start_time: str | None | _Unset = UNSET
-    end_time: str | None | _Unset = UNSET
+    start_time: datetime | None | _Unset = UNSET
+    end_time: datetime | None | _Unset = UNSET
+    timezone: str | None | _Unset = UNSET

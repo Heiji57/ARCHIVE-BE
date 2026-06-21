@@ -62,6 +62,7 @@ async def create_todo(
             status=body.status,
             start_time=body.start_time,
             end_time=body.end_time,
+            timezone=body.timezone,
         )
     )
     return ApiResponse.created(TodoResponse.from_entity(todo))
@@ -89,6 +90,7 @@ async def update_todo(
             date_key=body.date_key,
             start_time=body.start_time if "start_time" in provided else UNSET,
             end_time=body.end_time if "end_time" in provided else UNSET,
+            timezone=body.timezone if "timezone" in provided else UNSET,
         )
     )
     return ApiResponse.ok(TodoResponse.from_entity(todo))

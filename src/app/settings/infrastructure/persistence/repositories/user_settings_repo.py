@@ -35,6 +35,7 @@ class UserSettingsRepository(IUserSettingsRepository):
             last_summary_date_local=entity.last_summary_date_local,
             github_push_target_repository_id=entity.github_push_target_repository_id,
             active_summary_template_ids=dict(entity.active_summary_template_ids),
+            active_retro_template_ids=dict(entity.active_retro_template_ids),
             updated_at=entity.updated_at,
         )
 
@@ -50,5 +51,6 @@ class UserSettingsRepository(IUserSettingsRepository):
             last_summary_date_local=model.last_summary_date_local,
             github_push_target_repository_id=model.github_push_target_repository_id,
             active_summary_template_ids=dict(model.active_summary_template_ids or {}),
+            active_retro_template_ids=dict(model.active_retro_template_ids or {}),
             updated_at=model.updated_at,
         )
