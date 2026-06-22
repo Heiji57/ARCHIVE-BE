@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from app.user.domain.exceptions.exceptions import UserNotFoundException
 from app.user.domain.models.user import User
@@ -9,6 +10,7 @@ from app.user.domain.repositories.repository import IUserRepository
 class UpdateProfileCommand:
     user_id: str
     display_name: str | None = None
+    account_type: str | None = None
 
 
 class UpdateProfileUseCase:
@@ -16,10 +18,15 @@ class UpdateProfileUseCase:
         self._user_repo = user_repo
 
     async def execute(self, cmd: UpdateProfileCommand) -> User:
+        from dataclasses import replace
+
         user = await self._user_repo.find_by_id(cmd.user_id)
         if not user:
             raise UserNotFoundException()
-        # 현재 User 엔티티에 display_name 필드가 없으므로 저장만 반환
-        # Phase 2에서 User 도메인에 display_name 추가 시 확장
-        saved = await self._user_repo.save(user)
-        return saved
+
+        updates: dict = {"updated_at": datetime.now(timezone.utc)}
+        if cmd.account_type is not None:
+            updates["account_type"] = cmd.account_type
+
+        updated = replace(user, **updates)
+        return await self._user_repo.save(updated)

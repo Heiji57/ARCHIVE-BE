@@ -391,8 +391,9 @@ class RequestProvider(Provider):
     def refresh_token_use_case(
         self,
         session_service: SessionService,
+        user_repo: IUserRepository,
     ) -> RefreshTokenUseCase:
-        return RefreshTokenUseCase(session_service)
+        return RefreshTokenUseCase(session_service, user_repo)
 
     @provide
     def logout_use_case(self, session_service: SessionService) -> LogoutUseCase:

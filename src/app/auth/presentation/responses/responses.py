@@ -15,6 +15,9 @@ class UserResponse(BaseModel):
     country: str
     region: str | None = None
     timezone: str
+    account_type: str = Field(serialization_alias="accountType")
+
+    model_config = {"populate_by_name": True}
 
     @classmethod
     def from_entity(cls, user: User) -> "UserResponse":
@@ -24,6 +27,7 @@ class UserResponse(BaseModel):
             country=user.country,
             region=user.region,
             timezone=user.timezone,
+            account_type=user.account_type,
         )
 
 

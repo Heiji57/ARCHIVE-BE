@@ -292,7 +292,11 @@ async def update_profile(
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[UserResponse]:
     user = await use_case.execute(
-        UpdateProfileCommand(user_id=current_user.id, display_name=body.display_name)
+        UpdateProfileCommand(
+            user_id=current_user.id,
+            display_name=body.display_name,
+            account_type=body.account_type,
+        )
     )
     return ApiResponse.ok(UserResponse.from_entity(user))
 

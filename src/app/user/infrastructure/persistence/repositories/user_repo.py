@@ -41,6 +41,7 @@ class UserRepository(IUserRepository):
             country=entity.country,
             region=entity.region,
             timezone=entity.timezone,
+            account_type=entity.account_type,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -53,6 +54,7 @@ class UserRepository(IUserRepository):
             country=model.country,
             region=model.region,
             timezone=model.timezone,
+            account_type=model.account_type,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

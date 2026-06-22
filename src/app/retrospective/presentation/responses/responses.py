@@ -27,26 +27,46 @@ class GithubPushResponse(BaseModel):
 
 
 class EntryResponse(BaseModel):
+    """비개발자 또는 GitHub 미연결 사용자용 — githubPush 필드 없음."""
+
     id: str
     user_id: str
     date_key: str
     title: str
     content: str
     retro_type: str
-    github_push: GithubPushResponse | None = Field(
-        default=None, serialization_alias="githubPush"
-    )
     created_at: datetime
     updated_at: datetime | None
 
     model_config = {"populate_by_name": True}
 
     @classmethod
-    def from_entity(
+    def from_entity(cls, entry: JournalEntry) -> "EntryResponse":
+        return cls(
+            id=entry.id,
+            user_id=entry.user_id,
+            date_key=entry.date_key,
+            title=entry.title,
+            content=entry.content,
+            retro_type=entry.retro_type.value,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
+        )
+
+
+class EntryWithGithubResponse(EntryResponse):
+    """개발자 계정 + GitHub 연결 사용자용 — githubPush 포함."""
+
+    github_push: GithubPushResponse | None = Field(
+        default=None, serialization_alias="githubPush"
+    )
+
+    @classmethod
+    def from_entity(  # type: ignore[override]
         cls,
         entry: JournalEntry,
         push: RetrospectivePush | None = None,
-    ) -> "EntryResponse":
+    ) -> "EntryWithGithubResponse":
         return cls(
             id=entry.id,
             user_id=entry.user_id,

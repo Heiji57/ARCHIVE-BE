@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.shared.domain.models.base import BaseEntity
 from app.user.domain.models.value_objects import Email
@@ -11,6 +11,10 @@ class User(BaseEntity):
     country: str
     region: str | None
     timezone: str
+    account_type: str = field(default="user")  # "developer" | "user"
 
     def is_oauth_only(self) -> bool:
         return self.password_hash is None
+
+    def is_developer(self) -> bool:
+        return self.account_type == "developer"

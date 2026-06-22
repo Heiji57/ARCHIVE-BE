@@ -1,6 +1,11 @@
 from app.shared.domain.exceptions.base import BaseAppException
 
 
+class DeveloperAccountRequiredException(BaseAppException):
+    """GitHub 기능은 developer 계정 전용이다."""
+    code = "DEVELOPER_ACCOUNT_REQUIRED"
+
+
 class GitHubRepositoryNotFoundException(BaseAppException):
     code = "GITHUB_REPOSITORY_NOT_FOUND"
 

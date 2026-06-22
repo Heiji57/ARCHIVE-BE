@@ -26,6 +26,7 @@ from app.github.application.use_cases.update_repository import (
     UpdateRepositoryCommand,
     UpdateRepositoryUseCase,
 )
+from app.github.domain.exceptions.exceptions import DeveloperAccountRequiredException
 from app.github.presentation.requests.requests import (
     LinkRepositoryRequest,
     PushRetrospectiveRequest,
@@ -45,6 +46,12 @@ from app.shared.presentation.schemas.response import ApiResponse
 router = APIRouter(prefix="/github", tags=["github"], route_class=DishkaRoute)
 
 
+def _require_developer(current_user: UserContext = Depends(get_current_user)) -> UserContext:
+    if not current_user.is_developer():
+        raise DeveloperAccountRequiredException()
+    return current_user
+
+
 # ── Connection ─────────────────────────────────────────────────────────────
 
 @router.get(
@@ -54,7 +61,7 @@ router = APIRouter(prefix="/github", tags=["github"], route_class=DishkaRoute)
 )
 async def get_connection_status(
     use_case: FromDishka[GetConnectionStatusUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[ConnectionStatusResponse]:
     status_data = await use_case.execute(current_user.id)
     return ApiResponse.ok(ConnectionStatusResponse.from_status(status_data))
@@ -69,7 +76,7 @@ async def get_connection_status(
 )
 async def list_available_repositories(
     use_case: FromDishka[ListAvailableRepositoriesUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[list[AvailableRepositoryResponse]]:
     repos = await use_case.execute(current_user.id)
     return ApiResponse.ok([AvailableRepositoryResponse.from_data(r) for r in repos])
@@ -82,7 +89,7 @@ async def list_available_repositories(
 )
 async def list_linked_repositories(
     use_case: FromDishka[ListLinkedRepositoriesUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[list[RepositoryResponse]]:
     repos = await use_case.execute(current_user.id)
     return ApiResponse.ok([RepositoryResponse.from_entity(r) for r in repos])
@@ -96,7 +103,7 @@ async def list_linked_repositories(
 async def link_repository(
     body: LinkRepositoryRequest,
     use_case: FromDishka[LinkRepositoryUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[RepositoryResponse]:
     repo = await use_case.execute(
         LinkRepositoryCommand(user_id=current_user.id, github_repo_id=body.github_repo_id)
@@ -113,7 +120,7 @@ async def update_repository(
     repository_id: str,
     body: UpdateRepositoryRequest,
     use_case: FromDishka[UpdateRepositoryUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[RepositoryResponse]:
     repo = await use_case.execute(
         UpdateRepositoryCommand(
@@ -132,7 +139,7 @@ async def update_repository(
 )
 async def sync_all_repositories(
     use_case: FromDishka[SyncAllRepositoriesUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[list[RepositoryResponse]]:
     repos = await use_case.execute(SyncAllRepositoriesCommand(user_id=current_user.id))
     return ApiResponse.ok([RepositoryResponse.from_entity(r) for r in repos])
@@ -146,7 +153,7 @@ async def sync_all_repositories(
 async def unlink_repository(
     repository_id: str,
     use_case: FromDishka[UnlinkRepositoryUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[None]:
     await use_case.execute(
         UnlinkRepositoryCommand(user_id=current_user.id, repository_id=repository_id)
@@ -161,7 +168,7 @@ async def unlink_repository(
 )
 async def unlink_all_repositories(
     use_case: FromDishka[UnlinkAllRepositoriesUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[None]:
     await use_case.execute(current_user.id)
     return ApiResponse.ok(None)
@@ -177,7 +184,7 @@ async def unlink_all_repositories(
 async def get_commits(
     use_case: FromDishka[GetCommitsByDateUseCase],
     target_date: date | None = Query(default=None, alias="date"),
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[CommitListResponse]:
     result = await use_case.execute(current_user.id, target_date)
     return ApiResponse.ok(CommitListResponse.from_result(result))
@@ -193,7 +200,7 @@ async def get_commits(
 async def push_retrospective(
     body: PushRetrospectiveRequest,
     use_case: FromDishka[PushRetrospectiveUseCase],
-    current_user: UserContext = Depends(get_current_user),
+    current_user: UserContext = Depends(_require_developer),
 ) -> ApiResponse[PushResultResponse]:
     outcome = await use_case.execute(
         PushRetrospectiveCommand(

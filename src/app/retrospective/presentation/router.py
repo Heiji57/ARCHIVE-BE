@@ -1,6 +1,8 @@
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, Query, status
 
+from app.auth.domain.models.value_objects import OAuthProvider
+from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.github.domain.models.retrospective_push import RetrospectivePush
 from app.github.domain.repositories.retrospective_push_repository import (
     IRetrospectivePushRepository,
@@ -15,7 +17,10 @@ from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.presentation.requests.requests import EntryCreateRequest, EntryUpsertRequest
-from app.retrospective.presentation.responses.responses import EntryResponse
+from app.retrospective.presentation.responses.responses import (
+    EntryResponse,
+    EntryWithGithubResponse,
+)
 from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
@@ -23,12 +28,20 @@ from app.shared.presentation.schemas.response import ApiResponse
 router = APIRouter(prefix="/entries", tags=["entries"], route_class=DishkaRoute)
 
 
+async def _is_github_connected(
+    oauth_repo: IOAuthConnectionRepository,
+    user_id: str,
+) -> bool:
+    connections = await oauth_repo.find_by_user_id(user_id)
+    conn = next((c for c in connections if c.provider == OAuthProvider.GITHUB), None)
+    return conn is not None and bool(conn.access_token)
+
+
 async def _push_map_for_entries(
     push_repo: IRetrospectivePushRepository,
     user_id: str,
     entries: list[JournalEntry],
 ) -> dict[tuple[str, str], RetrospectivePush]:
-    """entry 목록 → (period_type, period_key) → RetrospectivePush 매핑."""
     keys = [entry_to_period(e) for e in entries]
     pushes = await push_repo.find_many(user_id, keys)
     return {(p.period_type, p.period_key): p for p in pushes}
@@ -37,16 +50,17 @@ async def _push_map_for_entries(
 @router.get(
     "",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[list[EntryResponse]],
+    response_model=ApiResponse[list[EntryWithGithubResponse]],
 )
 async def get_entries(
     use_case: FromDishka[GetEntriesUseCase],
     push_repo: FromDishka[IRetrospectivePushRepository],
+    oauth_repo: FromDishka[IOAuthConnectionRepository],
     current_user: UserContext = Depends(get_current_user),
     retro_type: str | None = Query(default=None, alias="retroType"),
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
-) -> ApiResponse[list[EntryResponse]]:
+) -> ApiResponse[list[EntryWithGithubResponse]]:
     entries = await use_case.execute(
         GetEntriesQuery(
             user_id=current_user.id,
@@ -55,28 +69,37 @@ async def get_entries(
             to_date=to_date,
         )
     )
-    push_map = await _push_map_for_entries(push_repo, current_user.id, entries)
-    return ApiResponse.ok([
-        EntryResponse.from_entity(e, push_map.get(entry_to_period(e)))
-        for e in entries
-    ])
+
+    if current_user.is_developer() and await _is_github_connected(oauth_repo, current_user.id):
+        push_map = await _push_map_for_entries(push_repo, current_user.id, entries)
+        return ApiResponse.ok([
+            EntryWithGithubResponse.from_entity(e, push_map.get(entry_to_period(e)))
+            for e in entries
+        ])
+
+    return ApiResponse.ok([EntryResponse.from_entity(e) for e in entries])
 
 
 @router.get(
     "/{entry_id}",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[EntryResponse],
+    response_model=ApiResponse[EntryWithGithubResponse],
 )
 async def get_entry(
     entry_id: str,
     use_case: FromDishka[GetEntryUseCase],
     push_repo: FromDishka[IRetrospectivePushRepository],
+    oauth_repo: FromDishka[IOAuthConnectionRepository],
     current_user: UserContext = Depends(get_current_user),
-) -> ApiResponse[EntryResponse]:
+) -> ApiResponse[EntryWithGithubResponse]:
     entry = await use_case.execute(entry_id=entry_id, user_id=current_user.id)
-    period_type, period_key = entry_to_period(entry)
-    push = await push_repo.find_by_period(current_user.id, period_type, period_key)
-    return ApiResponse.ok(EntryResponse.from_entity(entry, push))
+
+    if current_user.is_developer() and await _is_github_connected(oauth_repo, current_user.id):
+        period_type, period_key = entry_to_period(entry)
+        push = await push_repo.find_by_period(current_user.id, period_type, period_key)
+        return ApiResponse.ok(EntryWithGithubResponse.from_entity(entry, push))
+
+    return ApiResponse.ok(EntryResponse.from_entity(entry))
 
 
 @router.post(

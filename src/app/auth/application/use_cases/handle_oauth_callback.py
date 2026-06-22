@@ -86,7 +86,7 @@ class HandleOAuthCallbackUseCase:
             await self._oauth_connection_repo.save(existing_connection)
             user = await self._user_repo.find_by_id(existing_connection.user_id)
             assert user is not None
-            return await self._issue_session(user.id, device_info, ip)
+            return await self._issue_session(user.id, user.account_type, device_info, ip)
 
         # 같은 이메일 기존 사용자 → OAuth 연결 추가 후 로그인 처리
         user = await self._user_repo.find_by_email(user_info.email)
@@ -101,7 +101,7 @@ class HandleOAuthCallbackUseCase:
                 created_at=now,
             )
             await self._oauth_connection_repo.save(connection)
-            return await self._issue_session(user.id, device_info, ip)
+            return await self._issue_session(user.id, user.account_type, device_info, ip)
 
         # 신규 사용자 → 온보딩 토큰
         onboarding_token = await self._onboarding_cache.create(
@@ -167,13 +167,13 @@ class HandleOAuthCallbackUseCase:
         return OAuthCallbackResult(kind="linked", linked_provider=provider.value)
 
     async def _issue_session(
-        self, user_id: str, device_info: str | None, ip: str | None
+        self, user_id: str, account_type: str, device_info: str | None, ip: str | None
     ) -> OAuthCallbackResult:
         issued = await self._session_service.issue(
             user_id, RequestMeta(user_agent=device_info, ip=ip)
         )
         return OAuthCallbackResult(
             kind="login",
-            access_token=create_access_token(user_id),
+            access_token=create_access_token(user_id, account_type),
             refresh_token=issued.refresh_token,
         )

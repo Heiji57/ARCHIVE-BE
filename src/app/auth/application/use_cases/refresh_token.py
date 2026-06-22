@@ -10,11 +10,13 @@ from app.auth.application.services.session_service import (
     SessionService,
 )
 from app.shared.infrastructure.auth.jwt import create_access_token
+from app.user.domain.repositories.repository import IUserRepository
 
 
 class RefreshTokenUseCase:
-    def __init__(self, session_service: SessionService) -> None:
+    def __init__(self, session_service: SessionService, user_repo: IUserRepository) -> None:
         self._session_service = session_service
+        self._user_repo = user_repo
 
     async def execute(
         self,
@@ -25,7 +27,9 @@ class RefreshTokenUseCase:
         rotated = await self._session_service.rotate(
             raw_refresh_token, RequestMeta(user_agent=device_info, ip=ip)
         )
+        user = await self._user_repo.find_by_id(rotated.user_id)
+        account_type = user.account_type if user else "user"
         return {
-            "access_token": create_access_token(rotated.user_id),
+            "access_token": create_access_token(rotated.user_id, account_type),
             "refresh_token": rotated.refresh_token,  # "" 면 grace hit
         }

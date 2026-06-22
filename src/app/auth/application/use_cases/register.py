@@ -88,6 +88,6 @@ class RegisterUseCase:
             saved.id, RequestMeta(user_agent=cmd.device_info, ip=cmd.ip)
         )
         return {
-            "access_token": create_access_token(saved.id),
+            "access_token": create_access_token(saved.id, saved.account_type),
             "refresh_token": issued.refresh_token,
         }

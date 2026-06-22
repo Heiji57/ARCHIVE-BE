@@ -25,6 +25,7 @@ from app.auth.domain.exceptions.exceptions import (
     TimezoneInvalidException,
 )
 from app.github.domain.exceptions.exceptions import (
+    DeveloperAccountRequiredException,
     GitHubApiUnavailableException,
     GitHubConnectionNotFoundException,
     GitHubPushFailedException,
@@ -66,6 +67,8 @@ from app.user.domain.exceptions.exceptions import (
 )
 
 _STATUS_MAP: dict[str, int] = {
+    # 403
+    DeveloperAccountRequiredException.code: 403,
     # 400
     OAuthStateInvalidException.code: 400,
     SummaryInvalidStateException.code: 400,

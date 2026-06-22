@@ -15,5 +15,6 @@ class UserModel(Base):
     country: Mapped[str] = mapped_column(String(2), nullable=False)
     region: Mapped[str | None] = mapped_column(String(8), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(16), nullable=False, server_default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

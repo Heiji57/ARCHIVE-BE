@@ -88,6 +88,14 @@ class LoginRequest(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     display_name: str | None = None
+    account_type: str | None = None
+
+    @field_validator("account_type", mode="before")
+    @classmethod
+    def account_type_valid(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("developer", "user"):
+            raise ValueError("account_type must be 'developer' or 'user'")
+        return v
 
 
 class OnboardingCompleteRequest(BaseModel):

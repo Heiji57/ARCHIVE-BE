@@ -1686,6 +1686,8 @@ paths:
                 { $ref: "#/components/schemas/ApiResponseConnectionStatus" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
 
   /github/repositories/available:
     get:
@@ -1707,6 +1709,8 @@ paths:
           $ref: "#/components/responses/BadRequest_400"
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "429":
           $ref: "#/components/responses/RateLimited_429"
         "503":
@@ -1730,6 +1734,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiResponseRepositoryList" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
 
     post:
       tags: [github]
@@ -1754,6 +1760,8 @@ paths:
           $ref: "#/components/responses/BadRequest_400"
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "404":
           $ref: "#/components/responses/NotFound_404"
         "409":
@@ -1780,6 +1788,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
 
   /github/repositories/sync-all:
     post:
@@ -1799,6 +1809,8 @@ paths:
           $ref: "#/components/responses/BadRequest_400"
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "429":
           $ref: "#/components/responses/RateLimited_429"
         "503":
@@ -1839,6 +1851,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiResponseRepository" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "404":
           $ref: "#/components/responses/NotFound_404"
         "422": { $ref: "#/components/responses/ValidationError_422" }
@@ -1856,6 +1870,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "404":
           $ref: "#/components/responses/NotFound_404"
       x-error-codes:
@@ -1925,6 +1941,8 @@ paths:
           $ref: "#/components/responses/BadRequest_400"
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "422": { $ref: "#/components/responses/ValidationError_422" }
         "429":
           $ref: "#/components/responses/RateLimited_429"
@@ -2006,6 +2024,8 @@ paths:
           $ref: "#/components/responses/BadRequest_400"
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "403":
+          $ref: "#/components/responses/Forbidden_403"
         "422": { $ref: "#/components/responses/ValidationError_422" }
         "502":
           $ref: "#/components/responses/BadGateway_502"
@@ -2119,6 +2139,18 @@ components:
           example:
             status: error
             code: AUTH_TOKEN_EXPIRED
+            data: null
+            details: []
+    Forbidden_403:
+      description: |
+        권한 없음. 가능한 코드:
+        - `DEVELOPER_ACCOUNT_REQUIRED` — GitHub 기능은 developer 계정 전용. `PATCH /auth/me`로 계정 유형 변경 필요.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+          example:
+            status: error
+            code: DEVELOPER_ACCOUNT_REQUIRED
             data: null
             details: []
     NotFound_404:
@@ -2326,6 +2358,10 @@ components:
       type: object
       properties:
         display_name: { type: string, nullable: true }
+        accountType:
+          type: string
+          enum: [developer, user]
+          description: 계정 유형 변경 (생략 시 기존 값 유지)
 
     OnboardingCompleteRequest:
       type: object
@@ -2417,7 +2453,7 @@ components:
 
     UserResponse:
       type: object
-      required: [id, email, country, timezone]
+      required: [id, email, country, timezone, accountType]
       properties:
         id: { type: string }
         email: { type: string, format: email }
@@ -2434,6 +2470,13 @@ components:
           type: string
           example: Asia/Seoul
           description: IANA timezone identifier — AI 자동 요약은 이 tz 기준 "현지 새벽 1시"에 트리거됨
+        accountType:
+          type: string
+          enum: [developer, user]
+          default: user
+          description: |
+            계정 유형. developer = GitHub 커밋 기록·회고 연동 등 개발자 기능 활성화.
+            user = 캘린더·할일·회고 중심의 기본 경험.
 
     ApiResponseToken:
       allOf:
