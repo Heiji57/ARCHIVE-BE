@@ -57,6 +57,7 @@ class GeminiSummaryClient:
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=_RESPONSE_SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
 
