@@ -24,24 +24,22 @@ class SummaryStatus(StrEnum):
 
 @dataclass(frozen=True)
 class SummaryContent:
-    achievements: tuple[str, ...]
-    challenges: tuple[str, ...]
-    learnings: tuple[str, ...]
-    next_focus: tuple[str, ...]
+    """템플릿 유무에 따라 섹션 키가 달라지므로 dict로 관리.
+
+    기존 DB 레코드(achievements/challenges/learnings/next_focus)도
+    from_dict 로 그대로 로드된다.
+    """
+    sections: dict[str, list[str]]
 
     def to_dict(self) -> dict[str, list[str]]:
-        return {
-            "achievements": list(self.achievements),
-            "challenges": list(self.challenges),
-            "learnings": list(self.learnings),
-            "next_focus": list(self.next_focus),
-        }
+        return dict(self.sections)
 
     @classmethod
-    def from_dict(cls, data: dict[str, list[str]]) -> "SummaryContent":
+    def from_dict(cls, data: dict) -> "SummaryContent":
         return cls(
-            achievements=tuple(data.get("achievements", [])),
-            challenges=tuple(data.get("challenges", [])),
-            learnings=tuple(data.get("learnings", [])),
-            next_focus=tuple(data.get("next_focus", [])),
+            sections={
+                k: [str(i) for i in v if i is not None]
+                for k, v in data.items()
+                if isinstance(v, list)
+            }
         )

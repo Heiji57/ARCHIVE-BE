@@ -2796,11 +2796,16 @@ components:
     # ── Summary ────────────────────────────────────────────────────────────
     SummaryContentResponse:
       type: object
+      description: >
+        템플릿이 있을 때는 템플릿 섹션 헤더가 키가 된다.
+        템플릿이 없을 때는 기본 4개 키(achievements/challenges/learnings/next_focus)가 사용된다.
+      required: [sections]
       properties:
-        achievements: { type: array, items: { type: string } }
-        challenges: { type: array, items: { type: string } }
-        learnings: { type: array, items: { type: string } }
-        next_focus: { type: array, items: { type: string } }
+        sections:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
 
     SummaryResponse:
       type: object

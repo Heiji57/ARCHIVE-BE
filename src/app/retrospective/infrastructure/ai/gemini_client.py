@@ -24,7 +24,7 @@ from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
 
-_RESPONSE_SCHEMA = types.Schema(
+_FIXED_RESPONSE_SCHEMA = types.Schema(
     type=types.Type.OBJECT,
     properties={
         "achievements": types.Schema(
@@ -50,15 +50,27 @@ class GeminiSummaryClient:
         self._client = genai.Client(api_key=config.google_api_key)
         self._model = config.gemini_model
 
-    async def generate(self, prompt: str) -> SummaryContent:
+    async def generate(self, prompt: str, use_template_schema: bool = False) -> SummaryContent:
+        """AI 요약 생성.
+
+        use_template_schema=True 이면 response_schema 를 제거해 템플릿이 정의한
+        자유 키 구조를 허용한다. False 이면 고정 4-key 스키마를 강제한다.
+        """
+        config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+        if not use_template_schema:
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=_FIXED_RESPONSE_SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            )
+
         response = await self._client.aio.models.generate_content(
             model=self._model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=_RESPONSE_SCHEMA,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            ),
+            config=config,
         )
 
         text = response.text
@@ -82,7 +94,7 @@ class GeminiSummaryClient:
         return self._parse(text)
 
     def _parse(self, text: str) -> SummaryContent:
-        # response_mime_type+response_schema 면 순수 JSON 이지만, SDK 가 가끔
+        # response_mime_type 사용 시 순수 JSON 이지만, SDK 가 가끔
         # ```json ... ``` 로 감쌀 수 있으므로 방어적으로 첫 `{...}` 블록 추출.
         match = re.search(r"\{.*\}", text, re.DOTALL)
         raw = match.group() if match else text
@@ -92,14 +104,9 @@ class GeminiSummaryClient:
             _log.warning("gemini.summary.parse_failed", raw_text=text[:500])
             raise
 
-        def _as_str_list(value) -> tuple[str, ...]:
-            if not isinstance(value, list):
-                return ()
-            return tuple(str(item) for item in value if item is not None)
-
-        return SummaryContent(
-            achievements=_as_str_list(data.get("achievements")),
-            challenges=_as_str_list(data.get("challenges")),
-            learnings=_as_str_list(data.get("learnings")),
-            next_focus=_as_str_list(data.get("next_focus")),
-        )
+        sections = {
+            k: [str(item) for item in v if item is not None]
+            for k, v in data.items()
+            if isinstance(v, list)
+        }
+        return SummaryContent(sections=sections)

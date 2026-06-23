@@ -11,10 +11,7 @@ from app.retrospective.presentation.responses.responses import GithubPushRespons
 
 
 class SummaryContentResponse(BaseModel):
-    achievements: list[str]
-    challenges: list[str]
-    learnings: list[str]
-    next_focus: list[str]
+    sections: dict[str, list[str]]
 
 
 class SummaryResponse(BaseModel):
@@ -47,10 +44,7 @@ class SummaryResponse(BaseModel):
             period_end=summary.period_end,
             status=summary.status.value,
             content=SummaryContentResponse(
-                achievements=list(summary.content.achievements),
-                challenges=list(summary.content.challenges),
-                learnings=list(summary.content.learnings),
-                next_focus=list(summary.content.next_focus),
+                sections=summary.content.sections,
             ) if summary.content else None,
             github_push=GithubPushResponse.from_entity(push) if push else None,
             created_at=summary.created_at,

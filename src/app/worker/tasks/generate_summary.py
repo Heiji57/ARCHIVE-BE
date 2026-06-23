@@ -137,11 +137,11 @@ async def generate_summary_task(
                         user_template = template.content
 
             strategy = get_strategy(summary.summary_type)
-            prompt = await strategy.build_prompt(session, summary, locale, user_template)
+            prompt = await strategy.build_prompt(session, summary, user_template)
 
         # AI 호출 — DB transaction 밖
         gemini = GeminiSummaryClient(settings.ai)
-        content = await gemini.generate(prompt)
+        content = await gemini.generate(prompt, use_template_schema=bool(user_template))
 
         # T2: complete + notify
         async with factory.begin() as session:

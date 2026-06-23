@@ -5,8 +5,8 @@
             없으면 entries. weekly 가 있어도 갱신 이후 추가된 entry 가 있으면 보강 (방식 B).
 - ANNUAL  : AnnualHybridStrategy    — 월마다 monthly summary 있으면 그것, 없으면 weekly summaries.
 
-모든 build_prompt 는 `locale` 과 `user_template` 을 인자로 받는다. 로케일은 AI 출력
-언어 결정, user_template 은 출력 스타일 가이드(시스템 메시지에서 격리·제한됨).
+모든 build_prompt 는 `user_template` 을 인자로 받는다. 출력 언어는 Gemini 가 입력
+데이터의 언어 분포를 분석해 자동 결정한다.
 """
 from abc import ABC, abstractmethod
 
@@ -38,7 +38,6 @@ class SummaryStrategy(ABC):
         self,
         session: AsyncSession,
         summary: RetroSummary,
-        locale: str,
         user_template: str,
     ) -> str: ...
 
@@ -50,7 +49,6 @@ class EntriesAndTodosStrategy(SummaryStrategy):
         self,
         session: AsyncSession,
         summary: RetroSummary,
-        locale: str,
         user_template: str,
     ) -> str:
         entry_repo = JournalEntryRepository(session)
@@ -71,7 +69,7 @@ class EntriesAndTodosStrategy(SummaryStrategy):
             if t.status in (TaskStatus.IN_PROGRESS, TaskStatus.DONE)
         ]
 
-        return build_prompt_weekly(entries, todos, locale, user_template)
+        return build_prompt_weekly(entries, todos, user_template)
 
 
 class MonthlyHybridStrategy(SummaryStrategy):
@@ -79,7 +77,6 @@ class MonthlyHybridStrategy(SummaryStrategy):
         self,
         session: AsyncSession,
         summary: RetroSummary,
-        locale: str,
         user_template: str,
     ) -> str:
         entry_repo = JournalEntryRepository(session)
@@ -126,7 +123,7 @@ class MonthlyHybridStrategy(SummaryStrategy):
                     )
                 )
 
-        return build_prompt_monthly_hybrid(sections, locale, user_template)
+        return build_prompt_monthly_hybrid(sections, user_template)
 
 
 class AnnualHybridStrategy(SummaryStrategy):
@@ -134,7 +131,6 @@ class AnnualHybridStrategy(SummaryStrategy):
         self,
         session: AsyncSession,
         summary: RetroSummary,
-        locale: str,
         user_template: str,
     ) -> str:
         summary_repo = RetroSummaryRepository(session)
@@ -171,7 +167,7 @@ class AnnualHybridStrategy(SummaryStrategy):
                     )
                 )
 
-        return build_prompt_annual_hybrid(sections, locale, user_template)
+        return build_prompt_annual_hybrid(sections, user_template)
 
 
 def get_strategy(summary_type: SummaryType) -> SummaryStrategy:

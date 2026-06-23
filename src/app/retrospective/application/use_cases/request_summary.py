@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 from app.retrospective.application.dtos.summary_commands import RequestSummaryCommand
-from app.retrospective.domain.exceptions.exceptions import SummaryAlreadyInProgressException
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import SummaryStatus
 from app.retrospective.domain.repositories.repository import IRetroSummaryRepository
@@ -27,13 +26,11 @@ class RequestSummaryUseCase:
         )
 
         if existing:
-            if existing.status in (SummaryStatus.PENDING, SummaryStatus.IN_PROGRESS):
-                raise SummaryAlreadyInProgressException()
             if existing.status == SummaryStatus.COMPLETED and not cmd.force:
                 # 기존 완료본을 그대로 반환 (AI 재호출 안 함) — rate limit 카운트 대상 아님
                 return existing
-            # FAILED → 재시도, OR COMPLETED + force=True → 강제 재생성.
-            # 둘 다 실제로 AI 호출이 발생하므로 rate limit 적용.
+            # PENDING/IN_PROGRESS → 덮어쓰기, FAILED → 재시도, COMPLETED+force → 강제 재생성.
+            # 실제로 AI 호출이 발생하므로 rate limit 적용.
             await self._rate_limiter.check_and_record(cmd.user_id, cmd.summary_type)
             now = datetime.now(timezone.utc)
             existing.status = SummaryStatus.PENDING

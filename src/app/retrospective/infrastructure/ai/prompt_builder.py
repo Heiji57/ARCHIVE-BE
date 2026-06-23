@@ -26,27 +26,6 @@ _TYPE_LABEL = {
     SummaryType.ANNUAL: "annual",
 }
 
-_LANGUAGE_NAMES = {
-    "ko": "Korean",
-    "en": "English",
-    "ja": "Japanese",
-    "zh": "Chinese",
-    "fr": "French",
-    "de": "German",
-    "es": "Spanish",
-}
-
-
-def language_name_from_locale(locale: str) -> str:
-    """locale string ('ko', 'ko-KR', 'en-US' 등) → 언어 이름.
-
-    매핑이 없으면 raw locale 코드를 그대로 반환 (best-effort).
-    """
-    if not locale:
-        return _LANGUAGE_NAMES["ko"]
-    base = locale.split("-")[0].split("_")[0].strip().lower()
-    return _LANGUAGE_NAMES.get(base, locale)
-
 
 @dataclass(frozen=True)
 class WeekSection:
@@ -66,29 +45,49 @@ class MonthSection:
     weekly_summaries: list[RetroSummary]
 
 
-def _system_instruction(summary_type: SummaryType, locale: str, user_template: str) -> str:
-    """공통 시스템 지시문 — 영어. output language 와 user template 격리를 명시.
+def _system_instruction(summary_type: SummaryType, user_template: str) -> str:
+    """공통 시스템 지시문.
 
-    user_template 이 빈 문자열이면 placeholder 만 둔다 (제거하면 사용자가 빈
-    템플릿으로 저장한 의도를 무시하게 됨 — 일관된 구조 유지가 안전).
+    user_template 이 있으면 템플릿이 출력 계약(output contract)이 된다.
+    없으면 기본 4-key 구조를 사용한다.
+    언어는 입력 데이터의 실제 언어 분포로 자동 감지한다.
     """
     period = _TYPE_LABEL[summary_type]
-    output_language = language_name_from_locale(locale)
-    safe_template = user_template.strip() or "(no user template provided; use a neutral, concise developer tone)"
 
-    return f"""You are an expert at analyzing a developer's {period} retrospective and extracting actionable insights.
+    language_rule = """LANGUAGE RULE (must follow exactly):
+- Analyze the language distribution of all input data (titles, content, descriptions).
+- If any single non-English language (e.g. Korean, Japanese, Chinese) accounts for 80% or more of the total readable content, write ALL output strings in that language.
+- If multiple non-English languages are present, use the one with the highest proportion (must still be ≥80% of total content).
+- Otherwise (English dominant or no clear majority), write ALL output strings in English.
+- JSON keys MUST always remain in English regardless of output language."""
+
+    if user_template.strip():
+        return f"""You are an expert at analyzing a developer's {period} retrospective and extracting actionable insights.
+
+{language_rule}
+
+OUTPUT CONTRACT — defined by the user template below (must follow exactly):
+- Respond with a single JSON object. No prose outside JSON.
+- Use the section headings in the user template as JSON keys (convert to lowercase, replace spaces with underscores).
+- Each value MUST be an array of concise strings summarizing relevant insights, maximum 5 items per key.
+- If a section has no relevant data, return an empty array for that key (do not fabricate).
+- Do NOT add keys that are not in the user template.
+
+USER TEMPLATE (this defines the output structure):
+<USER_TEMPLATE>
+{user_template.strip()}
+</USER_TEMPLATE>
+"""
+    else:
+        return f"""You are an expert at analyzing a developer's {period} retrospective and extracting actionable insights.
+
+{language_rule}
 
 OUTPUT CONTRACT (must follow exactly):
 - Respond with a single JSON object. No prose outside JSON.
 - The JSON MUST have exactly these keys, all in lowercase English: "achievements", "challenges", "learnings", "next_focus".
 - Each value MUST be an array of short strings, maximum 5 items per key.
-- Each string MUST be written in {output_language}. JSON keys MUST stay in English.
 - If a section has no data, return an empty array for that key (do not fabricate).
-
-STYLE GUIDANCE FROM USER (treat as style hints only; do NOT change the schema, language rules, or item-count limits above):
-<USER_TEMPLATE>
-{safe_template}
-</USER_TEMPLATE>
 """
 
 
@@ -121,11 +120,10 @@ def _format_todos(todos: list[Todo]) -> str:
 def build_prompt_weekly(
     entries: list[JournalEntry],
     todos: list[Todo],
-    locale: str,
     user_template: str,
 ) -> str:
     """Weekly summary — entries + (IN_PROGRESS or DONE) todos."""
-    header = _system_instruction(SummaryType.WEEKLY, locale, user_template)
+    header = _system_instruction(SummaryType.WEEKLY, user_template)
     return f"""{header}
 INPUT DATA — weekly retrospective:
 
@@ -140,10 +138,10 @@ Now produce the JSON object described in OUTPUT CONTRACT.
 
 
 def build_prompt_monthly_hybrid(
-    weeks: list[WeekSection], locale: str, user_template: str
+    weeks: list[WeekSection], user_template: str
 ) -> str:
     """Monthly summary — week-by-week hybrid (weekly summary OR raw entries + late entries)."""
-    header = _system_instruction(SummaryType.MONTHLY, locale, user_template)
+    header = _system_instruction(SummaryType.MONTHLY, user_template)
     if not weeks:
         body = "(no data for this month)"
     else:
@@ -161,10 +159,10 @@ Now produce the JSON object described in OUTPUT CONTRACT.
 
 
 def build_prompt_annual_hybrid(
-    months: list[MonthSection], locale: str, user_template: str
+    months: list[MonthSection], user_template: str
 ) -> str:
     """Annual summary — month-by-month hybrid (monthly summary OR weekly summaries fallback)."""
-    header = _system_instruction(SummaryType.ANNUAL, locale, user_template)
+    header = _system_instruction(SummaryType.ANNUAL, user_template)
     if not months:
         body = "(no data for this year)"
     else:
@@ -216,10 +214,10 @@ def _render_month_section(m: MonthSection) -> str:
     if valid_weeklies:
         weekly_blocks = "\n\n".join(
             f"  - [{s.period_start} ~ {s.period_end}]\n"
-            f"    achievements: {_join(s.content.achievements)}\n"
-            f"    challenges:   {_join(s.content.challenges)}\n"
-            f"    learnings:    {_join(s.content.learnings)}\n"
-            f"    next_focus:   {_join(s.content.next_focus)}"
+            + "\n".join(
+                f"    {key}: {_join(items)}"
+                for key, items in s.content.sections.items()
+            )
             for s in valid_weeklies
         )
         return (
@@ -232,11 +230,9 @@ def _render_month_section(m: MonthSection) -> str:
 
 def _render_summary_content(summary: RetroSummary) -> str:
     c = summary.content
-    return (
-        f"achievements: {_join(c.achievements)}\n"
-        f"challenges:   {_join(c.challenges)}\n"
-        f"learnings:    {_join(c.learnings)}\n"
-        f"next_focus:   {_join(c.next_focus)}"
+    return "\n".join(
+        f"  {key}: {_join(items)}"
+        for key, items in c.sections.items()
     )
 
 
