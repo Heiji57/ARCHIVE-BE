@@ -31,6 +31,13 @@ class UserResponse(BaseModel):
         )
 
 
+class UpdateProfileResponse(BaseModel):
+    user: UserResponse
+    access_token: str | None = Field(default=None, serialization_alias="accessToken")
+
+    model_config = {"populate_by_name": True}
+
+
 class OAuthLinkInitResponse(BaseModel):
     authorize_url: str = Field(serialization_alias="authorizeUrl")
 

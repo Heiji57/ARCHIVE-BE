@@ -413,7 +413,7 @@ paths:
           description: 수정 성공
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ApiResponseUser" }
+              schema: { $ref: "#/components/schemas/ApiResponseUpdateProfile" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "404":
@@ -2491,6 +2491,27 @@ components:
         - type: object
           properties:
             data: { $ref: "#/components/schemas/UserResponse" }
+
+    UpdateProfileResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: "#/components/schemas/UserResponse"
+        accessToken:
+          type: string
+          nullable: true
+          description: |
+            accountType 변경 시에만 발급되는 새 access token.
+            FE는 이 값이 non-null이면 기존 토큰을 즉시 교체해야 한다.
+            그 외 변경(displayName 등)은 null.
+
+    ApiResponseUpdateProfile:
+      allOf:
+        - $ref: "#/components/schemas/ApiResponseEmpty"
+        - type: object
+          properties:
+            data: { $ref: "#/components/schemas/UpdateProfileResponse" }
 
     OAuthLinkInitResponse:
       type: object

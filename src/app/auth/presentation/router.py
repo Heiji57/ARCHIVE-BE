@@ -34,6 +34,7 @@ from app.auth.application.use_cases.send_email_verification import SendEmailVeri
 from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
 from app.auth.domain.exceptions.exceptions import OnboardingTokenInvalidException
+from app.shared.infrastructure.auth.jwt import create_access_token
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.presentation.requests.requests import (
     LoginRequest,
@@ -48,6 +49,7 @@ from app.auth.presentation.requests.requests import (
 from app.auth.presentation.responses.responses import (
     OAuthLinkInitResponse,
     TokenResponse,
+    UpdateProfileResponse,
     UserResponse,
 )
 from app.auth.presentation.responses.session_responses import (
@@ -284,13 +286,13 @@ async def get_me(
 @router.patch(
     "/me",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[UserResponse],
+    response_model=ApiResponse[UpdateProfileResponse],
 )
 async def update_profile(
     body: UpdateProfileRequest,
     use_case: FromDishka[UpdateProfileUseCase],
     current_user: UserContext = Depends(get_current_user),
-) -> ApiResponse[UserResponse]:
+) -> ApiResponse[UpdateProfileResponse]:
     user = await use_case.execute(
         UpdateProfileCommand(
             user_id=current_user.id,
@@ -298,7 +300,14 @@ async def update_profile(
             account_type=body.account_type,
         )
     )
-    return ApiResponse.ok(UserResponse.from_entity(user))
+    new_token = (
+        create_access_token(user.id, user.account_type)
+        if body.account_type is not None
+        else None
+    )
+    return ApiResponse.ok(
+        UpdateProfileResponse(user=UserResponse.from_entity(user), access_token=new_token)
+    )
 
 
 @router.get("/oauth/{provider}/authorize")

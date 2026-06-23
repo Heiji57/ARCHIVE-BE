@@ -87,8 +87,10 @@ class LoginRequest(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
-    display_name: str | None = None
-    account_type: str | None = None
+    display_name: str | None = Field(default=None, alias="displayName")
+    account_type: str | None = Field(default=None, alias="accountType")
+
+    model_config = {"populate_by_name": True}
 
     @field_validator("account_type", mode="before")
     @classmethod

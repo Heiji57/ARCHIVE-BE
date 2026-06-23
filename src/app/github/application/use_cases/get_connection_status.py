@@ -1,9 +1,13 @@
 from dataclasses import dataclass
 
+import structlog
+
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.github.infrastructure.api.github_api_client import GitHubApiClient
 from app.settings.domain.repositories.repository import IUserSettingsRepository
+
+_log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class GetConnectionStatusUseCase:
             None,
         )
         if github_conn is None or not github_conn.access_token:
+            _log.info("github.connection.not_found", user_id=user_id)
             return ConnectionStatus(
                 connected=False,
                 login=None,
@@ -65,7 +70,12 @@ class GetConnectionStatusUseCase:
                 push_target_repository_id=push_target_id,
                 has_verified_emails=has_verified_emails,
             )
-        except Exception:
+        except Exception as e:
+            _log.warning(
+                "github.connection.token_verify_failed",
+                user_id=user_id,
+                error=str(e),
+            )
             return ConnectionStatus(
                 connected=False,
                 login=None,
