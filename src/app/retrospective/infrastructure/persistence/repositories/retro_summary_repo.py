@@ -80,6 +80,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             period_end=entity.period_end,
             status=entity.status.value,
             content=entity.content.to_dict() if entity.content else None,
+            edited_content=entity.edited_content,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -93,6 +94,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             period_end=model.period_end,
             status=SummaryStatus(model.status),
             content=SummaryContent.from_dict(model.content) if model.content else None,
+            edited_content=model.edited_content,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

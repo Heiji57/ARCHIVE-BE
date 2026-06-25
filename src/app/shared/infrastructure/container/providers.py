@@ -75,6 +75,7 @@ from app.retrospective.application.use_cases.create_entry import CreateEntryUseC
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
+from app.retrospective.application.use_cases.edit_summary import EditSummaryUseCase
 from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
 from app.retrospective.application.use_cases.get_summary import GetSummaryUseCase
 from app.retrospective.application.use_cases.get_summary_readiness import (
@@ -657,6 +658,12 @@ class RequestProvider(Provider):
         self, summary_repo: IRetroSummaryRepository
     ) -> GetSummariesUseCase:
         return GetSummariesUseCase(summary_repo)
+
+    @provide
+    def edit_summary_use_case(
+        self, summary_repo: IRetroSummaryRepository
+    ) -> EditSummaryUseCase:
+        return EditSummaryUseCase(summary_repo)
 
     @provide
     def get_summary_readiness_use_case(

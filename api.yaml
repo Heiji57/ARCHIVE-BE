@@ -1157,6 +1157,34 @@ paths:
       x-error-codes:
         - RETRO_SUMMARY_NOT_FOUND
 
+    patch:
+      tags: [summaries]
+      summary: 요약 편집 (마크다운 오버라이드 저장/해제)
+      description: |
+        AI 가 생성한 요약을 사용자가 편집한 마크다운으로 덮어쓴다.
+        AI 원본(content.sections)은 보존되며, `contentMarkdown` 을 null 로 보내면
+        편집을 해제해 AI 원본으로 복귀한다(AI 재호출/rate limit 없음).
+        status 제약은 없다 — 호출 시점의 요약을 그대로 저장한다.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SummaryEditRequest" }
+      responses:
+        "200":
+          description: 편집 저장 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSummary" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422":
+          $ref: "#/components/responses/ValidationError_422"
+      x-error-codes:
+        - RETRO_SUMMARY_NOT_FOUND
+
   /summaries/{summary_id}/stream:
     parameters:
       - $ref: "#/components/parameters/SummaryIdPath"
@@ -2829,6 +2857,14 @@ components:
         content:
           $ref: "#/components/schemas/SummaryContentResponse"
           nullable: true
+        editedContent:
+          type: string
+          nullable: true
+          maxLength: 50000
+          description: >
+            사용자 편집 마크다운 오버라이드. 있으면 FE 는 이 마크다운을 우선 렌더하고,
+            null 이면 content.sections 로 합성해 렌더한다.
+            AI 원본(content)은 비파괴 보존되며, 재생성(force/FAILED/auto) 시 자동으로 null 로 초기화된다.
         githubPush:
           allOf:
             - $ref: "#/components/schemas/GithubPushResponse"
@@ -2836,6 +2872,17 @@ components:
           description: 해당 summary 의 (summary_type, period_start) 기반 period 에 push 된 적이 없으면 null
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time, nullable: true }
+
+    SummaryEditRequest:
+      type: object
+      required: [contentMarkdown]
+      properties:
+        contentMarkdown:
+          type: string
+          nullable: true
+          maxLength: 50000
+          description: >
+            편집 마크다운. null 이면 편집 해제 → AI 원본(content.sections)으로 복귀(AI 재호출/rate limit 없음).
 
     ApiResponseSummary:
       allOf:

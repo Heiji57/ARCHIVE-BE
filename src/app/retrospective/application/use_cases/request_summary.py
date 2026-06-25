@@ -35,6 +35,7 @@ class RequestSummaryUseCase:
             now = datetime.now(timezone.utc)
             existing.status = SummaryStatus.PENDING
             existing.content = None
+            existing.edited_content = None  # 재생성 시 편집 오버라이드 초기화 (AI 원본으로 복구)
             existing.updated_at = now
             saved = await self._summary_repo.save(existing)
         else:

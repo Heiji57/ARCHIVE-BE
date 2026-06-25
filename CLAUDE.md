@@ -186,9 +186,14 @@ uvicorn app.main:app --reload
 # DB 마이그레이션
 alembic upgrade head
 
-# Celery worker 실행
-celery -A app.worker.celery_app worker --loglevel=info
+# Celery worker 실행 (ai_tasks 큐 반드시 포함 — worker.generate_summary 가 이 큐로 라우팅됨)
+celery -A app.worker.celery_app worker -Q ai_tasks,default --concurrency=3 --loglevel=info
+
+# Celery beat (자동 요약 dispatcher 스케줄러) — schedule 파일은 쓰기 가능한 경로로 지정
+celery -A app.worker.celery_app worker --beat -Q default --schedule=/tmp/celerybeat-schedule --loglevel=info
 ```
+
+> **큐 분리**: `ai_tasks` = AI 요약 task (`worker.generate_summary`, priority=9), `default` = 스케줄 dispatcher (`worker.dispatch_summaries_for_tz`). worker 를 `-Q` 없이 띄우면 `task_default_queue=default` 만 소비해 요약 task 가 영원히 처리되지 않으니 **`ai_tasks` 를 반드시 포함**한다. docker-compose 는 `worker`(ai_tasks) / `worker-beat`(default+beat) 두 컨테이너로 분리되어 있다.
 
 ## Protected Files (DO NOT READ OR MODIFY)
 

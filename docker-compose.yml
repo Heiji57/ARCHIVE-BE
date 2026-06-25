@@ -71,7 +71,7 @@ services:
   # Beat 스케줄러 + schedule_summaries 태스크 처리
   worker-beat:
     build: .
-    command: celery -A app.worker.celery_app worker --beat -Q default --concurrency=2 --loglevel=info
+    command: celery -A app.worker.celery_app worker --beat -Q default --concurrency=2 --schedule=/tmp/celerybeat-schedule --loglevel=info
     env_file:
       - .env
     volumes:

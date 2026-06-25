@@ -9,8 +9,12 @@ from app.github.domain.repositories.retrospective_push_repository import (
     IRetrospectivePushRepository,
 )
 from app.github.domain.utils.period_mapping import summary_to_period
-from app.retrospective.application.dtos.summary_commands import RequestSummaryCommand
+from app.retrospective.application.dtos.summary_commands import (
+    EditSummaryCommand,
+    RequestSummaryCommand,
+)
 from app.retrospective.application.dtos.summary_queries import SummaryReadinessQuery
+from app.retrospective.application.use_cases.edit_summary import EditSummaryUseCase
 from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
 from app.retrospective.application.use_cases.get_summary import GetSummaryUseCase
 from app.retrospective.application.use_cases.get_summary_readiness import (
@@ -21,6 +25,7 @@ from app.retrospective.application.use_cases.get_summary_usage import (
 )
 from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
 from app.retrospective.domain.models.value_objects import SummaryStatus, SummaryType
+from app.retrospective.presentation.requests.requests import SummaryEditRequest
 from app.retrospective.presentation.responses.summary_responses import (
     SummaryReadinessResponse,
     SummaryResponse,
@@ -141,6 +146,30 @@ async def get_summary(
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[SummaryResponse]:
     summary = await use_case.execute(summary_id, current_user.id)
+    period_type, period_key = summary_to_period(summary)
+    push = await push_repo.find_by_period(current_user.id, period_type, period_key)
+    return ApiResponse.ok(SummaryResponse.from_entity(summary, push))
+
+
+@router.patch(
+    "/{summary_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[SummaryResponse],
+)
+async def edit_summary(
+    summary_id: str,
+    body: SummaryEditRequest,
+    use_case: FromDishka[EditSummaryUseCase],
+    push_repo: FromDishka[IRetrospectivePushRepository],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[SummaryResponse]:
+    summary = await use_case.execute(
+        EditSummaryCommand(
+            user_id=current_user.id,
+            summary_id=summary_id,
+            content_markdown=body.content_markdown,
+        )
+    )
     period_type, period_key = summary_to_period(summary)
     push = await push_repo.find_by_period(current_user.id, period_type, period_key)
     return ApiResponse.ok(SummaryResponse.from_entity(summary, push))

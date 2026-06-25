@@ -19,12 +19,18 @@ def calculate_summary_period(
     - ANNUAL: 작년 전체
     """
     if period_start is not None:
+        # 입력이 기간 중 어느 날이든 기간 시작으로 정규화한다.
+        # 동일 주/월/년은 항상 같은 period_start 로 수렴 → unique constraint
+        # (user_id, summary_type, period_start) 가 중복 생성을 정상 차단한다.
         if summary_type == SummaryType.WEEKLY:
-            return period_start, period_start + timedelta(days=6)
+            monday = period_start - timedelta(days=period_start.weekday())
+            return monday, monday + timedelta(days=6)
         if summary_type == SummaryType.MONTHLY:
-            last_day = calendar.monthrange(period_start.year, period_start.month)[1]
-            return period_start, period_start.replace(day=last_day)
-        return period_start, period_start.replace(month=12, day=31)
+            first = period_start.replace(day=1)
+            last_day = calendar.monthrange(first.year, first.month)[1]
+            return first, first.replace(day=last_day)
+        first = period_start.replace(month=1, day=1)
+        return first, first.replace(month=12, day=31)
 
     today = date.today()
 

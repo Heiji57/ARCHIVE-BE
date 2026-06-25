@@ -22,6 +22,9 @@ class SummaryResponse(BaseModel):
     period_end: date
     status: str
     content: SummaryContentResponse | None
+    edited_content: str | None = Field(
+        default=None, serialization_alias="editedContent"
+    )
     github_push: GithubPushResponse | None = Field(
         default=None, serialization_alias="githubPush"
     )
@@ -46,6 +49,7 @@ class SummaryResponse(BaseModel):
             content=SummaryContentResponse(
                 sections=summary.content.sections,
             ) if summary.content else None,
+            edited_content=summary.edited_content,
             github_push=GithubPushResponse.from_entity(push) if push else None,
             created_at=summary.created_at,
             updated_at=summary.updated_at,

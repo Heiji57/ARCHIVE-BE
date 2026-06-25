@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 from app.retrospective.domain.exceptions.exceptions import (
     SummaryAlreadyInProgressException,
@@ -21,6 +21,7 @@ class RetroSummary(BaseEntity):
     period_end: date
     status: SummaryStatus
     content: SummaryContent | None  # None — pending / in_progress / failed
+    edited_content: str | None = None  # 사용자 편집 마크다운 오버라이드 (있으면 FE 가 우선 렌더)
 
     def mark_in_progress(self) -> None:
         if self.status == SummaryStatus.IN_PROGRESS:
@@ -35,3 +36,8 @@ class RetroSummary(BaseEntity):
 
     def fail(self) -> None:
         self.status = SummaryStatus.FAILED
+
+    def apply_edit(self, markdown: str | None) -> None:
+        """사용자 편집 마크다운 저장. None 이면 편집 해제 → AI 원본(content) 으로 복귀."""
+        self.edited_content = markdown
+        self.updated_at = datetime.now(timezone.utc)

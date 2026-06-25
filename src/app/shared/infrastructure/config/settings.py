@@ -17,7 +17,7 @@ class AppConfig(BaseSettings):
 
     app_env: str = "development"
     cors_origins: list[str] = Field(default_factory=list)
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:5173"
     api_base_url: str = "http://localhost:8000"
 
     db: DatabaseConfig = Field(default_factory=DatabaseConfig)
