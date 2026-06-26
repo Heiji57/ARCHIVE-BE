@@ -1229,6 +1229,15 @@ paths:
 
         - **타임아웃**: 5분 (이후 `{"type": "timeout"}` 전송)
         - 페이로드는 `NotificationResponse`와 동일 + (`type`/`category` 포함)
+        - **`category=="summary"` 알림(AI 요약 완료/실패)에 한해** 어떤 회고가
+          갱신됐는지 식별할 수 있는 추가 필드가 포함된다. FE 는 이 이벤트로 해당
+          회고를 타깃 refetch/patch 할 수 있다 (수동 생성은 `summaryId` 를 이미
+          알고 있으므로 `/summaries/{id}/stream` 사용, 자동 생성은 이 채널이 유일):
+          - `resource`: `"summary"` (요약 관련 이벤트 식별자)
+          - `summaryId`: 갱신된 요약 ID
+          - `summaryType`: `weekly` | `monthly` | `annual`
+          - `summaryStatus`: `completed` | `failed`
+          - `periodStart`, `periodEnd`: 요약 기간 (ISO date, 실패 시 일부 생략 가능)
       responses:
         "200":
           description: SSE 스트림
@@ -1236,7 +1245,13 @@ paths:
             text/event-stream:
               schema:
                 type: string
-                example: 'data: {"id":"noti_abc","type":"success","category":"summary","title":"...","message":"..."}\n\n'
+              examples:
+                generic:
+                  summary: 일반 알림
+                  value: 'data: {"id":"noti_abc","type":"success","category":"system","title":"...","message":"..."}\n\n'
+                summaryCompleted:
+                  summary: AI 요약 완료 (summary 메타 포함)
+                  value: 'data: {"id":"noti_abc","type":"success","category":"summary","title":"주간 회고 요약 완료","message":"...","resource":"summary","summaryId":"sum_123","summaryType":"weekly","summaryStatus":"completed","periodStart":"2026-06-22","periodEnd":"2026-06-28"}\n\n'
         "401":
           $ref: "#/components/responses/Unauthorized_401"
 
@@ -2825,15 +2840,23 @@ components:
     SummaryContentResponse:
       type: object
       description: >
-        템플릿이 있을 때는 템플릿 섹션 헤더가 키가 된다.
+        섹션 순서를 보존하기 위해 배열 형태로 반환된다.
+        템플릿이 있을 때는 템플릿 섹션 헤더가 key 가 된다.
         템플릿이 없을 때는 기본 4개 키(achievements/challenges/learnings/next_focus)가 사용된다.
       required: [sections]
       properties:
         sections:
-          type: object
-          additionalProperties:
-            type: array
-            items: { type: string }
+          type: array
+          items:
+            type: object
+            required: [key, items]
+            properties:
+              key:
+                type: string
+                description: 섹션 이름 (템플릿 헤딩 또는 기본 키)
+              items:
+                type: array
+                items: { type: string }
 
     SummaryResponse:
       type: object

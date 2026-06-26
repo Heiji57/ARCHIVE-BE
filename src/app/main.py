@@ -78,9 +78,11 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(todo_router, prefix="/api/v1")
     app.include_router(entry_router, prefix="/api/v1")
-    app.include_router(summary_router, prefix="/api/v1")
+    # /summaries/templates 가 /summaries/{summary_id} 로 가로채이지 않도록
+    # template 라우터를 summary 라우터보다 먼저 등록한다.
     app.include_router(summary_template_router, prefix="/api/v1")
     app.include_router(summary_active_router, prefix="/api/v1")
+    app.include_router(summary_router, prefix="/api/v1")
     app.include_router(retro_template_router, prefix="/api/v1")
     app.include_router(notification_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")

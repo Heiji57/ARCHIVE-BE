@@ -15,8 +15,8 @@ class CreateSummaryTemplateCommand:
 class UpdateSummaryTemplateCommand:
     user_id: str
     template_id: str
-    name: str
-    content: str
+    name: str | None = None      # None — 미전송(변경 없음)
+    content: str | None = None   # None — 미전송(변경 없음). "" 은 빈 본문으로 클리어
 
 
 @dataclass(frozen=True)

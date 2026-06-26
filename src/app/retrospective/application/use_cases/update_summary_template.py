@@ -24,15 +24,18 @@ class UpdateSummaryTemplateUseCase:
         if existing is None:
             raise SummaryTemplateNotFoundException()
 
-        # 이름이 바뀌면 (user, summary_type, new_name) 중복 차단
-        if cmd.name != existing.name:
+        # PATCH 부분 수정 — 전송된 필드(None 이 아닌)만 갱신.
+        if cmd.name is not None and cmd.name != existing.name:
+            # 이름이 바뀌면 (user, summary_type, new_name) 중복 차단
             duplicate = await self._repo.find_by_name(
                 cmd.user_id, existing.summary_type, cmd.name
             )
             if duplicate is not None and duplicate.id != existing.id:
                 raise SummaryTemplateNameDuplicatedException()
+            existing.name = cmd.name
 
-        existing.name = cmd.name
-        existing.content = cmd.content
+        if cmd.content is not None:
+            existing.content = cmd.content
+
         existing.updated_at = datetime.now(timezone.utc)
         return await self._repo.save(existing)

@@ -3,14 +3,17 @@ from pydantic import BaseModel, Field
 
 class CreateSummaryTemplateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    content: str = Field(min_length=1, max_length=4000)
+    # content 는 빈 문자열 허용 (스펙: 0~4000자) — min_length 제약 없음
+    content: str = Field(max_length=4000)
 
     model_config = {"populate_by_name": True}
 
 
 class UpdateSummaryTemplateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    content: str = Field(min_length=1, max_length=4000)
+    # PATCH 부분 수정 — 전송된 필드만 갱신 (회고 템플릿 PATCH 와 동일 관례).
+    # name="" 은 422(빈 이름 금지), content="" 은 허용(빈 본문으로 클리어).
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    content: str | None = Field(default=None, max_length=4000)
 
     model_config = {"populate_by_name": True}
 

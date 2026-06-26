@@ -24,20 +24,28 @@ from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
 
+def _array_field(description: str) -> types.Schema:
+    return types.Schema(
+        type=types.Type.ARRAY,
+        items=types.Schema(type=types.Type.STRING),
+        description=description,
+    )
+
+
 _FIXED_RESPONSE_SCHEMA = types.Schema(
     type=types.Type.OBJECT,
     properties={
-        "achievements": types.Schema(
-            type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)
+        "achievements": _array_field(
+            "Concrete accomplishments and completed work. Max 5 items."
         ),
-        "challenges": types.Schema(
-            type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)
+        "challenges": _array_field(
+            "Difficulties, blockers, or problems faced. Max 5 items."
         ),
-        "learnings": types.Schema(
-            type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)
+        "learnings": _array_field(
+            "Insights, lessons, or new knowledge gained. Max 5 items."
         ),
-        "next_focus": types.Schema(
-            type=types.Type.ARRAY, items=types.Schema(type=types.Type.STRING)
+        "next_focus": _array_field(
+            "Priorities or action items for the next period. Max 5 items."
         ),
     },
     required=["achievements", "challenges", "learnings", "next_focus"],
@@ -47,25 +55,28 @@ _FIXED_RESPONSE_SCHEMA = types.Schema(
 
 class GeminiSummaryClient:
     def __init__(self, config: AIConfig) -> None:
-        self._client = genai.Client(api_key=config.google_api_key)
+        # http_options.timeout 은 밀리초. 응답이 없으면 무한 대기 대신 타임아웃 →
+        # 워커가 hang 된 호출에 묶이는 것을 방지 (한 건의 stall 이 큐 전체를 막던 문제).
+        self._client = genai.Client(
+            api_key=config.google_api_key,
+            http_options=types.HttpOptions(timeout=config.gemini_timeout_ms),
+        )
         self._model = config.gemini_model
 
-    async def generate(self, prompt: str, use_template_schema: bool = False) -> SummaryContent:
+    async def generate(
+        self, prompt: str, response_schema: types.Schema | None = None
+    ) -> SummaryContent:
         """AI 요약 생성.
 
-        use_template_schema=True 이면 response_schema 를 제거해 템플릿이 정의한
-        자유 키 구조를 허용한다. False 이면 고정 4-key 스키마를 강제한다.
+        response_schema 가 주어지면(사용자 템플릿 헤딩 기반 동적 스키마) 그것을,
+        없으면 고정 4-key 스키마를 강제한다. 어느 경로든 항상 스키마를 적용해
+        키 구조가 Gemini 디코딩 단계에서 보장된다 — 키 변형/누락/조용한 드롭 방지.
         """
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
+            response_schema=response_schema or _FIXED_RESPONSE_SCHEMA,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
-        if not use_template_schema:
-            config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=_FIXED_RESPONSE_SCHEMA,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-            )
 
         response = await self._client.aio.models.generate_content(
             model=self._model,
