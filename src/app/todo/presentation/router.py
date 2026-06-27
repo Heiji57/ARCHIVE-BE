@@ -11,8 +11,12 @@ from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
+from app.google_calendar.application.use_cases.get_calendar_events import (
+    GetCalendarEventsUseCase,
+)
+from app.google_calendar.presentation.responses.responses import CalendarEventResponse
 from app.todo.presentation.requests.requests import TodoCreateRequest, TodoUpdateRequest
-from app.todo.presentation.responses.responses import TodoResponse
+from app.todo.presentation.responses.responses import TodoResponse, TodosWithEventsResponse
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
 
@@ -20,27 +24,37 @@ router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
 @router.get(
     "",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[list[TodoResponse]],
+    response_model=ApiResponse[TodosWithEventsResponse],
 )
 async def get_todos(
     by_date_uc: FromDishka[GetTodosByDateUseCase],
     by_range_uc: FromDishka[GetTodosByRangeUseCase],
+    calendar_uc: FromDishka[GetCalendarEventsUseCase],
     current_user: UserContext = Depends(get_current_user),
     date_key: str | None = Query(default=None, alias="dateKey"),
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
-) -> ApiResponse[list[TodoResponse]]:
+) -> ApiResponse[TodosWithEventsResponse]:
+    events = []
     if date_key:
         todos = await by_date_uc.execute(
             GetTodosByDateQuery(user_id=current_user.id, date_key=date_key)
         )
+        # 캘린더 미연결 사용자는 빈 리스트. 연결 사용자는 stale 시 온디맨드 sync 후 조회.
+        events = await calendar_uc.execute(current_user.id, date_key, date_key)
     elif from_date and to_date:
         todos = await by_range_uc.execute(
             GetTodosByRangeQuery(user_id=current_user.id, from_date=from_date, to_date=to_date)
         )
+        events = await calendar_uc.execute(current_user.id, from_date, to_date)
     else:
         todos = []
-    return ApiResponse.ok([TodoResponse.from_entity(t) for t in todos])
+    return ApiResponse.ok(
+        TodosWithEventsResponse(
+            todos=[TodoResponse.from_entity(t) for t in todos],
+            events=[CalendarEventResponse.from_entity(e) for e in events],
+        )
+    )
 
 
 @router.post(

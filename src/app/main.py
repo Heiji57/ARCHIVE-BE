@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.auth.presentation.router import router as auth_router
 from app.github.presentation.router import router as github_router
+from app.google_calendar.presentation.router import router as calendar_router
 from app.notification.presentation.router import router as notification_router
 from app.settings.presentation.router import router as settings_router
 from app.retrospective.presentation.router import router as entry_router
@@ -35,6 +36,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from app.github.infrastructure.api.github_api_client import GitHubApiClient
         api_client: GitHubApiClient = await app.state.dishka_container.get(GitHubApiClient)
         await api_client.close()
+    except Exception:
+        pass
+    # GoogleCalendarApiClient 도 httpx.AsyncClient 를 멤버로 유지 — lifespan 종료 시 닫는다.
+    try:
+        from app.google_calendar.infrastructure.api.google_calendar_client import (
+            GoogleCalendarApiClient,
+        )
+        calendar_client: GoogleCalendarApiClient = await app.state.dishka_container.get(
+            GoogleCalendarApiClient
+        )
+        await calendar_client.close()
     except Exception:
         pass
     # dishka가 app.state.dishka_container에 컨테이너를 저장함
@@ -87,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(notification_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
     app.include_router(github_router, prefix="/api/v1")
+    app.include_router(calendar_router, prefix="/api/v1")
     return app
 
 

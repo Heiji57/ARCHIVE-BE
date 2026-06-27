@@ -36,6 +36,12 @@ from app.github.domain.exceptions.exceptions import (
     GitHubRepositoryNotLinkedException,
     GitHubTokenInvalidException,
 )
+from app.google_calendar.domain.exceptions.exceptions import (
+    CalendarApiUnavailableException,
+    CalendarNotConnectedException,
+    CalendarReauthRequiredException,
+    CalendarStateInvalidException,
+)
 from app.notification.domain.exceptions.exceptions import NotificationNotFoundException
 from app.retrospective.domain.exceptions.exceptions import (
     JournalEntryAlreadyExistsException,
@@ -78,6 +84,8 @@ _STATUS_MAP: dict[str, int] = {
     GitHubPushTargetNotSetException.code: 400,
     GitHubRepositoryNotLinkedException.code: 400,
     PasswordResetNotAllowedException.code: 400,
+    CalendarNotConnectedException.code: 400,
+    CalendarStateInvalidException.code: 400,
     # 401
     AuthTokenInvalidException.code: 401,
     AuthTokenExpiredException.code: 401,
@@ -87,6 +95,7 @@ _STATUS_MAP: dict[str, int] = {
     RefreshTokenReuseDetectedException.code: 401,
     Auth2FACodeInvalidException.code: 401,
     GitHubTokenInvalidException.code: 401,
+    CalendarReauthRequiredException.code: 401,
     OnboardingTokenInvalidException.code: 401,
     OnboardingTokenExpiredException.code: 401,
     PasswordResetTokenInvalidException.code: 401,
@@ -129,6 +138,7 @@ _STATUS_MAP: dict[str, int] = {
     GitHubPushFailedException.code: 502,
     # 503
     GitHubApiUnavailableException.code: 503,
+    CalendarApiUnavailableException.code: 503,
 }
 
 

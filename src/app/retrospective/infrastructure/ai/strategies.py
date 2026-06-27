@@ -7,14 +7,25 @@
 
 모든 build_prompt 는 `user_template` 과 `locale` 을 인자로 받는다. 출력 언어는
 prompt_builder 의 `_language_for_prompt`(콘텐츠 우선, locale 보조) 가 결정한다.
+
+또한 모든 summary_type 은 해당 기간의 Google Calendar 이벤트(DB 저장본)를 읽어
+프롬프트에 read-only 컨텍스트로 주입한다 (`_fetch_calendar_inputs`). worker 에서
+Google API 동기 호출은 하지 않는다 — 최신성은 GET /todos 온디맨드 sync 가 담당.
 """
 from abc import ABC, abstractmethod
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.google_calendar.domain.models.calendar_event import CalendarEvent
+from app.google_calendar.infrastructure.persistence.repositories.calendar_event_repo import (
+    CalendarEventRepository,
+)
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import SummaryStatus, SummaryType
 from app.retrospective.infrastructure.ai.prompt_builder import (
+    CalendarEventInput,
     MonthSection,
     WeekSection,
     build_prompt_annual_hybrid,
@@ -30,6 +41,42 @@ from app.retrospective.infrastructure.persistence.repositories.retro_summary_rep
 from app.shared.domain.utils.period import get_months_in_year, weeks_owned_by_month
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
+
+
+def _event_time_range(event: CalendarEvent) -> str | None:
+    """이벤트 시간 범위를 이벤트 자체 tz 기준 "HH:MM–HH:MM" 로. 종일/시간없음은 None."""
+    if event.all_day or event.start_at is None:
+        return None
+    tz = ZoneInfo(event.timezone) if event.timezone else timezone.utc
+    out = event.start_at.astimezone(tz).strftime("%H:%M")
+    if event.end_at is not None:
+        out += "–" + event.end_at.astimezone(tz).strftime("%H:%M")
+    return out
+
+
+async def _fetch_calendar_inputs(
+    session: AsyncSession, summary: RetroSummary
+) -> list[CalendarEventInput]:
+    """요약 기간의 저장된 캘린더 이벤트를 프롬프트 입력으로 매핑.
+
+    백그라운드 worker 에서 Google API 동기 호출(지연/실패 위험)을 피하기 위해
+    DB 에 저장된 이벤트만 읽는다 — GET /todos 온디맨드 sync 가 최신성을 유지.
+    """
+    repo = CalendarEventRepository(session)
+    events = await repo.find_by_date_range(
+        summary.user_id,
+        summary.period_start.isoformat(),
+        summary.period_end.isoformat(),
+    )
+    return [
+        CalendarEventInput(
+            date_key=e.date_key,
+            title=e.title,
+            time_range=_event_time_range(e),
+            location=e.location,
+        )
+        for e in events
+    ]
 
 
 class SummaryStrategy(ABC):
@@ -71,7 +118,11 @@ class EntriesAndTodosStrategy(SummaryStrategy):
             if t.status in (TaskStatus.IN_PROGRESS, TaskStatus.DONE)
         ]
 
-        return build_prompt_weekly(entries, todos, user_template, locale)
+        calendar_events = await _fetch_calendar_inputs(session, summary)
+
+        return build_prompt_weekly(
+            entries, todos, user_template, locale, calendar_events
+        )
 
 
 class MonthlyHybridStrategy(SummaryStrategy):
@@ -126,7 +177,11 @@ class MonthlyHybridStrategy(SummaryStrategy):
                     )
                 )
 
-        return build_prompt_monthly_hybrid(sections, user_template, locale)
+        calendar_events = await _fetch_calendar_inputs(session, summary)
+
+        return build_prompt_monthly_hybrid(
+            sections, user_template, locale, calendar_events
+        )
 
 
 class AnnualHybridStrategy(SummaryStrategy):
@@ -171,7 +226,11 @@ class AnnualHybridStrategy(SummaryStrategy):
                     )
                 )
 
-        return build_prompt_annual_hybrid(sections, user_template, locale)
+        calendar_events = await _fetch_calendar_inputs(session, summary)
+
+        return build_prompt_annual_hybrid(
+            sections, user_template, locale, calendar_events
+        )
 
 
 def get_strategy(summary_type: SummaryType) -> SummaryStrategy:

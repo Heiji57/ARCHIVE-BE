@@ -7,7 +7,7 @@ from .ai import AIConfig
 from .auth import AuthConfig
 from .database import DatabaseConfig
 from .email import EmailConfig
-from .oauth import GitHubOAuthConfig, GoogleOAuthConfig
+from .oauth import GitHubOAuthConfig, GoogleCalendarConfig, GoogleOAuthConfig
 from .redis import RedisConfig
 from .retrospective import RetrospectiveConfig
 
@@ -25,6 +25,7 @@ class AppConfig(BaseSettings):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     github_oauth: GitHubOAuthConfig = Field(default_factory=GitHubOAuthConfig)
     google_oauth: GoogleOAuthConfig = Field(default_factory=GoogleOAuthConfig)
+    google_calendar: GoogleCalendarConfig = Field(default_factory=GoogleCalendarConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     retrospective: RetrospectiveConfig = Field(default_factory=RetrospectiveConfig)

@@ -54,6 +54,40 @@ from app.github.infrastructure.persistence.repositories.github_repository_repo i
 from app.github.infrastructure.persistence.repositories.retrospective_push_repo import (
     RetrospectivePushRepository,
 )
+from app.google_calendar.application.use_cases.disconnect_calendar import (
+    DisconnectCalendarUseCase,
+)
+from app.google_calendar.application.use_cases.get_calendar_events import (
+    GetCalendarEventsUseCase,
+)
+from app.google_calendar.application.use_cases.get_connection_status import (
+    GetCalendarConnectionStatusUseCase,
+)
+from app.google_calendar.application.use_cases.handle_calendar_callback import (
+    HandleCalendarCallbackUseCase,
+)
+from app.google_calendar.application.use_cases.initiate_calendar_connect import (
+    InitiateCalendarConnectUseCase,
+)
+from app.google_calendar.application.use_cases.sync_calendar_events import (
+    SyncCalendarEventsUseCase,
+)
+from app.google_calendar.domain.repositories.repository import (
+    ICalendarEventRepository,
+    IGoogleCalendarConnectionRepository,
+)
+from app.google_calendar.infrastructure.api.google_calendar_client import (
+    GoogleCalendarApiClient,
+)
+from app.google_calendar.infrastructure.cache.calendar_state import (
+    CalendarOAuthStateCache,
+)
+from app.google_calendar.infrastructure.persistence.repositories.calendar_connection_repo import (
+    GoogleCalendarConnectionRepository,
+)
+from app.google_calendar.infrastructure.persistence.repositories.calendar_event_repo import (
+    CalendarEventRepository,
+)
 from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
 from app.settings.application.use_cases.get_settings import GetSettingsUseCase
 from app.settings.application.use_cases.list_country_timezones import (
@@ -124,6 +158,7 @@ from app.retrospective.infrastructure.persistence.repositories.retro_summary_rep
 from app.retrospective.infrastructure.persistence.repositories.summary_template_repo import (
     UserSummaryTemplateRepository,
 )
+from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
 from app.shared.infrastructure.config.retrospective import RetrospectiveConfig
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
@@ -206,6 +241,23 @@ class AppProvider(Provider):
         return GitHubApiClient()
 
     @provide
+    def google_calendar_config(self, config: AppConfig) -> GoogleCalendarConfig:
+        return config.google_calendar
+
+    @provide
+    def google_calendar_api_client(
+        self, calendar_config: GoogleCalendarConfig
+    ) -> GoogleCalendarApiClient:
+        return GoogleCalendarApiClient(calendar_config)
+
+    @provide
+    def calendar_oauth_state_cache(self, config: AppConfig) -> CalendarOAuthStateCache:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return CalendarOAuthStateCache(
+            redis, config.google_calendar.calendar_state_ttl_seconds
+        )
+
+    @provide
     def summary_rate_limiter(self, config: AppConfig) -> SummaryRateLimiter:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
         return SummaryRateLimiter(redis)
@@ -276,6 +328,16 @@ class RequestProvider(Provider):
         self, session: AsyncSession
     ) -> IRetrospectivePushRepository:
         return RetrospectivePushRepository(session)
+
+    @provide
+    def calendar_connection_repo(
+        self, session: AsyncSession
+    ) -> IGoogleCalendarConnectionRepository:
+        return GoogleCalendarConnectionRepository(session)
+
+    @provide
+    def calendar_event_repo(self, session: AsyncSession) -> ICalendarEventRepository:
+        return CalendarEventRepository(session)
 
     @provide
     def country_history_repo(self, session: AsyncSession) -> ICountryHistoryRepository:
@@ -754,3 +816,56 @@ class RequestProvider(Provider):
         return PushRetrospectiveUseCase(
             settings_repo, oauth_repo, repo, api_client, push_repo
         )
+
+    # ── Google Calendar Use Cases ─────────────────────────────────────────────
+
+    @provide
+    def initiate_calendar_connect_use_case(
+        self,
+        api_client: GoogleCalendarApiClient,
+        state_cache: CalendarOAuthStateCache,
+    ) -> InitiateCalendarConnectUseCase:
+        return InitiateCalendarConnectUseCase(api_client, state_cache)
+
+    @provide
+    def handle_calendar_callback_use_case(
+        self,
+        api_client: GoogleCalendarApiClient,
+        state_cache: CalendarOAuthStateCache,
+        connection_repo: IGoogleCalendarConnectionRepository,
+    ) -> HandleCalendarCallbackUseCase:
+        return HandleCalendarCallbackUseCase(api_client, state_cache, connection_repo)
+
+    @provide
+    def get_calendar_connection_status_use_case(
+        self, connection_repo: IGoogleCalendarConnectionRepository
+    ) -> GetCalendarConnectionStatusUseCase:
+        return GetCalendarConnectionStatusUseCase(connection_repo)
+
+    @provide
+    def sync_calendar_events_use_case(
+        self,
+        connection_repo: IGoogleCalendarConnectionRepository,
+        event_repo: ICalendarEventRepository,
+        api_client: GoogleCalendarApiClient,
+        calendar_config: GoogleCalendarConfig,
+    ) -> SyncCalendarEventsUseCase:
+        return SyncCalendarEventsUseCase(
+            connection_repo, event_repo, api_client, calendar_config
+        )
+
+    @provide
+    def get_calendar_events_use_case(
+        self,
+        sync_use_case: SyncCalendarEventsUseCase,
+        event_repo: ICalendarEventRepository,
+    ) -> GetCalendarEventsUseCase:
+        return GetCalendarEventsUseCase(sync_use_case, event_repo)
+
+    @provide
+    def disconnect_calendar_use_case(
+        self,
+        connection_repo: IGoogleCalendarConnectionRepository,
+        event_repo: ICalendarEventRepository,
+    ) -> DisconnectCalendarUseCase:
+        return DisconnectCalendarUseCase(connection_repo, event_repo)
