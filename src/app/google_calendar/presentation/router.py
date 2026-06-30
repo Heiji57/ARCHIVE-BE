@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, Query, status
@@ -13,6 +14,7 @@ from app.google_calendar.application.use_cases.get_calendar_events import (
 from app.google_calendar.application.use_cases.get_connection_status import (
     GetCalendarConnectionStatusUseCase,
 )
+from app.google_calendar.domain.repositories.repository import ICalendarEventRepository
 from app.google_calendar.application.use_cases.handle_calendar_callback import (
     HandleCalendarCallbackUseCase,
 )
@@ -34,6 +36,25 @@ from app.shared.infrastructure.config.settings import get_settings
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], route_class=DishkaRoute)
+
+_MAX_DATE_RANGE_DAYS = 62  # 두 달
+
+
+def _validate_date_range(from_date: str, to_date: str) -> None:
+    """from~to 범위가 최대 62일(두 달)을 초과하면 422."""
+    from fastapi import HTTPException
+    try:
+        f = date.fromisoformat(from_date)
+        t = date.fromisoformat(to_date)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
+    if t < f:
+        raise HTTPException(status_code=422, detail="to 는 from 보다 크거나 같아야 합니다.")
+    if (t - f).days > _MAX_DATE_RANGE_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"날짜 범위는 최대 {_MAX_DATE_RANGE_DAYS}일입니다.",
+        )
 
 
 def _callback_html(message_type: str, frontend_origin: str, **extra: str) -> str:
@@ -126,17 +147,24 @@ async def disconnect(
 @router.post(
     "/sync",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[CalendarConnectionResponse],
+    response_model=ApiResponse[list[CalendarEventResponse]],
 )
 async def sync(
     sync_use_case: FromDishka[SyncCalendarEventsUseCase],
-    status_use_case: FromDishka[GetCalendarConnectionStatusUseCase],
+    event_repo: FromDishka[ICalendarEventRepository],
     current_user: UserContext = Depends(get_current_user),
-) -> ApiResponse[CalendarConnectionResponse]:
-    """수동 강제 동기화 (staleness 무시)."""
+    from_date: str = Query(alias="from"),
+    to_date: str = Query(alias="to"),
+) -> ApiResponse[list[CalendarEventResponse]]:
+    """수동 강제 동기화 후 지정 범위의 캘린더 이벤트만 반환.
+
+    FE 는 sync 결과로 캘린더 이벤트 패널만 교체하면 되고, todos 는 별도 재요청 불필요.
+    from/to 는 현재 FE 가 보고 있는 뷰의 날짜 범위를 넘긴다. 최대 62일 범위 허용.
+    """
+    _validate_date_range(from_date, to_date)
     await sync_use_case.execute(current_user.id, force=True)
-    status_data = await status_use_case.execute(current_user.id)
-    return ApiResponse.ok(CalendarConnectionResponse.from_status(status_data))
+    events = await event_repo.find_by_date_range(current_user.id, from_date, to_date)
+    return ApiResponse.ok([CalendarEventResponse.from_entity(e) for e in events])
 
 
 @router.get(
@@ -150,5 +178,6 @@ async def get_events(
     to_date: str = Query(alias="to"),
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[list[CalendarEventResponse]]:
+    _validate_date_range(from_date, to_date)
     events = await use_case.execute(current_user.id, from_date, to_date)
     return ApiResponse.ok([CalendarEventResponse.from_entity(e) for e in events])

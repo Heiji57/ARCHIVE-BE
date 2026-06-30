@@ -1,5 +1,7 @@
+from datetime import date
+
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
@@ -19,6 +21,8 @@ from app.todo.presentation.requests.requests import TodoCreateRequest, TodoUpdat
 from app.todo.presentation.responses.responses import TodoResponse, TodosWithEventsResponse
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
+
+_MAX_TODO_RANGE_DAYS = 62  # 두 달
 
 
 @router.get(
@@ -43,6 +47,15 @@ async def get_todos(
         # 캘린더 미연결 사용자는 빈 리스트. 연결 사용자는 stale 시 온디맨드 sync 후 조회.
         events = await calendar_uc.execute(current_user.id, date_key, date_key)
     elif from_date and to_date:
+        try:
+            f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
+        if (t - f).days > _MAX_TODO_RANGE_DAYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"날짜 범위는 최대 {_MAX_TODO_RANGE_DAYS}일입니다.",
+            )
         todos = await by_range_uc.execute(
             GetTodosByRangeQuery(user_id=current_user.id, from_date=from_date, to_date=to_date)
         )

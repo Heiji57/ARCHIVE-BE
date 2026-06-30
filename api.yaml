@@ -603,7 +603,7 @@ paths:
       description: |
         쿼리 파라미터에 따라 모드가 결정된다:
         - `dateKey` 단독 → 해당 일자의 할 일
-        - `from` + `to` → 기간 범위 조회
+        - `from` + `to` → 기간 범위 조회 (최대 62일, 초과 시 422)
         - 둘 다 없으면 빈 배열 반환
 
         응답은 `{ todos, events }` 형태다. `events` 는 **Google Calendar 를 연결한
@@ -611,6 +611,9 @@ paths:
         연결 사용자의 경우 마지막 동기화가 stale 하면 이 조회 시점에 Google 과
         온디맨드 증분 동기화가 일어날 수 있다(약간의 추가 지연). `events` 는
         read-only 이며 `source == "google_calendar"`.
+
+        **뷰 단위 조회 권장**: 일 뷰(`dateKey`), 주 뷰(`from`+7일), 월 뷰(`from`+31일)
+        단위로 요청해야 응답 크기가 일정하게 유지된다.
       parameters:
         - in: query
           name: dateKey
@@ -630,6 +633,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiResponseTodosWithEvents" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity_422"
 
     post:
       tags: [todos]
@@ -2166,16 +2171,32 @@ paths:
   /calendar/sync:
     post:
       tags: [calendar]
-      summary: 캘린더 수동 동기화
-      description: staleness 무시하고 Google 과 즉시 증분 동기화 후 연결 상태 반환.
+      summary: 캘린더 수동 동기화 (이벤트 전용 반환)
+      description: |
+        staleness 무시하고 Google 과 즉시 증분 동기화 후, 지정 범위의 캘린더 이벤트만 반환.
+        FE 는 sync 결과로 캘린더 이벤트 패널만 교체하면 되고 todos 는 별도 재요청 불필요.
+        from/to 는 현재 뷰의 날짜 범위를 넘긴다. 최대 62일 범위 허용.
+      parameters:
+        - in: query
+          name: from
+          required: true
+          schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+          description: 조회 시작일 (YYYY-MM-DD)
+        - in: query
+          name: to
+          required: true
+          schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+          description: 조회 종료일 (YYYY-MM-DD, 최대 from+62일)
       responses:
         "200":
-          description: 동기화 완료
+          description: 동기화 완료 — 해당 범위 캘린더 이벤트 목록
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ApiResponseCalendarConnection" }
+              schema: { $ref: "#/components/schemas/ApiResponseCalendarEventList" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity_422"
         "503":
           $ref: "#/components/responses/ServiceUnavailable_503"
       x-error-codes:
