@@ -859,8 +859,9 @@ class RequestProvider(Provider):
         self,
         sync_use_case: SyncCalendarEventsUseCase,
         event_repo: ICalendarEventRepository,
+        connection_repo: IGoogleCalendarConnectionRepository,
     ) -> GetCalendarEventsUseCase:
-        return GetCalendarEventsUseCase(sync_use_case, event_repo)
+        return GetCalendarEventsUseCase(sync_use_case, event_repo, connection_repo)
 
     @provide
     def disconnect_calendar_use_case(

@@ -51,6 +51,7 @@ class HandleCalendarCallbackUseCase:
             existing.scope = self._api_client.scope
             existing.sync_token = None  # 재연결 → full resync
             existing.needs_reauth = False
+            existing.last_active_at = now  # 방금 연결 = 활성 (백그라운드 sync 대상)
             existing.updated_at = now
             await self._connection_repo.save(existing)
             return
@@ -65,6 +66,7 @@ class HandleCalendarCallbackUseCase:
             scope=self._api_client.scope,
             sync_token=None,
             last_synced_at=None,
+            last_active_at=now,  # 방금 연결 = 활성 (백그라운드 sync 대상)
             needs_reauth=False,
             created_at=now,
         )

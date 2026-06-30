@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
 
   # AI 요약 작업 처리 (수동 priority=9, 스케줄 priority=2)
-  worker:
+  worker-ai:
     build: .
     command: celery -A app.worker.celery_app worker -Q ai_tasks --concurrency=3 --loglevel=info
     env_file:
@@ -72,6 +72,23 @@ services:
   worker-beat:
     build: .
     command: celery -A app.worker.celery_app worker --beat -Q default --concurrency=2 --schedule=/tmp/celerybeat-schedule --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  # Google Calendar 백그라운드 동기화 전용 (calendar 큐) — dispatcher/AI 요약과 격리
+  worker-calendar:
+    build: .
+    command: celery -A app.worker.celery_app worker -Q calendar --concurrency=3 --loglevel=info
     env_file:
       - .env
     volumes:

@@ -22,6 +22,10 @@ class GoogleCalendarConnection(BaseEntity):
     scope: str
     sync_token: str | None = None
     last_synced_at: datetime | None = None
+    # 사용자가 실제로 캘린더 데이터를 조회한 마지막 시각(요청 경로에서만 갱신).
+    # 백그라운드 주기 sync 가 "최근 활성 사용자"만 동기화하도록 거르는 기준.
+    # last_synced_at 은 sync 자체가 갱신하므로 활성도 신호로 쓸 수 없다(순환).
+    last_active_at: datetime | None = None
     needs_reauth: bool = False
 
     def is_token_expired(self, now: datetime, skew_seconds: int = 60) -> bool:

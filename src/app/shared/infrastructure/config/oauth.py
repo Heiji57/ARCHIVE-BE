@@ -38,7 +38,9 @@ class GoogleCalendarConfig(BaseSettings):
         "openid email https://www.googleapis.com/auth/calendar.readonly"
     )
     # GET /todos 온디맨드 sync 임계 — 마지막 sync 후 이 시간 지나면 증분 재동기화.
-    calendar_sync_staleness_seconds: int = 600
+    # 백그라운드 주기 sync 가 최신성을 책임지므로, 온디맨드는 "앱을 막 열었을 때
+    # 즉시 반영" 보조 역할만 한다. 짧게 잡아 첫 진입 시 빠르게 반영.
+    calendar_sync_staleness_seconds: int = 120
     # 초기 full sync 윈도우(과거 일수). annual 요약 커버를 위해 ~13개월.
     calendar_initial_window_days: int = 400
     # 미래 이벤트 조회 윈도우(앞으로 일수) — 다가오는 일정도 todo 뷰에 표시.

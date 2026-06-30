@@ -1,4 +1,6 @@
-from sqlalchemy import delete, select
+from datetime import datetime
+
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.google_calendar.domain.models.calendar_connection import GoogleCalendarConnection
@@ -35,6 +37,23 @@ class GoogleCalendarConnectionRepository(IGoogleCalendarConnectionRepository):
             )
         )
 
+    async def find_active_user_ids(self, active_since: datetime) -> list[str]:
+        result = await self._session.execute(
+            select(GoogleCalendarConnectionModel.user_id).where(
+                GoogleCalendarConnectionModel.needs_reauth.is_(False),
+                GoogleCalendarConnectionModel.last_active_at.is_not(None),
+                GoogleCalendarConnectionModel.last_active_at >= active_since,
+            )
+        )
+        return list(result.scalars())
+
+    async def touch_last_active(self, user_id: str, now: datetime) -> None:
+        await self._session.execute(
+            update(GoogleCalendarConnectionModel)
+            .where(GoogleCalendarConnectionModel.user_id == user_id)
+            .values(last_active_at=now)
+        )
+
     def _to_model(
         self, entity: GoogleCalendarConnection
     ) -> GoogleCalendarConnectionModel:
@@ -48,6 +67,7 @@ class GoogleCalendarConnectionRepository(IGoogleCalendarConnectionRepository):
             scope=entity.scope,
             sync_token=entity.sync_token,
             last_synced_at=entity.last_synced_at,
+            last_active_at=entity.last_active_at,
             needs_reauth=entity.needs_reauth,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
@@ -66,6 +86,7 @@ class GoogleCalendarConnectionRepository(IGoogleCalendarConnectionRepository):
             scope=model.scope,
             sync_token=model.sync_token,
             last_synced_at=model.last_synced_at,
+            last_active_at=model.last_active_at,
             needs_reauth=model.needs_reauth,
             created_at=model.created_at,
             updated_at=model.updated_at,
