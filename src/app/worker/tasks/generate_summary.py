@@ -20,7 +20,6 @@ from app.retrospective.domain.exceptions.exceptions import (
 )
 from app.retrospective.domain.models.value_objects import SummaryType
 from app.retrospective.infrastructure.ai.gemini_client import GeminiSummaryClient
-from app.retrospective.infrastructure.ai.prompt_builder import build_response_schema
 from app.retrospective.infrastructure.ai.strategies import get_strategy
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import (
     RetroSummaryRepository,
@@ -152,13 +151,10 @@ async def generate_summary_task(
             prompt = await strategy.build_prompt(
                 session, summary, user_template, locale
             )
-            # 사용자 템플릿 헤딩 → 동적 response_schema. 헤딩 없으면 None →
-            # gemini 가 고정 4-key 스키마로 폴백.
-            response_schema = build_response_schema(user_template)
 
         # AI 호출 — DB transaction 밖
         gemini = GeminiSummaryClient(settings.ai)
-        content = await gemini.generate(prompt, response_schema=response_schema)
+        content = await gemini.generate(prompt)
 
         # T2: complete + notify
         async with factory.begin() as session:

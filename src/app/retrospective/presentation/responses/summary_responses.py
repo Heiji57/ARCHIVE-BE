@@ -10,13 +10,8 @@ from app.retrospective.infrastructure.cache.summary_rate_limiter import UsageSta
 from app.retrospective.presentation.responses.responses import GithubPushResponse
 
 
-class SectionResponse(BaseModel):
-    key: str
-    items: list[str]
-
-
 class SummaryContentResponse(BaseModel):
-    sections: list[SectionResponse]
+    markdown: str
 
 
 class SummaryResponse(BaseModel):
@@ -52,10 +47,7 @@ class SummaryResponse(BaseModel):
             period_end=summary.period_end,
             status=summary.status.value,
             content=SummaryContentResponse(
-                sections=[
-                    SectionResponse(key=k, items=v)
-                    for k, v in summary.content.sections.items()
-                ],
+                markdown=summary.content.text,
             ) if summary.content else None,
             edited_content=summary.edited_content,
             github_push=GithubPushResponse.from_entity(push) if push else None,
