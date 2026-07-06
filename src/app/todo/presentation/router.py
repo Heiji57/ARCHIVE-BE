@@ -23,7 +23,7 @@ from app.todo.presentation.responses.responses import TodoResponse
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
 
-_MAX_TODO_RANGE_DAYS = 62  # 두 달
+_MAX_TODO_RANGE_DAYS = 366  # 일 년
 
 
 def _enqueue_push(user_id: str, todo_id: str) -> None:
