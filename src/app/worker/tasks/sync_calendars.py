@@ -34,7 +34,11 @@ from app.google_calendar.infrastructure.persistence.repositories.calendar_connec
 from app.google_calendar.infrastructure.persistence.repositories.calendar_event_repo import (
     CalendarEventRepository,
 )
+from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
+    UserSettingsRepository,
+)
 from app.shared.infrastructure.config.settings import get_settings
+from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
 from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
 
@@ -91,6 +95,8 @@ async def sync_user_calendar_task(user_id: str) -> None:
                 event_repo=CalendarEventRepository(session),
                 api_client=api_client,
                 config=settings.google_calendar,
+                todo_repo=TodoRepository(session),
+                settings_repo=UserSettingsRepository(session),
             )
             await use_case.execute(user_id, force=True)
         # 2) ARCHIVE → Google push (pending/failed/stuck 배치 처리). pull-sync 뒤 실행 —
