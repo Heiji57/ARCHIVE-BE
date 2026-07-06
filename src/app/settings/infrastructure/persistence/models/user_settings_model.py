@@ -21,6 +21,9 @@ class UserSettingsModel(Base):
     calendar_auto_push_todo: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )
+    calendar_auto_delete_todo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     last_schedule_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

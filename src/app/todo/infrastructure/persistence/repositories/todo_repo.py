@@ -84,6 +84,65 @@ class TodoRepository(ITodoRepository):
         if row:
             await self._session.delete(row)
 
+    async def find_by_google_event_id(
+        self, user_id: str, google_event_id: str
+    ) -> Todo | None:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_TODO_RETURNING} FROM todos"
+                " WHERE user_id=:user_id AND google_event_id=:google_event_id"
+                " LIMIT 1"
+            ),
+            {"user_id": user_id, "google_event_id": google_event_id},
+        )
+        row = result.first()
+        return self._row_to_entity(row) if row else None
+
+    async def create_from_calendar_event(self, todo: Todo) -> Todo:
+        # save()/_to_model() 은 push 제어 컬럼을 의도적으로 제외하므로, Google 원본
+        # 이벤트를 이미-synced 상태의 Todo 로 최초 승격할 때는 이 전용 INSERT 를 쓴다.
+        result = await self._session.execute(
+            text(
+                "INSERT INTO todos ("
+                "  id, user_id, title, status, date_key, description,"
+                "  start_time, end_time, timezone, created_at, updated_at, completed_at,"
+                "  calendar_push_status, google_event_id, push_intent, push_retry_count"
+                ") VALUES ("
+                "  :id, :user_id, :title, :status, :date_key, :description,"
+                "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
+                "  'synced', :google_event_id, NULL, 0"
+                f") RETURNING {_TODO_RETURNING}"
+            ),
+            {
+                "id": todo.id,
+                "user_id": todo.user_id,
+                "title": todo.title,
+                "status": todo.status.value,
+                "date_key": todo.date_key,
+                "description": todo.description,
+                "start_time": todo.start_time,
+                "end_time": todo.end_time,
+                "timezone": todo.timezone,
+                "created_at": todo.created_at,
+                "updated_at": todo.updated_at,
+                "completed_at": todo.completed_at,
+                "google_event_id": todo.google_event_id,
+            },
+        )
+        row = result.first()
+        assert row is not None
+        return self._row_to_entity(row)
+
+    async def clear_calendar_link(self, todo_id: str, user_id: str) -> None:
+        await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status=NULL, google_event_id=NULL, "
+                "push_intent=NULL, push_started_at=NULL, sync_attempt_id=NULL, push_retry_count=0 "
+                "WHERE id=:id AND user_id=:user_id"
+            ),
+            {"id": todo_id, "user_id": user_id},
+        )
+
     # ── Calendar push 상태 관리 (타겟 SQL) ─────────────────────────────────────
 
     async def mark_for_push(self, todo_id: str, user_id: str) -> None:

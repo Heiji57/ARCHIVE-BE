@@ -38,6 +38,7 @@ class SettingsResponse(BaseModel):
     notification_retention_days: int = Field(serialization_alias="notificationRetentionDays")
     last_schedule_check_at: datetime | None = Field(serialization_alias="lastScheduleCheckAt")
     calendar_auto_push_todo: bool = Field(serialization_alias="calendarAutoPushTodo")
+    calendar_auto_delete_todo: bool = Field(serialization_alias="calendarAutoDeleteTodo")
     github: GitHubSettingsBlock
     active_summary_template_ids: ActiveSummaryTemplateIdsBlock = Field(
         serialization_alias="activeSummaryTemplateIds"
@@ -55,6 +56,7 @@ class SettingsResponse(BaseModel):
             notification_retention_days=s.notification_retention_days,
             last_schedule_check_at=s.last_schedule_check_at,
             calendar_auto_push_todo=s.calendar_auto_push_todo,
+            calendar_auto_delete_todo=s.calendar_auto_delete_todo,
             github=GitHubSettingsBlock(
                 push_target_repository_id=s.github_push_target_repository_id,
             ),

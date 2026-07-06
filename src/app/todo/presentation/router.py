@@ -18,9 +18,8 @@ from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.google_calendar.application.use_cases.get_calendar_events import (
     GetCalendarEventsUseCase,
 )
-from app.google_calendar.presentation.responses.responses import CalendarEventResponse
 from app.todo.presentation.requests.requests import TodoCreateRequest, TodoUpdateRequest
-from app.todo.presentation.responses.responses import TodoResponse, TodosWithEventsResponse
+from app.todo.presentation.responses.responses import TodoResponse
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
 
@@ -46,7 +45,7 @@ def _enqueue_delete(user_id: str, google_event_id: str) -> None:
 @router.get(
     "",
     status_code=status.HTTP_200_OK,
-    response_model=ApiResponse[TodosWithEventsResponse],
+    response_model=ApiResponse[list[TodoResponse]],
 )
 async def get_todos(
     by_date_uc: FromDishka[GetTodosByDateUseCase],
@@ -56,14 +55,16 @@ async def get_todos(
     date_key: str | None = Query(default=None, alias="dateKey"),
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
-) -> ApiResponse[TodosWithEventsResponse]:
-    events = []
+) -> ApiResponse[list[TodoResponse]]:
+    # Google Calendar 원본 이벤트도 pull-sync 시 todo 로 승격되므로(SyncCalendarEventsUseCase),
+    # 더 이상 별도 events 리스트를 반환하지 않는다 — todos 하나로 통합.
+    # calendar_uc 호출(온디맨드 sync 트리거 + last_active_at 갱신)은 todo 조회보다
+    # 먼저 실행해야, 이번 요청에서 새로 승격된 이벤트도 todos 응답에 바로 반영된다.
     if date_key:
+        await calendar_uc.execute(current_user.id, date_key, date_key)
         todos = await by_date_uc.execute(
             GetTodosByDateQuery(user_id=current_user.id, date_key=date_key)
         )
-        # 캘린더 미연결 사용자는 빈 리스트. 연결 사용자는 stale 시 온디맨드 sync 후 조회.
-        events = await calendar_uc.execute(current_user.id, date_key, date_key)
     elif from_date and to_date:
         try:
             f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
@@ -74,18 +75,13 @@ async def get_todos(
                 status_code=422,
                 detail=f"날짜 범위는 최대 {_MAX_TODO_RANGE_DAYS}일입니다.",
             )
+        await calendar_uc.execute(current_user.id, from_date, to_date)
         todos = await by_range_uc.execute(
             GetTodosByRangeQuery(user_id=current_user.id, from_date=from_date, to_date=to_date)
         )
-        events = await calendar_uc.execute(current_user.id, from_date, to_date)
     else:
         todos = []
-    return ApiResponse.ok(
-        TodosWithEventsResponse(
-            todos=[TodoResponse.from_entity(t) for t in todos],
-            events=[CalendarEventResponse.from_entity(e) for e in events],
-        )
-    )
+    return ApiResponse.ok([TodoResponse.from_entity(t) for t in todos])
 
 
 @router.post(

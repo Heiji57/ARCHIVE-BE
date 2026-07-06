@@ -27,6 +27,28 @@ class ITodoRepository(ABC):
     @abstractmethod
     async def delete(self, id: str, user_id: str) -> None: ...
 
+    @abstractmethod
+    async def find_by_google_event_id(
+        self, user_id: str, google_event_id: str
+    ) -> Todo | None:
+        """google_event_id 로 연동된 todo 조회 — Google 원본 이벤트 승격 시 dedup,
+        cancelled 이벤트 처리 시 연동 todo 식별에 사용."""
+        ...
+
+    @abstractmethod
+    async def create_from_calendar_event(self, todo: Todo) -> Todo:
+        """Google Calendar 원본 이벤트를 Todo 로 최초 승격 — content + push 제어
+        컬럼(calendar_push_status/google_event_id 등)을 한 번에 INSERT 한다.
+        save()/merge() 는 push 컬럼을 의도적으로 건드리지 않으므로 이 전용 경로가 필요."""
+        ...
+
+    @abstractmethod
+    async def clear_calendar_link(self, todo_id: str, user_id: str) -> None:
+        """Google 쪽에서 이벤트가 사라졌을 때(cancelled) 단건 연동 흔적만 제거.
+        bulk_clear_calendar_push(사용자 전체, 연결 해제 시)와 달리 todo 자체는 유지하고
+        이 todo 하나만 unlink — 재push 시도 없음."""
+        ...
+
     # ── Google Calendar push 상태 관리 (타겟 SQL 전용) ──────────────────────────
     # 아래 메서드들은 push 제어 컬럼(calendar_push_status/push_intent/push_started_at/
     # sync_attempt_id/push_retry_count/google_event_id)을 콘텐츠 save(merge)와 분리해

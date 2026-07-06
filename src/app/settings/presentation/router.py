@@ -65,6 +65,7 @@ async def update_settings(
             notification_retention_days=body.notification_retention_days,
             last_schedule_check_at=body.last_schedule_check_at,
             calendar_auto_push_todo=body.calendar_auto_push_todo,
+            calendar_auto_delete_todo=body.calendar_auto_delete_todo,
             github_push_target_repository_id=body.github.push_target_repository_id,
         )
     )

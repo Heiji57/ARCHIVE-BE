@@ -109,7 +109,7 @@ src/app/
 
 ## API Endpoints
 
-모든 엔드포인트는 `/api/v1` prefix를 가진다.
+모든 엔드포인트는 `/api/v1` prefix를 가지고, 수정할 시 v2로 변경한다.
 
 | 모듈 | 엔드포인트 |
 |---|---|

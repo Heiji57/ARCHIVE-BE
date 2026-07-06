@@ -21,8 +21,12 @@ from app.google_calendar.infrastructure.api.google_calendar_client import (
     GoogleCalendarApiClient,
     RawCalendarEvent,
 )
+from app.settings.domain.repositories.repository import IUserSettingsRepository
 from app.shared.domain.utils.id import generate_id
 from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
+from app.todo.domain.models.todo import Todo
+from app.todo.domain.models.value_objects import TaskStatus
+from app.todo.domain.repositories.repository import ITodoRepository
 
 _log = structlog.get_logger(__name__)
 
@@ -36,6 +40,11 @@ class SyncCalendarEventsUseCase:
     - access_token 만료 시 refresh_token 으로 갱신. 갱신 실패 → needs_reauth 마킹.
     - syncToken 만료(410) → full resync (기존 이벤트 삭제 후 윈도우 재조회).
     - Google API 일시 장애 → 저장된 이벤트 유지하고 조용히 반환 (연결 보존).
+
+    Google 원본 이벤트(ARCHIVE 가 push 하지 않은, archive_todo_id 없는 이벤트)는
+    read-only CalendarEvent 가 아니라 **수정 가능한 Todo 로 승격**한다(google_event_id
+    로 dedup). cancelled 된 이벤트는 연동된 todo 가 있으면 `calendar_auto_delete_todo`
+    설정에 따라 삭제 또는 연동 해제한다.
     """
 
     def __init__(
@@ -44,11 +53,15 @@ class SyncCalendarEventsUseCase:
         event_repo: ICalendarEventRepository,
         api_client: GoogleCalendarApiClient,
         config: GoogleCalendarConfig,
+        todo_repo: ITodoRepository,
+        settings_repo: IUserSettingsRepository,
     ) -> None:
         self._connection_repo = connection_repo
         self._event_repo = event_repo
         self._api_client = api_client
         self._config = config
+        self._todo_repo = todo_repo
+        self._settings_repo = settings_repo
 
     async def execute(
         self, user_id: str, force: bool = False
@@ -93,21 +106,56 @@ class SyncCalendarEventsUseCase:
             _log.warning("calendar.sync.api_unavailable", user_id=user_id)
             return conn
 
-        # ── upsert + cancelled 삭제 ────────────────────────────────────────────
-        to_upsert: list[CalendarEvent] = []
+        # ── todo 승격 + cancelled 처리 ─────────────────────────────────────────
+        # 레거시 calendar_events read-model 정리(하위호환) — 신규 이벤트는 더 이상
+        # 이 테이블에 쌓이지 않고 전부 todo 로 승격되므로 cancelled_ids 정리만 유지.
         cancelled_ids: list[str] = []
+        auto_delete: bool | None = None  # cancelled 이벤트 등장 시에만 lazy 조회
         for raw in page.events:
             if raw.status == "cancelled":
                 cancelled_ids.append(raw.google_event_id)
+                linked = await self._todo_repo.find_by_google_event_id(
+                    user_id, raw.google_event_id
+                )
+                if linked is not None:
+                    if auto_delete is None:
+                        user_settings = await self._settings_repo.find_by_user_id(user_id)
+                        auto_delete = bool(
+                            user_settings and user_settings.calendar_auto_delete_todo
+                        )
+                    if auto_delete:
+                        await self._todo_repo.delete(linked.id, user_id)
+                    else:
+                        await self._todo_repo.clear_calendar_link(linked.id, user_id)
             elif raw.archive_todo_id is not None:
                 # ARCHIVE 가 push 한 이벤트 — read-model 에 mirror 하지 않는다(순환 방지).
                 # todo 자체가 원본이므로 calendar_events 로 되돌려 받을 필요 없음.
                 continue
             else:
-                to_upsert.append(self._to_entity(raw, conn, now))
+                # Google 에서 직접 만든 이벤트 — 읽기전용 CalendarEvent 대신 수정 가능한
+                # Todo 로 승격(google_event_id 로 dedup). 이미 승격돼 있으면 ARCHIVE 가
+                # source of truth 이므로 Google 쪽 변경은 조용히 무시한다.
+                existing_todo = await self._todo_repo.find_by_google_event_id(
+                    user_id, raw.google_event_id
+                )
+                if existing_todo is None:
+                    todo = Todo(
+                        id=generate_id("todo"),
+                        user_id=user_id,
+                        title=raw.title or "(제목 없음)",
+                        status=TaskStatus.NOT_START,
+                        date_key=raw.date_key,
+                        description=raw.description or "",
+                        start_time=raw.start_at,
+                        end_time=raw.end_at,
+                        timezone=raw.timezone,
+                        created_at=now,
+                        updated_at=now,
+                        google_event_id=raw.google_event_id,
+                    )
+                    await self._todo_repo.create_from_calendar_event(todo)
 
         await self._event_repo.delete_by_google_ids(user_id, cancelled_ids)
-        await self._event_repo.upsert_many(to_upsert)
 
         conn.sync_token = page.next_sync_token or conn.sync_token
         conn.last_synced_at = now

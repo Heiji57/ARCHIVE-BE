@@ -20,6 +20,7 @@ class UpdateSettingsRequest(BaseModel):
     notification_retention_days: int = Field(default=30, ge=1, le=365, alias="notificationRetentionDays")
     last_schedule_check_at: datetime | None = Field(default=None, alias="lastScheduleCheckAt")
     calendar_auto_push_todo: bool = Field(default=False, alias="calendarAutoPushTodo")
+    calendar_auto_delete_todo: bool = Field(default=False, alias="calendarAutoDeleteTodo")
     github: GitHubSettingsInput = Field(default_factory=GitHubSettingsInput)
 
     model_config = {"populate_by_name": True}

@@ -870,9 +870,11 @@ class RequestProvider(Provider):
         event_repo: ICalendarEventRepository,
         api_client: GoogleCalendarApiClient,
         calendar_config: GoogleCalendarConfig,
+        todo_repo: ITodoRepository,
+        settings_repo: IUserSettingsRepository,
     ) -> SyncCalendarEventsUseCase:
         return SyncCalendarEventsUseCase(
-            connection_repo, event_repo, api_client, calendar_config
+            connection_repo, event_repo, api_client, calendar_config, todo_repo, settings_repo
         )
 
     @provide

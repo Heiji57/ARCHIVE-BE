@@ -599,18 +599,19 @@ paths:
   /todos:
     get:
       tags: [todos]
-      summary: 할 일 목록 조회 (+ Google Calendar 이벤트)
+      summary: 할 일 목록 조회
       description: |
         쿼리 파라미터에 따라 모드가 결정된다:
         - `dateKey` 단독 → 해당 일자의 할 일
         - `from` + `to` → 기간 범위 조회 (최대 62일, 초과 시 422)
         - 둘 다 없으면 빈 배열 반환
 
-        응답은 `{ todos, events }` 형태다. `events` 는 **Google Calendar 를 연결한
-        사용자만** 채워지며(미연결 시 항상 `[]`), 같은 날짜/범위로 필터된다.
-        연결 사용자의 경우 마지막 동기화가 stale 하면 이 조회 시점에 Google 과
-        온디맨드 증분 동기화가 일어날 수 있다(약간의 추가 지연). `events` 는
-        read-only 이며 `source == "google_calendar"`.
+        Google Calendar 를 연결한 사용자의 경우, Google 에서 직접 만든 이벤트도
+        pull-sync 시 수정 가능한 Todo 로 승격되어(`calendarLinked: true`) 이 목록에
+        함께 포함된다 — 더 이상 별도 `events` 리스트가 없다(과거 `{ todos, events }`
+        형태였던 `TodosWithEventsResponse` 는 폐기, `GET /calendar/events` 도 deprecated).
+        마지막 동기화가 stale 하면 이 조회 시점에 Google 과 온디맨드 증분 동기화가
+        일어날 수 있다(약간의 추가 지연).
 
         **뷰 단위 조회 권장**: 일 뷰(`dateKey`), 주 뷰(`from`+7일), 월 뷰(`from`+31일)
         단위로 요청해야 응답 크기가 일정하게 유지된다.
@@ -630,7 +631,7 @@ paths:
           description: 조회 성공
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ApiResponseTodosWithEvents" }
+              schema: { $ref: "#/components/schemas/ApiResponseTodoList" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "422":
@@ -2233,9 +2234,14 @@ paths:
     post:
       tags: [calendar]
       summary: 캘린더 수동 동기화 (이벤트 전용 반환)
+      deprecated: true
       description: |
+        **Deprecated**: Google Calendar 원본 이벤트는 이제 pull-sync 시 read-only
+        CalendarEvent 가 아니라 수정 가능한 Todo 로 승격된다(`GET /todos` 참고).
+        이 엔드포인트는 더 이상 새 이벤트를 반환하지 않으며(항상 빈 배열로 수렴),
+        FE 는 `GET /todos` 로 이전해야 한다. 하위호환을 위해 당분간 유지.
+
         staleness 무시하고 Google 과 즉시 증분 동기화 후, 지정 범위의 캘린더 이벤트만 반환.
-        FE 는 sync 결과로 캘린더 이벤트 패널만 교체하면 되고 todos 는 별도 재요청 불필요.
         from/to 는 현재 뷰의 날짜 범위를 넘긴다. 최대 62일 범위 허용.
       parameters:
         - in: query
@@ -2268,10 +2274,15 @@ paths:
     get:
       tags: [calendar]
       summary: 캘린더 이벤트 조회 (날짜 범위)
+      deprecated: true
       description: |
+        **Deprecated**: Google Calendar 원본 이벤트는 이제 pull-sync 시 read-only
+        CalendarEvent 가 아니라 수정 가능한 Todo 로 승격된다. 이 엔드포인트는 더 이상
+        새 이벤트를 반환하지 않으며(항상 빈 배열로 수렴), FE 는 `GET /todos` 로
+        이전해야 한다. 하위호환을 위해 당분간 유지.
+
         `from`~`to` 범위의 Google Calendar 이벤트. 미연결 사용자는 빈 배열.
-        stale 시 온디맨드 증분 동기화가 일어날 수 있다. (GET /todos 에도 동일
-        이벤트가 포함되므로, 캘린더 전용 화면이 아니면 별도 호출 불필요.)
+        stale 시 온디맨드 증분 동기화가 일어날 수 있다.
       parameters:
         - in: query
           name: from
@@ -3000,25 +3011,6 @@ components:
               type: array
               items: { $ref: "#/components/schemas/TodoResponse" }
 
-    TodosWithEventsResponse:
-      type: object
-      required: [todos, events]
-      properties:
-        todos:
-          type: array
-          items: { $ref: "#/components/schemas/TodoResponse" }
-        events:
-          type: array
-          description: Google Calendar 이벤트. 미연결 사용자는 항상 빈 배열.
-          items: { $ref: "#/components/schemas/CalendarEventResponse" }
-
-    ApiResponseTodosWithEvents:
-      allOf:
-        - $ref: "#/components/schemas/ApiResponseEmpty"
-        - type: object
-          properties:
-            data: { $ref: "#/components/schemas/TodosWithEventsResponse" }
-
     # ── Google Calendar ──────────────────────────────────────────────────────
     CalendarEventResponse:
       type: object
@@ -3458,6 +3450,14 @@ components:
           type: boolean
           default: false
           description: '신규 할 일 생성 시 기본으로 Google Calendar 에 push 할지(생성 기본값 전용, 소급 적용 안 함).'
+        calendarAutoDeleteTodo:
+          type: boolean
+          default: false
+          description: |
+            **주의**: true 로 설정하면 Google Calendar 에서 이벤트를 삭제(cancel)할 때
+            연동된 ARCHIVE 할 일도 함께 영구 삭제됩니다. 캘린더에서 일정을 정리하거나
+            대량 삭제하면 대응하는 할 일도 되돌릴 수 없이 삭제되니 주의해서 켜세요.
+            기본값(false)은 연동만 해제하고 할 일은 유지합니다.
         github:
           $ref: "#/components/schemas/GitHubSettingsBlock"
 
@@ -3471,6 +3471,7 @@ components:
           autoSummaryYearly,
           notificationRetentionDays,
           calendarAutoPushTodo,
+          calendarAutoDeleteTodo,
           github,
           activeSummaryTemplateIds,
         ]
@@ -3487,6 +3488,11 @@ components:
         calendarAutoPushTodo:
           type: boolean
           description: '신규 할 일 생성 시 기본 Google Calendar push 여부.'
+        calendarAutoDeleteTodo:
+          type: boolean
+          description: |
+            true 면 Google Calendar 에서 이벤트 삭제 시 연동된 할 일도 함께 영구 삭제.
+            false(기본) 면 연동만 해제하고 할 일은 유지.
         github:
           $ref: "#/components/schemas/GitHubSettingsBlock"
         activeSummaryTemplateIds:

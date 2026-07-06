@@ -27,6 +27,7 @@ class UpdateSettingsUseCase:
         settings.auto_summary_yearly = cmd.auto_summary_yearly
         settings.notification_retention_days = cmd.notification_retention_days
         settings.calendar_auto_push_todo = cmd.calendar_auto_push_todo
+        settings.calendar_auto_delete_todo = cmd.calendar_auto_delete_todo
         settings.last_schedule_check_at = cmd.last_schedule_check_at
 
         # push target 검증: 해당 user에게 연결된 repository여야 함

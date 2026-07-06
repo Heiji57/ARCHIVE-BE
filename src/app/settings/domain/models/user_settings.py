@@ -13,6 +13,9 @@ class UserSettings:
     # 신규 todo 생성 시 기본으로 Google Calendar 에 push 할지(생성 기본값 전용 —
     # 이미 연동된 todo 를 소급 변경하지 않는다). 사이드바에서 개별 override 가능.
     calendar_auto_push_todo: bool = False
+    # Google Calendar 에서 cancelled 된 이벤트에 연동된 todo 처리 방침.
+    # false(기본, 보수적): 연동 해제만(todo 유지). true(공격적): todo 도 함께 삭제.
+    calendar_auto_delete_todo: bool = False
     last_schedule_check_at: datetime | None = None
     last_summary_date_local: date | None = None
     github_push_target_repository_id: str | None = None
