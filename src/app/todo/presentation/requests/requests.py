@@ -18,6 +18,8 @@ class TodoCreateRequest(BaseModel):
     start_time: datetime | None = None
     end_time: datetime | None = None
     timezone: str | None = None
+    # None → user_settings.calendar_auto_push_todo 기본값. True/False → 개별 지정.
+    push_to_calendar: bool | None = None
 
     @field_validator("status")
     @classmethod

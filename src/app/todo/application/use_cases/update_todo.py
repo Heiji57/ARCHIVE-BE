@@ -37,4 +37,16 @@ class UpdateTodoUseCase:
         if cmd.timezone is not UNSET:
             todo.timezone = cmd.timezone  # type: ignore[assignment]
 
-        return await self._todo_repo.save(todo)
+        # 캘린더 연동된 todo(삭제 진행 중 제외)는 콘텐츠 변경을 Google 에 재반영.
+        # push 상태 전이는 콘텐츠 save(merge)와 분리된 타겟 SQL 로 처리 —
+        # mark_for_push 가 sync_attempt_id 를 NULL 로 무효화해 진행 중이던 워커
+        # finalize 가 이 편집을 덮어쓰지 못하게 한다(lost-update 방지).
+        re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
+
+        saved = await self._todo_repo.save(todo)
+
+        if re_push:
+            await self._todo_repo.mark_for_push(saved.id, cmd.user_id)
+            saved.calendar_push_status = "pending"
+            saved.push_intent = "push"
+        return saved

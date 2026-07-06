@@ -33,9 +33,10 @@ class GoogleCalendarConfig(BaseSettings):
     client_secret: str
     # 캘린더 콜백은 일반 OAuth 와 분리 — FE proxy origin 으로 통일 (callback HTML postMessage).
     calendar_redirect_uri: str = "http://localhost:5173/api/v1/calendar/callback"
-    # openid email 은 google_user_id 확보용, calendar.readonly 는 이벤트 조회용.
+    # openid email 은 google_user_id 확보용, calendar.events 는 이벤트 조회 + 생성/수정/삭제용
+    # (ARCHIVE todo → Google Calendar push 를 위해 쓰기 권한 필요).
     calendar_scope: str = (
-        "openid email https://www.googleapis.com/auth/calendar.readonly"
+        "openid email https://www.googleapis.com/auth/calendar.events"
     )
     # GET /todos 온디맨드 sync 임계 — 마지막 sync 후 이 시간 지나면 증분 재동기화.
     # 백그라운드 주기 sync 가 최신성을 책임지므로, 온디맨드는 "앱을 막 열었을 때
@@ -47,3 +48,10 @@ class GoogleCalendarConfig(BaseSettings):
     calendar_future_window_days: int = 90
     # 캘린더 연결 OAuth state TTL(초).
     calendar_state_ttl_seconds: int = 600
+    # ── Todo → Calendar push 파라미터 ──────────────────────────────────────────
+    # 한 번의 배치 claim 에서 가져올 최대 todo 수.
+    calendar_push_batch_size: int = 50
+    # 실패 재시도 상한 — 도달 시 claim 제외(무한 재시도 방지). 사용자 편집/재연결 시 리셋.
+    calendar_push_max_retries: int = 5
+    # syncing 상태로 이 시간(초) 넘게 정체하면 크래시한 워커로 간주하고 재claim.
+    calendar_push_stuck_seconds: int = 600

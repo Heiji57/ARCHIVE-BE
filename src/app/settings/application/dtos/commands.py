@@ -11,4 +11,5 @@ class UpdateSettingsCommand:
     auto_summary_yearly: bool
     notification_retention_days: int
     last_schedule_check_at: datetime | None
+    calendar_auto_push_todo: bool = False
     github_push_target_repository_id: str | None = None

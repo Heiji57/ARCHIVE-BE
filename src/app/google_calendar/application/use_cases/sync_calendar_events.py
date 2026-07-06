@@ -8,6 +8,9 @@ from app.google_calendar.domain.exceptions.exceptions import (
 )
 from app.google_calendar.domain.models.calendar_connection import GoogleCalendarConnection
 from app.google_calendar.domain.models.calendar_event import CalendarEvent
+from app.google_calendar.application.services.token_manager import (
+    ensure_valid_access_token,
+)
 from app.google_calendar.domain.repositories.repository import (
     ICalendarEventRepository,
     IGoogleCalendarConnectionRepository,
@@ -63,19 +66,12 @@ class SyncCalendarEventsUseCase:
             if age < self._config.calendar_sync_staleness_seconds:
                 return conn
 
-        # ── 토큰 갱신 ──────────────────────────────────────────────────────────
-        if conn.is_token_expired(now):
-            try:
-                tokens = await self._api_client.refresh_access_token(conn.refresh_token)
-            except CalendarReauthRequiredException:
-                _log.warning("calendar.sync.reauth_required", user_id=user_id)
-                conn.needs_reauth = True
-                conn.updated_at = now
-                await self._connection_repo.save(conn)
-                return conn
-            conn.apply_refreshed_token(tokens.access_token, tokens.expires_in, now)
-            if tokens.refresh_token:
-                conn.refresh_token = tokens.refresh_token
+        # ── 토큰 갱신 (pull-sync / push 공용 헬퍼) ──────────────────────────────
+        access_token = await ensure_valid_access_token(
+            conn, self._api_client, self._connection_repo, now
+        )
+        if access_token is None:
+            return conn  # needs_reauth — FE 재연결 유도
 
         # ── 이벤트 조회 (증분 / full) ──────────────────────────────────────────
         try:
@@ -103,6 +99,10 @@ class SyncCalendarEventsUseCase:
         for raw in page.events:
             if raw.status == "cancelled":
                 cancelled_ids.append(raw.google_event_id)
+            elif raw.archive_todo_id is not None:
+                # ARCHIVE 가 push 한 이벤트 — read-model 에 mirror 하지 않는다(순환 방지).
+                # todo 자체가 원본이므로 calendar_events 로 되돌려 받을 필요 없음.
+                continue
             else:
                 to_upsert.append(self._to_entity(raw, conn, now))
 

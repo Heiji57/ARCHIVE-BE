@@ -114,7 +114,7 @@ async def callback(
         )
 
     try:
-        await use_case.execute(code=code, state=state)
+        user_id = await use_case.execute(code=code, state=state)
     except BaseAppException as e:
         return HTMLResponse(
             content=_callback_html("calendar_error", frontend_origin, error=e.code)
@@ -125,6 +125,12 @@ async def callback(
                 "calendar_error", frontend_origin, error="INTERNAL_ERROR"
             )
         )
+
+    # 연결/재연결 직후 즉시 pull-sync + push 사이클 재구동 — 다음 beat tick 을 기다리지
+    # 않고 밀린 push(재연결 시 failed 재개 포함)를 곧바로 처리.
+    from app.worker.tasks.sync_calendars import sync_user_calendar_task
+
+    sync_user_calendar_task.apply_async(args=[user_id], queue="calendar")
 
     return HTMLResponse(content=_callback_html("calendar_connected", frontend_origin))
 

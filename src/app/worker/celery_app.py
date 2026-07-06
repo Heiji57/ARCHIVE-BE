@@ -23,6 +23,9 @@ _TASK_ROUTES = {
     "worker.dispatch_summaries_for_tz": {"queue": "default"},
     "worker.sync_all_calendars": {"queue": "calendar"},
     "worker.sync_user_calendar": {"queue": "calendar"},
+    # ARCHIVE → Google push — calendar 큐에서 격리 처리(즉시 단건 + 삭제 cleanup).
+    "worker.push_calendar_event": {"queue": "calendar"},
+    "worker.delete_calendar_event": {"queue": "calendar"},
 }
 
 
@@ -60,6 +63,7 @@ def create_celery_app() -> Celery:
         "app.worker.tasks.generate_summary",
         "app.worker.tasks.dispatch_summaries_for_tz",
         "app.worker.tasks.sync_calendars",
+        "app.worker.tasks.push_calendars",
     ])
     return app
 

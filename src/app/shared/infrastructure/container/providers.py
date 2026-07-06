@@ -161,10 +161,12 @@ from app.retrospective.infrastructure.persistence.repositories.summary_template_
 from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
 from app.shared.infrastructure.config.retrospective import RetrospectiveConfig
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
+from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
+from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
@@ -558,8 +560,12 @@ class RequestProvider(Provider):
     # ── Todo Use Cases ────────────────────────────────────────────────────────
 
     @provide
-    def create_todo_use_case(self, todo_repo: ITodoRepository) -> CreateTodoUseCase:
-        return CreateTodoUseCase(todo_repo)
+    def create_todo_use_case(
+        self,
+        todo_repo: ITodoRepository,
+        settings_repo: IUserSettingsRepository,
+    ) -> CreateTodoUseCase:
+        return CreateTodoUseCase(todo_repo, settings_repo)
 
     @provide
     def update_todo_use_case(self, todo_repo: ITodoRepository) -> UpdateTodoUseCase:
@@ -568,6 +574,18 @@ class RequestProvider(Provider):
     @provide
     def delete_todo_use_case(self, todo_repo: ITodoRepository) -> DeleteTodoUseCase:
         return DeleteTodoUseCase(todo_repo)
+
+    @provide
+    def add_calendar_link_use_case(
+        self, todo_repo: ITodoRepository
+    ) -> AddCalendarLinkUseCase:
+        return AddCalendarLinkUseCase(todo_repo)
+
+    @provide
+    def remove_calendar_link_use_case(
+        self, todo_repo: ITodoRepository
+    ) -> RemoveCalendarLinkUseCase:
+        return RemoveCalendarLinkUseCase(todo_repo)
 
     @provide
     def get_todos_by_date_use_case(self, todo_repo: ITodoRepository) -> GetTodosByDateUseCase:
@@ -833,8 +851,11 @@ class RequestProvider(Provider):
         api_client: GoogleCalendarApiClient,
         state_cache: CalendarOAuthStateCache,
         connection_repo: IGoogleCalendarConnectionRepository,
+        todo_repo: ITodoRepository,
     ) -> HandleCalendarCallbackUseCase:
-        return HandleCalendarCallbackUseCase(api_client, state_cache, connection_repo)
+        return HandleCalendarCallbackUseCase(
+            api_client, state_cache, connection_repo, todo_repo
+        )
 
     @provide
     def get_calendar_connection_status_use_case(
@@ -868,5 +889,6 @@ class RequestProvider(Provider):
         self,
         connection_repo: IGoogleCalendarConnectionRepository,
         event_repo: ICalendarEventRepository,
+        todo_repo: ITodoRepository,
     ) -> DisconnectCalendarUseCase:
-        return DisconnectCalendarUseCase(connection_repo, event_repo)
+        return DisconnectCalendarUseCase(connection_repo, event_repo, todo_repo)

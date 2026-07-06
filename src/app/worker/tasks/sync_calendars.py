@@ -19,6 +19,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 import structlog
+from redis.asyncio import Redis
 
 from app.google_calendar.application.use_cases.sync_calendar_events import (
     SyncCalendarEventsUseCase,
@@ -26,6 +27,7 @@ from app.google_calendar.application.use_cases.sync_calendar_events import (
 from app.google_calendar.infrastructure.api.google_calendar_client import (
     GoogleCalendarApiClient,
 )
+from app.worker.tasks.push_calendars import run_batch_push
 from app.google_calendar.infrastructure.persistence.repositories.calendar_connection_repo import (
     GoogleCalendarConnectionRepository,
 )
@@ -80,7 +82,9 @@ async def sync_user_calendar_task(user_id: str) -> None:
     settings = get_settings()
     factory = get_worker_session_factory()
     api_client = GoogleCalendarApiClient(settings.google_calendar)
+    redis = Redis.from_url(settings.redis.cache_url, decode_responses=True)
     try:
+        # 1) Google → ARCHIVE 증분 pull-sync (기존).
         async with factory.begin() as session:
             use_case = SyncCalendarEventsUseCase(
                 connection_repo=GoogleCalendarConnectionRepository(session),
@@ -89,7 +93,11 @@ async def sync_user_calendar_task(user_id: str) -> None:
                 config=settings.google_calendar,
             )
             await use_case.execute(user_id, force=True)
+        # 2) ARCHIVE → Google push (pending/failed/stuck 배치 처리). pull-sync 뒤 실행 —
+        #    같은 calendar 큐 워커에서 배치 처리해 시간에 민감한 요약/AI 큐와 격리.
+        await run_batch_push(factory, api_client, settings.google_calendar, user_id, redis)
     except Exception:
         _log.warning("calendar.sync_user.failed", user_id=user_id, exc_info=True)
     finally:
         await api_client.close()
+        await redis.aclose()

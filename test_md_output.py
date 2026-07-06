@@ -173,6 +173,95 @@ async def run_test(label: str, template: str, entries: str) -> None:
             print(f"  {name}: {'✅' if result else '⚠️ 미사용'}")
 
 
+# 케이스 4: 실제 DB 저장 템플릿 (GitHub Alert 콜아웃 포함)
+TEMPLATE_ACTUAL = """\
+# 한 일
+
+-   (내가 한 일 - 요일)
+
+
+# 진행 중인 일
+
+-   (내가 진행중인 일 - 요일)
+
+
+# 새롭게 알게 된 것
+
+> (새롭게 알게 된 것 이름)
+>
+> -   (새롭게 알게 된 것 세부 내용)
+>
+
+# 공부 한 것
+
+> [!NOTE]
+> -   (공부한 것)
+
+# 성과
+
+> [!TIP]
+> (이번주 내가 진행한 일 최종요약)
+
+# 앞으로 진행할 일
+
+-   (AI가 여태까지 나의 기록을 보고서 앞으로 이런것들을 하면 좋을 것 같다는 피드백 제시 필요)
+"""
+
+
+async def run_test_with_callout_check(label: str, template: str, entries: str) -> None:
+    """GitHub Alert (> [!NOTE], > [!TIP]) 재현 여부를 추가로 검증."""
+    client = genai.Client(api_key=API_KEY)
+    prompt = build_test_prompt(template, entries)
+
+    print(f"\n{'='*60}")
+    print(f"  케이스: {label}")
+    print(f"{'='*60}")
+    print("\n[템플릿]\n")
+    print(textwrap.indent(template.strip(), "  "))
+
+    print("\n[Gemini 출력]\n")
+
+    config = types.GenerateContentConfig(
+        response_mime_type="text/plain",
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
+    response = await client.aio.models.generate_content(
+        model=MODEL,
+        contents=prompt,
+        config=config,
+    )
+
+    output = response.text or "(응답 없음)"
+    print(textwrap.indent(output, "  "))
+
+    print("\n[검증 결과]")
+
+    # 헤딩 보존
+    template_headings = [l.strip() for l in template.splitlines() if l.strip().startswith("#")]
+    if template_headings:
+        matched = sum(1 for h in template_headings if h in output)
+        print(f"  헤딩 보존: {matched}/{len(template_headings)}", end="")
+        print(" ✅" if matched == len(template_headings) else " ⚠️ 일부 누락")
+
+    # JSON 혼입
+    has_json = "{" in output and "}" in output and '"' in output
+    print(f"  JSON 혼입: {'⚠️ 발견됨' if has_json else '✅ 없음'}")
+
+    # GitHub Alert 콜아웃 재현 확인
+    note_ok = "> [!NOTE]" in output
+    tip_ok  = "> [!TIP]" in output
+    print(f"  > [!NOTE] 재현: {'✅' if note_ok else '⚠️ 미재현 (일반 > 로 대체됐을 수 있음)'}")
+    print(f"  > [!TIP]  재현: {'✅' if tip_ok  else '⚠️ 미재현 (일반 > 로 대체됐을 수 있음)'}")
+
+    # 중첩 blockquote 구조 (새롭게 알게 된 것)
+    nested_bullet_in_quote = any(
+        "> -" in line or ">   -" in line or ">-" in line
+        for line in output.splitlines()
+    )
+    print(f"  blockquote 내 bullet 중첩: {'✅' if nested_bullet_in_quote else '⚠️ 미재현'}")
+
+
 async def main() -> None:
     if not API_KEY:
         print("❌ GOOGLE_API_KEY 가 설정되지 않았습니다. .env 를 확인하세요.")
@@ -184,6 +273,7 @@ async def main() -> None:
     await run_test("기본 헤딩+불릿", TEMPLATE_BASIC, DUMMY_ENTRIES)
     await run_test("다양한 블록 (Notion 스타일)", TEMPLATE_RICH, DUMMY_ENTRIES)
     await run_test("자유 서술형 (헤딩 없음)", TEMPLATE_FREE, DUMMY_ENTRIES)
+    await run_test_with_callout_check("실제 DB 템플릿 (GitHub Alert 콜아웃)", TEMPLATE_ACTUAL, DUMMY_ENTRIES)
 
     print(f"\n{'='*60}")
     print("테스트 완료")

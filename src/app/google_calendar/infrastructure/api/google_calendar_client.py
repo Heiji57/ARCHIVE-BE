@@ -11,7 +11,7 @@ lifespan 종료 시 `close()`.
   use case 가 connection.needs_reauth 로 마킹하고 FE 가 재연결 유도.
 """
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -58,6 +58,29 @@ class RawCalendarEvent:
     timezone: str | None
     status: str
     html_link: str | None
+    # ARCHIVE 가 push 한 이벤트면 extendedProperties.private.archiveTodoId 값(원본 todo id).
+    # None 이면 사용자가 Google 에서 직접 만든 이벤트 → pull-sync 에서 그대로 mirror.
+    archive_todo_id: str | None = None
+
+
+# 사용자 소유 tag key — ARCHIVE push 이벤트 식별 및 순환 동기화 차단에 사용.
+ARCHIVE_TODO_ID_KEY = "archiveTodoId"
+
+
+@dataclass(frozen=True)
+class CalendarEventWrite:
+    """Todo → Google Calendar 이벤트 쓰기 입력(도메인 비의존 중립 구조).
+
+    start_at 이 None 이면 date_key 종일(all-day) 이벤트, non-null 이면 시간 이벤트.
+    시간은 UTC datetime 으로 전달하고 timezone(IANA snapshot)은 표시용으로 함께 보낸다.
+    """
+    archive_todo_id: str
+    title: str
+    description: str | None
+    date_key: str
+    start_at: datetime | None
+    end_at: datetime | None
+    timezone: str | None
 
 
 @dataclass(frozen=True)
@@ -118,6 +141,9 @@ def _parse_event(item: dict, calendar_id: str) -> RawCalendarEvent | None:
     if not date_key:
         return None
 
+    private_props = (item.get("extendedProperties") or {}).get("private") or {}
+    archive_todo_id = private_props.get(ARCHIVE_TODO_ID_KEY)
+
     return RawCalendarEvent(
         google_event_id=event_id,
         calendar_id=calendar_id,
@@ -131,6 +157,7 @@ def _parse_event(item: dict, calendar_id: str) -> RawCalendarEvent | None:
         timezone=timezone,
         status=status,
         html_link=item.get("htmlLink"),
+        archive_todo_id=archive_todo_id,
     )
 
 
@@ -277,3 +304,127 @@ class GoogleCalendarApiClient:
                 break
 
         return CalendarEventsPage(events=events, next_sync_token=next_sync_token)
+
+    # ── Calendar write (ARCHIVE todo → Google) ───────────────────────────────────
+
+    def _build_event_body(self, ev: CalendarEventWrite) -> dict:
+        """CalendarEventWrite → Google events insert/update body.
+
+        - archiveTodoId 를 extendedProperties.private 에 심어 ARCHIVE 소유임을 표시
+          (순환 동기화 차단 + 404 시 재조회 키).
+        - start_at 없음 → 종일 이벤트(end.date 는 exclusive 이므로 date_key + 1일).
+        - start_at 있음 → 시간 이벤트(end 미지정 시 start + 1h). UTC dateTime + IANA tz.
+        """
+        body: dict = {
+            "summary": ev.title,
+            "description": ev.description or "",
+            "extendedProperties": {"private": {ARCHIVE_TODO_ID_KEY: ev.archive_todo_id}},
+        }
+        if ev.start_at is None:
+            end_date = (date.fromisoformat(ev.date_key) + timedelta(days=1)).isoformat()
+            body["start"] = {"date": ev.date_key}
+            body["end"] = {"date": end_date}
+        else:
+            tz = ev.timezone or "UTC"
+            end_at = ev.end_at or (ev.start_at + timedelta(hours=1))
+            body["start"] = {"dateTime": ev.start_at.isoformat(), "timeZone": tz}
+            body["end"] = {"dateTime": end_at.isoformat(), "timeZone": tz}
+        return body
+
+    async def create_event(
+        self,
+        access_token: str,
+        ev: CalendarEventWrite,
+        calendar_id: str = _PRIMARY_CALENDAR,
+    ) -> str:
+        """이벤트 생성 후 Google event id 반환."""
+        url = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
+        response = await self._client.post(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json=self._build_event_body(ev),
+        )
+        if response.status_code == 401:
+            raise CalendarReauthRequiredException("Calendar API returned 401 on create.")
+        if response.status_code >= 400:
+            raise CalendarApiUnavailableException(
+                f"Calendar create failed {response.status_code}: {response.text[:200]}"
+            )
+        return response.json()["id"]
+
+    async def update_event(
+        self,
+        access_token: str,
+        google_event_id: str,
+        ev: CalendarEventWrite,
+        calendar_id: str = _PRIMARY_CALENDAR,
+    ) -> str | None:
+        """이벤트 갱신 후 id 반환. 404(이벤트 사라짐)면 None → 호출자가 create fallback."""
+        base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
+        response = await self._client.put(
+            f"{base}/{google_event_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json=self._build_event_body(ev),
+        )
+        if response.status_code in (404, 410):
+            return None
+        if response.status_code == 401:
+            raise CalendarReauthRequiredException("Calendar API returned 401 on update.")
+        if response.status_code >= 400:
+            raise CalendarApiUnavailableException(
+                f"Calendar update failed {response.status_code}: {response.text[:200]}"
+            )
+        return response.json()["id"]
+
+    async def delete_event(
+        self,
+        access_token: str,
+        google_event_id: str,
+        calendar_id: str = _PRIMARY_CALENDAR,
+    ) -> None:
+        """이벤트 삭제. 404/410(이미 삭제됨)은 멱등 성공으로 처리."""
+        base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
+        response = await self._client.delete(
+            f"{base}/{google_event_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if response.status_code in (200, 204, 404, 410):
+            return
+        if response.status_code == 401:
+            raise CalendarReauthRequiredException("Calendar API returned 401 on delete.")
+        raise CalendarApiUnavailableException(
+            f"Calendar delete failed {response.status_code}: {response.text[:200]}"
+        )
+
+    async def find_event_id_by_archive_todo_id(
+        self,
+        access_token: str,
+        archive_todo_id: str,
+        calendar_id: str = _PRIMARY_CALENDAR,
+    ) -> str | None:
+        """archiveTodoId 태그로 기존 이벤트 조회(defensive) — create 직전 중복 방지.
+
+        create 성공 후 finalize 전에 워커가 죽었을 때, 재시도가 같은 todo 로 중복
+        이벤트를 만드는 크래시 윈도우를 닫는다. syncToken 없이 targeted list 호출.
+        """
+        url = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
+        response = await self._client.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "privateExtendedProperty": f"{ARCHIVE_TODO_ID_KEY}={archive_todo_id}",
+                "maxResults": 5,
+                "showDeleted": "false",
+                "singleEvents": "true",
+            },
+        )
+        if response.status_code == 401:
+            raise CalendarReauthRequiredException("Calendar API returned 401 on lookup.")
+        if response.status_code >= 400:
+            raise CalendarApiUnavailableException(
+                f"Calendar lookup failed {response.status_code}: {response.text[:200]}"
+            )
+        for item in response.json().get("items", []):
+            if item.get("status") != "cancelled" and item.get("id"):
+                return item["id"]
+        return None

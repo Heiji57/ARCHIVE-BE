@@ -37,6 +37,9 @@ class CreateTodoCommand:
     start_time: datetime | None = None
     end_time: datetime | None = None
     timezone: str | None = None
+    # None → user_settings.calendar_auto_push_todo 기본값 적용.
+    # True/False → 사이드바에서 개별 지정(기본값 override).
+    push_to_calendar: bool | None = None
 
 
 @dataclass(frozen=True)

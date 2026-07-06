@@ -8,10 +8,12 @@ from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 from app.todo.application.dtos.commands import UNSET, CreateTodoCommand, UpdateTodoCommand
 from app.todo.application.dtos.queries import GetTodosByDateQuery, GetTodosByRangeQuery
+from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
+from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.google_calendar.application.use_cases.get_calendar_events import (
     GetCalendarEventsUseCase,
@@ -23,6 +25,22 @@ from app.todo.presentation.responses.responses import TodoResponse, TodosWithEve
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
 
 _MAX_TODO_RANGE_DAYS = 62  # 두 달
+
+
+def _enqueue_push(user_id: str, todo_id: str) -> None:
+    """즉시 단건 push task enqueue (calendar 큐). 미연결/미대상이면 워커가 no-op."""
+    from app.worker.tasks.push_calendars import push_calendar_event_task
+
+    push_calendar_event_task.apply_async(args=[user_id, todo_id], queue="calendar")
+
+
+def _enqueue_delete(user_id: str, google_event_id: str) -> None:
+    """best-effort Google 이벤트 삭제 task enqueue (전체 todo 삭제 시)."""
+    from app.worker.tasks.push_calendars import delete_calendar_event_task
+
+    delete_calendar_event_task.apply_async(
+        args=[user_id, google_event_id], queue="calendar"
+    )
 
 
 @router.get(
@@ -90,8 +108,11 @@ async def create_todo(
             start_time=body.start_time,
             end_time=body.end_time,
             timezone=body.timezone,
+            push_to_calendar=body.push_to_calendar,
         )
     )
+    if todo.calendar_push_status in ("pending", "pending_delete"):
+        _enqueue_push(current_user.id, todo.id)
     return ApiResponse.created(TodoResponse.from_entity(todo))
 
 
@@ -120,6 +141,8 @@ async def update_todo(
             timezone=body.timezone if "timezone" in provided else UNSET,
         )
     )
+    if todo.calendar_push_status in ("pending", "pending_delete"):
+        _enqueue_push(current_user.id, todo.id)
     return ApiResponse.ok(TodoResponse.from_entity(todo))
 
 
@@ -133,5 +156,40 @@ async def delete_todo(
     use_case: FromDishka[DeleteTodoUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[None]:
+    google_event_id = await use_case.execute(todo_id=todo_id, user_id=current_user.id)
+    if google_event_id:
+        _enqueue_delete(current_user.id, google_event_id)
+    return ApiResponse.ok(None)
+
+
+@router.post(
+    "/{todo_id}/calendar-link",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[None],
+)
+async def add_calendar_link(
+    todo_id: str,
+    use_case: FromDishka[AddCalendarLinkUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[None]:
+    """기존 todo 를 Google Calendar 에 연동(사이드바 '캘린더에 추가')."""
     await use_case.execute(todo_id=todo_id, user_id=current_user.id)
+    _enqueue_push(current_user.id, todo_id)
+    return ApiResponse.ok(None)
+
+
+@router.delete(
+    "/{todo_id}/calendar-link",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[None],
+)
+async def remove_calendar_link(
+    todo_id: str,
+    use_case: FromDishka[RemoveCalendarLinkUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[None]:
+    """todo 는 유지한 채 Google Calendar 연동만 해제(사이드바 '캘린더에서 빼기')."""
+    enqueued = await use_case.execute(todo_id=todo_id, user_id=current_user.id)
+    if enqueued:
+        _enqueue_push(current_user.id, todo_id)
     return ApiResponse.ok(None)

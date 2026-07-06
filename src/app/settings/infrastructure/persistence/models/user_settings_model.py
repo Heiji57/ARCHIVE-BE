@@ -18,6 +18,9 @@ class UserSettingsModel(Base):
     auto_summary_monthly: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     auto_summary_yearly: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     notification_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    calendar_auto_push_todo: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"), default=False
+    )
     last_schedule_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
