@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.retrospective.domain.models.retro_summary import RetroSummary
@@ -70,6 +70,31 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             .order_by(RetroSummaryModel.period_start.asc())
         )
         return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_page(
+        self, user_id: str, summary_type: SummaryType, page: int, size: int, q: str | None
+    ) -> tuple[list[RetroSummary], int]:
+        stmt = select(RetroSummaryModel).where(
+            RetroSummaryModel.user_id == user_id,
+            RetroSummaryModel.summary_type == summary_type.value,
+        )
+        if q:
+            pattern = f"%{q}%"
+            stmt = stmt.where(
+                or_(
+                    RetroSummaryModel.content.ilike(pattern),
+                    RetroSummaryModel.edited_content.ilike(pattern),
+                )
+            )
+        total = await self._session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        )
+        result = await self._session.execute(
+            stmt.order_by(RetroSummaryModel.period_start.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        return [self._to_entity(m) for m in result.scalars()], total or 0
 
     def _to_model(self, entity: RetroSummary) -> RetroSummaryModel:
         return RetroSummaryModel(

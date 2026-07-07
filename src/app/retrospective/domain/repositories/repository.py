@@ -27,8 +27,19 @@ class IJournalEntryRepository(ABC):
 
     @abstractmethod
     async def find_by_retro_type(
-        self, user_id: str, retro_type: str
-    ) -> list[JournalEntry]: ...
+        self, user_id: str, retro_type: str, since: date
+    ) -> list[JournalEntry]:
+        """retro_type 필터 조회 — date_key >= since 로 제한(무제한 전체 조회 방지).
+        전체 이력이 필요하면 find_page 사용."""
+        ...
+
+    @abstractmethod
+    async def find_page(
+        self, user_id: str, retro_type: str | None, page: int, size: int, q: str | None
+    ) -> tuple[list[JournalEntry], int]:
+        """전체 이력 페이지네이션(최신순) — 회고록 목록 페이지용. retro_type 미지정 시
+        전체 타입 대상. q 있으면 content_tsv(제목+본문) 매칭."""
+        ...
 
     @abstractmethod
     async def find_by_full_text(
@@ -63,6 +74,13 @@ class IRetroSummaryRepository(ABC):
     async def find_completed_in_range(
         self, user_id: str, summary_type: SummaryType, from_date: date, to_date: date
     ) -> list[RetroSummary]: ...
+
+    @abstractmethod
+    async def find_page(
+        self, user_id: str, summary_type: SummaryType, page: int, size: int, q: str | None
+    ) -> tuple[list[RetroSummary], int]:
+        """전체 이력 페이지네이션(period_start desc). q 는 content/edited_content ILIKE."""
+        ...
 
 
 class IUserSummaryTemplateRepository(ABC):

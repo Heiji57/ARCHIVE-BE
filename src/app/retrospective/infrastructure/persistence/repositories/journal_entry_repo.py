@@ -51,16 +51,37 @@ class JournalEntryRepository(IJournalEntryRepository):
         )
         return [self._to_entity(m) for m in result.scalars()]
 
-    async def find_by_retro_type(self, user_id: str, retro_type: str) -> list[JournalEntry]:
+    async def find_by_retro_type(
+        self, user_id: str, retro_type: str, since: date
+    ) -> list[JournalEntry]:
         result = await self._session.execute(
             select(JournalEntryModel)
             .where(
                 JournalEntryModel.user_id == user_id,
                 JournalEntryModel.retro_type == retro_type,
+                JournalEntryModel.date_key >= since.isoformat(),
             )
             .order_by(JournalEntryModel.date_key.desc())
         )
         return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_page(
+        self, user_id: str, retro_type: str | None, page: int, size: int, q: str | None
+    ) -> tuple[list[JournalEntry], int]:
+        stmt = select(JournalEntryModel).where(JournalEntryModel.user_id == user_id)
+        if retro_type:
+            stmt = stmt.where(JournalEntryModel.retro_type == retro_type)
+        if q:
+            stmt = stmt.where(JournalEntryModel.content_tsv.match(q))  # type: ignore[union-attr]
+        total = await self._session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        )
+        result = await self._session.execute(
+            stmt.order_by(JournalEntryModel.date_key.desc())
+            .offset((page - 1) * size)
+            .limit(size)
+        )
+        return [self._to_entity(m) for m in result.scalars()], total or 0
 
     async def find_by_full_text(
         self, user_id: str, query: str, page: int, size: int

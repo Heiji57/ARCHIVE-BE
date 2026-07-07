@@ -108,6 +108,8 @@ from app.notification.infrastructure.persistence.repositories.notification_repo 
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
+from app.retrospective.application.use_cases.get_entries_page import GetEntriesPageUseCase
+from app.search.application.use_cases.global_search import GlobalSearchUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
 from app.retrospective.application.use_cases.edit_summary import EditSummaryUseCase
 from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
@@ -662,6 +664,18 @@ class RequestProvider(Provider):
         self, entry_repo: IJournalEntryRepository
     ) -> GetEntriesUseCase:
         return GetEntriesUseCase(entry_repo)
+
+    @provide
+    def get_entries_page_use_case(
+        self, entry_repo: IJournalEntryRepository, summary_repo: IRetroSummaryRepository
+    ) -> GetEntriesPageUseCase:
+        return GetEntriesPageUseCase(entry_repo, summary_repo)
+
+    @provide
+    def global_search_use_case(
+        self, todo_repo: ITodoRepository, entry_repo: IJournalEntryRepository
+    ) -> GlobalSearchUseCase:
+        return GlobalSearchUseCase(todo_repo, entry_repo)
 
     @provide
     def delete_entry_use_case(

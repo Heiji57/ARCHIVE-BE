@@ -237,6 +237,7 @@ presentation  →  application  →  domain
 | `retrospective` | 회고 작성, AI 요약 트리거 |
 | `notification` | 알림 생성, 읽음 처리 |
 | `github` | GitHub 저장소 연결 (OAuth 토큰 재사용), 저장소 동기화, 커밋 조회, 회고 push, push target 설정 (`user_settings`에 통합) |
+| `search` | Todo + 회고 entry 통합검색(nav). 자체 domain/infrastructure 레이어 없음 — 다른 도메인의 repository 인터페이스(`ITodoRepository`, `IJournalEntryRepository`)를 조합만 하는 얇은 aggregator. |
 
 > GitHub API, Anthropic API는 도메인이 아닌 infrastructure 어댑터입니다. 별도 Bounded Context를 만들지 않습니다.
 
@@ -1033,6 +1034,23 @@ CREATE TRIGGER todo_tsv_update
 ```
 
 트리거 생성 SQL은 Alembic 마이그레이션의 `upgrade()`에 `op.execute()`로 포함합니다.
+
+### 회고 엔트리 조회 정책 — 하이드레이션 / 페이지네이션 / 검색
+
+`GET /entries`(초기 하이드레이션), `GET /entries/paginated`(회고록 목록), `GET /search`(nav 통합검색) 세 엔드포인트가 서로 다른 목적으로 같은 `journal_entries`/`retro_summaries`/`todos` 를 조회합니다.
+
+| 엔드포인트 | 용도 | 소스 | 범위 |
+|---|---|---|---|
+| `GET /entries?retroType=X` | 초기 하이드레이션 | `journal_entries` | `from`/`to` 없으면 **최근 30일**(`DEFAULT_HYDRATION_DAYS`), 있으면 최대 366일 |
+| `GET /entries/paginated?retroType=X` | 회고록 목록 페이지 | daily→`journal_entries`, weekly/monthly/annual→`retro_summaries` | 전체 이력, 페이지네이션(기본 10개) |
+| `GET /search?q=` | nav 통합검색 | `todos` + `journal_entries`(daily 만) | 타입별 상위 N개(기본 5) |
+
+**설계 결정**:
+- `GET /entries?retroType=X` (날짜 미지정)가 과거엔 무제한 전체 이력을 반환했다 — 사용자가 오래 쓸수록 초기 로드 payload 가 무한정 커지는 버그. 최근 30일 기본값으로 수정.
+- `/entries/paginated`는 `retroType` 을 **필수**로 강제한다 — daily(엔트리)와 weekly/monthly/annual(AI 생성 요약)이 물리적으로 다른 테이블이라, 타입 없이 "전체 다 섞어서"는 페이지네이션 순서/의미가 애매해진다. 응답에 `isSummary`/`status` 필드를 둬서 FE 가 항목 출처를 구분한다.
+- summary(`retro_summaries`) 검색은 tsvector 대신 `ILIKE` 를 쓴다 — 사용자당 weekly 최대 52 + monthly 12 + annual 1 = 연 65건 수준이라 평생 GIN 인덱스가 필요할 규모가 되지 않는다. daily(`journal_entries`)는 이미 있는 `content_tsv` 를 그대로 재사용.
+- `GET /search` 는 Todo/Entry 관련도 점수가 서로 비교 불가능해 하나의 랭킹으로 합치지 않고 `{ todos, entries }` 로 타입별로 나눠 반환한다. `asyncio.gather` 로 병렬 조회.
+- `find_by_full_text`(Todo/JournalEntry 양쪽 다 원래 존재)는 이 기능 이전까지 어떤 엔드포인트에서도 호출되지 않던 죽은 코드였다 — 이번에 `GET /search`/`GET /entries/paginated` 가 그 로직을 실제로 연결했다.
 
 ### Alembic async 설정
 

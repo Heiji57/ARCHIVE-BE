@@ -1,5 +1,7 @@
+from datetime import date
+
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
@@ -7,17 +9,21 @@ from app.github.domain.models.retrospective_push import RetrospectivePush
 from app.github.domain.repositories.retrospective_push_repository import (
     IRetrospectivePushRepository,
 )
-from app.github.domain.utils.period_mapping import entry_to_period
+from app.github.domain.utils.period_mapping import entry_to_period, summary_to_period
 from app.retrospective.application.dtos.commands import CreateEntryCommand, UpsertEntryCommand
-from app.retrospective.application.dtos.queries import GetEntriesQuery
+from app.retrospective.application.dtos.queries import GetEntriesPageQuery, GetEntriesQuery
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
+from app.retrospective.application.use_cases.get_entries_page import GetEntriesPageUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.models.journal_entry import JournalEntry
+from app.retrospective.domain.models.retro_summary import RetroSummary
+from app.retrospective.domain.models.value_objects import RetroType
 from app.retrospective.presentation.requests.requests import EntryCreateRequest, EntryUpsertRequest
 from app.retrospective.presentation.responses.responses import (
+    EntryPageResponse,
     EntryResponse,
     EntryWithGithubResponse,
 )
@@ -26,6 +32,10 @@ from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/entries", tags=["entries"], route_class=DishkaRoute)
+
+_MAX_ENTRY_RANGE_DAYS = 366  # 일 년
+_MAX_ENTRY_PAGE_SIZE = 50
+_VALID_RETRO_TYPES = {t.value for t in RetroType}
 
 
 async def _is_github_connected(
@@ -47,6 +57,16 @@ async def _push_map_for_entries(
     return {(p.period_type, p.period_key): p for p in pushes}
 
 
+async def _push_map_for_summaries(
+    push_repo: IRetrospectivePushRepository,
+    user_id: str,
+    summaries: list[RetroSummary],
+) -> dict[tuple[str, str], RetrospectivePush]:
+    keys = [summary_to_period(s) for s in summaries]
+    pushes = await push_repo.find_many(user_id, keys)
+    return {(p.period_type, p.period_key): p for p in pushes}
+
+
 @router.get(
     "",
     status_code=status.HTTP_200_OK,
@@ -61,6 +81,17 @@ async def get_entries(
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
 ) -> ApiResponse[list[EntryWithGithubResponse]]:
+    if from_date and to_date:
+        try:
+            f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
+        if (t - f).days > _MAX_ENTRY_RANGE_DAYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"날짜 범위는 최대 {_MAX_ENTRY_RANGE_DAYS}일입니다.",
+            )
+
     entries = await use_case.execute(
         GetEntriesQuery(
             user_id=current_user.id,
@@ -78,6 +109,72 @@ async def get_entries(
         ])
 
     return ApiResponse.ok([EntryResponse.from_entity(e) for e in entries])
+
+
+@router.get(
+    "/paginated",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[EntryPageResponse],
+)
+async def get_entries_paginated(
+    use_case: FromDishka[GetEntriesPageUseCase],
+    push_repo: FromDishka[IRetrospectivePushRepository],
+    oauth_repo: FromDishka[IOAuthConnectionRepository],
+    current_user: UserContext = Depends(get_current_user),
+    retro_type: str = Query(alias="retroType"),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=10, ge=1, le=_MAX_ENTRY_PAGE_SIZE),
+    q: str | None = Query(default=None, min_length=1),
+) -> ApiResponse[EntryPageResponse]:
+    """회고록 목록 페이지 — 최신순 페이지네이션(기본 10개씩).
+
+    daily 는 journal_entries, weekly/monthly/annual 은 retro_summaries 에서 조회한다
+    (소스 테이블이 달라 retroType 필수).
+    """
+    if retro_type not in _VALID_RETRO_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"retroType 은 {sorted(_VALID_RETRO_TYPES)} 중 하나여야 합니다.",
+        )
+
+    items_raw, total = await use_case.execute(
+        GetEntriesPageQuery(
+            user_id=current_user.id, retro_type=retro_type, page=page, size=size, q=q
+        )
+    )
+
+    is_dev_with_github = current_user.is_developer() and await _is_github_connected(
+        oauth_repo, current_user.id
+    )
+
+    # EntryPageResponse.items 는 항상 EntryWithGithubResponse 로 통일한다(github_push
+    # nullable) — get_entries 와 달리 두 응답 클래스를 섞으면 pydantic 이 직접 생성
+    # 시점에 타입 불일치로 거부한다(FastAPI 의 response_model 관대한 재구성과 달리
+    # 여기선 EntryPageResponse 를 직접 생성하므로).
+    if retro_type == RetroType.DAILY.value:
+        entries: list[JournalEntry] = items_raw  # type: ignore[assignment]
+        push_map_e = (
+            await _push_map_for_entries(push_repo, current_user.id, entries)
+            if is_dev_with_github
+            else {}
+        )
+        items = [
+            EntryWithGithubResponse.from_entity(e, push_map_e.get(entry_to_period(e)))
+            for e in entries
+        ]
+    else:
+        summaries: list[RetroSummary] = items_raw  # type: ignore[assignment]
+        push_map_s = (
+            await _push_map_for_summaries(push_repo, current_user.id, summaries)
+            if is_dev_with_github
+            else {}
+        )
+        items = [
+            EntryWithGithubResponse.from_summary(s, push_map_s.get(summary_to_period(s)))
+            for s in summaries
+        ]
+
+    return ApiResponse.ok(EntryPageResponse(items=items, total=total, page=page, size=size))
 
 
 @router.get(

@@ -21,6 +21,7 @@ from app.retrospective.presentation.template_router import (
     active_router as summary_active_router,
     template_router as summary_template_router,
 )
+from app.search.presentation.router import router as search_router
 from app.shared.domain.exceptions.base import BaseAppException
 from app.todo.presentation.router import router as todo_router
 from app.shared.infrastructure.config.settings import get_settings
@@ -100,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router, prefix="/api/v1")
     app.include_router(github_router, prefix="/api/v1")
     app.include_router(calendar_router, prefix="/api/v1")
+    app.include_router(search_router, prefix="/api/v1")
     return app
 
 
