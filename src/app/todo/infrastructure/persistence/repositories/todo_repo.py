@@ -277,9 +277,13 @@ class TodoRepository(ITodoRepository):
         return result.first() is not None
 
     async def bulk_clear_calendar_push(self, user_id: str) -> None:
+        # google_event_id 는 의도적으로 보존한다 — calendar_push_status=NULL 이면
+        # worker(claim 대상: pending/pending_delete/failed/syncing)가 어차피 이 todo 를
+        # 절대 건드리지 않으므로 안전하고, 재연결 시 find_by_google_event_id 의 dedup
+        # 키로 재사용돼 같은 이벤트가 중복 todo 로 재생성되는 것을 막는다.
         await self._session.execute(
             text(
-                "UPDATE todos SET calendar_push_status=NULL, google_event_id=NULL, "
+                "UPDATE todos SET calendar_push_status=NULL, "
                 "push_intent=NULL, push_started_at=NULL, sync_attempt_id=NULL, push_retry_count=0 "
                 "WHERE user_id=:user_id AND calendar_push_status IS NOT NULL"
             ),

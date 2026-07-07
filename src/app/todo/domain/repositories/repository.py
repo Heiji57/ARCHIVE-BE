@@ -122,7 +122,13 @@ class ITodoRepository(ABC):
 
     @abstractmethod
     async def bulk_clear_calendar_push(self, user_id: str) -> None:
-        """연결 해제 시 사용자의 모든 todo push 컬럼 초기화(연동 흔적 제거)."""
+        """연결 해제 시 사용자의 모든 todo push 활성 상태 초기화.
+
+        google_event_id 는 보존한다 — 재연결 시 find_by_google_event_id 의 dedup 키로
+        재사용돼, 같은 Google 이벤트가 다음 full resync 에서 중복 todo 로 재생성되는
+        것을 막는다(특히 Google 원본에서 승격된 todo — archiveTodoId 태그가 없어
+        google_event_id 가 유일한 dedup 수단). calendar_push_status=NULL 이라 worker
+        가 claim 대상(pending/pending_delete/failed/syncing)에서 제외해 안전하다."""
         ...
 
     @abstractmethod
