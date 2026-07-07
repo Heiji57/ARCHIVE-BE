@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import Date, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -21,6 +21,6 @@ class RetroSummaryModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        # user_id 단독 조회는 이 uq 의 prefix 가 커버 (migration 027 에서 중복 인덱스 제거).
         UniqueConstraint("user_id", "summary_type", "period_start", name="uq_retro_summaries_user_type_period"),
-        Index("ix_retro_summaries_user_id", "user_id"),
     )

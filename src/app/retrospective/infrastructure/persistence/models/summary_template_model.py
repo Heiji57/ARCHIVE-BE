@@ -22,10 +22,8 @@ class UserSummaryTemplateModel(Base):
     )
 
     __table_args__ = (
-        Index(
-            "ix_user_summary_templates_user_type",
-            "user_id", "summary_type",
-        ),
+        # (user_id, summary_type) 조회는 이 uq 의 prefix 가 커버
+        # (migration 027 에서 중복 인덱스 ix_user_summary_templates_user_type 제거).
         Index(
             "uq_user_summary_templates_user_type_name",
             "user_id", "summary_type", "name",

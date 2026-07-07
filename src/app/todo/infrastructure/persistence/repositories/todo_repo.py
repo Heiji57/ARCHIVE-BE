@@ -98,9 +98,11 @@ class TodoRepository(ITodoRepository):
         row = result.first()
         return self._row_to_entity(row) if row else None
 
-    async def create_from_calendar_event(self, todo: Todo) -> Todo:
+    async def create_from_calendar_event(self, todo: Todo) -> Todo | None:
         # save()/_to_model() 은 push 제어 컬럼을 의도적으로 제외하므로, Google 원본
         # 이벤트를 이미-synced 상태의 Todo 로 최초 승격할 때는 이 전용 INSERT 를 쓴다.
+        # ON CONFLICT: uq_todos_user_google_event (partial unique) — 동시 sync race 로
+        # 다른 워커가 먼저 승격한 경우 조용히 skip (None 반환).
         result = await self._session.execute(
             text(
                 "INSERT INTO todos ("
@@ -111,7 +113,9 @@ class TodoRepository(ITodoRepository):
                 "  :id, :user_id, :title, :status, :date_key, :description,"
                 "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
                 "  'synced', :google_event_id, NULL, 0"
-                f") RETURNING {_TODO_RETURNING}"
+                ") ON CONFLICT (user_id, google_event_id) WHERE google_event_id IS NOT NULL"
+                "  DO NOTHING"
+                f" RETURNING {_TODO_RETURNING}"
             ),
             {
                 "id": todo.id,
@@ -130,8 +134,7 @@ class TodoRepository(ITodoRepository):
             },
         )
         row = result.first()
-        assert row is not None
-        return self._row_to_entity(row)
+        return self._row_to_entity(row) if row else None
 
     async def clear_calendar_link(self, todo_id: str, user_id: str) -> None:
         await self._session.execute(

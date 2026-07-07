@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -23,6 +23,6 @@ class GitHubRepositoryModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        # user_id 단독 조회는 이 uq 의 prefix 가 커버 (migration 027 에서 중복 인덱스 제거).
         UniqueConstraint("user_id", "github_repo_id", name="uq_github_repositories_user_repo"),
-        Index("ix_github_repositories_user_id", "user_id"),
     )

@@ -42,4 +42,14 @@ class TodoModel(Base):
             "updated_at",
             postgresql_where=text("calendar_push_status IS NOT NULL"),
         ),
+        # Google 원본 이벤트 → todo 승격 dedup 의 DB 레벨 최종 방어 + find_by_google_event_id
+        # lookup 커버. 애플리케이션 dedup(find 후 insert)만으로는 동시 sync race 에서
+        # 중복 승격 가능성이 남는다.
+        Index(
+            "uq_todos_user_google_event",
+            "user_id",
+            "google_event_id",
+            unique=True,
+            postgresql_where=text("google_event_id IS NOT NULL"),
+        ),
     )

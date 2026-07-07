@@ -36,10 +36,12 @@ class ITodoRepository(ABC):
         ...
 
     @abstractmethod
-    async def create_from_calendar_event(self, todo: Todo) -> Todo:
+    async def create_from_calendar_event(self, todo: Todo) -> Todo | None:
         """Google Calendar 원본 이벤트를 Todo 로 최초 승격 — content + push 제어
         컬럼(calendar_push_status/google_event_id 등)을 한 번에 INSERT 한다.
-        save()/merge() 는 push 컬럼을 의도적으로 건드리지 않으므로 이 전용 경로가 필요."""
+        save()/merge() 는 push 컬럼을 의도적으로 건드리지 않으므로 이 전용 경로가 필요.
+        동일 (user_id, google_event_id) 가 이미 존재하면(동시 sync race) None — DB 의
+        partial unique(uq_todos_user_google_event) + ON CONFLICT DO NOTHING 으로 방어."""
         ...
 
     @abstractmethod
