@@ -16,3 +16,5 @@ class GetEntriesPageQuery:
     page: int
     size: int
     q: str | None = None
+    from_date: str | None = None
+    to_date: str | None = None

@@ -125,11 +125,14 @@ async def get_entries_paginated(
     page: int = Query(default=1, ge=1),
     size: int = Query(default=10, ge=1, le=_MAX_ENTRY_PAGE_SIZE),
     q: str | None = Query(default=None, min_length=1),
+    from_date: str | None = Query(default=None, alias="from"),
+    to_date: str | None = Query(default=None, alias="to"),
 ) -> ApiResponse[EntryPageResponse]:
     """회고록 목록 페이지 — 최신순 페이지네이션(기본 10개씩).
 
     daily 는 journal_entries, weekly/monthly/annual 은 retro_summaries 에서 조회한다
-    (소스 테이블이 달라 retroType 필수).
+    (소스 테이블이 달라 retroType 필수). from/to 있으면 기간 필터 — daily 는 date_key
+    범위, summary 는 겹침(overlap) 기준(기간 일부라도 겹치면 포함).
     """
     if retro_type not in _VALID_RETRO_TYPES:
         raise HTTPException(
@@ -137,9 +140,26 @@ async def get_entries_paginated(
             detail=f"retroType 은 {sorted(_VALID_RETRO_TYPES)} 중 하나여야 합니다.",
         )
 
+    if from_date and to_date:
+        try:
+            f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
+        if (t - f).days > _MAX_ENTRY_RANGE_DAYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"날짜 범위는 최대 {_MAX_ENTRY_RANGE_DAYS}일입니다.",
+            )
+
     items_raw, total = await use_case.execute(
         GetEntriesPageQuery(
-            user_id=current_user.id, retro_type=retro_type, page=page, size=size, q=q
+            user_id=current_user.id,
+            retro_type=retro_type,
+            page=page,
+            size=size,
+            q=q,
+            from_date=from_date,
+            to_date=to_date,
         )
     )
 

@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class GitHubOAuthConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GITHUB_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="GITHUB_", env_file=".env.local", extra="ignore")
 
     client_id: str
     client_secret: str
@@ -10,7 +10,7 @@ class GitHubOAuthConfig(BaseSettings):
 
 
 class GoogleOAuthConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="GOOGLE_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="GOOGLE_", env_file=".env.local", extra="ignore")
 
     client_id: str
     client_secret: str
@@ -27,7 +27,7 @@ class GoogleCalendarConfig(BaseSettings):
     캘린더는 access_token(1h 만료)만으로는 백그라운드 AI 요약 시점에 토큰이
     만료되므로 `access_type=offline` 으로 refresh_token 을 발급받아 저장한다.
     """
-    model_config = SettingsConfigDict(env_prefix="GOOGLE_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="GOOGLE_", env_file=".env.local", extra="ignore")
 
     client_id: str
     client_secret: str

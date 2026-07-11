@@ -28,6 +28,7 @@ from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
 from app.auth.infrastructure.cache.auth_token import AuthTokenCache
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
+from app.auth.infrastructure.cache.login_attempt import LoginAttemptCache
 from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
 from app.auth.infrastructure.cache.password_reset import PasswordResetCache
@@ -206,6 +207,11 @@ class AppProvider(Provider):
     def auth_token_cache(self, config: AppConfig) -> AuthTokenCache:
         redis = Redis.from_url(config.redis.auth_url, decode_responses=True)
         return AuthTokenCache(redis, config.auth)
+
+    @provide
+    def login_attempt_cache(self, config: AppConfig) -> LoginAttemptCache:
+        redis = Redis.from_url(config.redis.auth_url, decode_responses=True)
+        return LoginAttemptCache(redis, config.auth)
 
     @provide
     def session_service(
@@ -451,8 +457,9 @@ class RequestProvider(Provider):
         self,
         user_repo: IUserRepository,
         session_service: SessionService,
+        login_attempts: LoginAttemptCache,
     ) -> LoginUseCase:
-        return LoginUseCase(user_repo, session_service)
+        return LoginUseCase(user_repo, session_service, login_attempts)
 
     @provide
     def refresh_token_use_case(

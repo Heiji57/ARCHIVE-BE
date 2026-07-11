@@ -278,8 +278,11 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "422": { $ref: "#/components/responses/ValidationError_422" }
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
       x-error-codes:
         - AUTH_INVALID_CREDENTIALS
+        - AUTH_LOGIN_RATE_LIMITED
 
   /auth/token/refresh:
     post:
@@ -835,6 +838,11 @@ paths:
           와 달리 비개발자/GitHub 미연결 사용자도 키 자체는 오고 값만 null.
         - `q` 로 키워드 검색 가능. daily 는 `content_tsv` full-text, summary 는
           `content`/`edited_content` ILIKE.
+        - `from`+`to` 로 기간 필터 가능 (둘 다 지정해야 적용, 하나만 있으면 무시). 최대
+          366일, 초과 시 422. daily 는 `date_key` 가 범위 안에 있는 것만. weekly/monthly/
+          annual 은 **겹침(overlap) 기준** — 요약 기간이 `from`~`to` 와 조금이라도 겹치면
+          포함한다(엄격 포함 아님). 예: `from=2026-06-01&to=2026-06-30` 조회 시 5/28~6/3
+          주간 요약도 포함됨(그 주가 6월과 겹치므로).
       parameters:
         - in: query
           name: retroType
@@ -849,6 +857,12 @@ paths:
         - in: query
           name: q
           schema: { type: string, minLength: 1 }
+        - in: query
+          name: from
+          schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
+        - in: query
+          name: to
+          schema: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$' }
       responses:
         "200":
           description: 조회 성공
@@ -883,7 +897,10 @@ paths:
     put:
       tags: [entries]
       summary: 엔트리 Upsert
-      description: 존재하면 수정, 없으면 생성한다 (idempotent).
+      description: |
+        존재하면(본인 소유) 수정, id가 전역 미존재면 생성한다 (idempotent).
+        id가 이미 다른 사용자 소유로 존재하면 404 (BOLA 방지 — 타 유저 엔트리 탈취 차단).
+        생성 시 (date_key, retroType) 조합이 이미 존재하면 409.
       requestBody:
         required: true
         content:
@@ -897,7 +914,14 @@ paths:
               schema: { $ref: "#/components/schemas/ApiResponseEntry" }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "409":
+          $ref: "#/components/responses/Conflict_409"
         "422": { $ref: "#/components/responses/ValidationError_422" }
+      x-error-codes:
+        - JOURNAL_ENTRY_NOT_FOUND
+        - JOURNAL_ENTRY_ALREADY_EXISTS
 
     delete:
       tags: [entries]
@@ -2563,6 +2587,7 @@ components:
         - `GITHUB_RATE_LIMITED` — GitHub API rate limit 초과 (잠시 후 재시도)
         - `RETRO_SUMMARY_RATE_LIMIT_EXCEEDED` — 사용자별 AI 요약 생성 한도(7일 sliding window) 초과.
           `details[0]` 에 `{ summaryType, limit, windowSeconds, retryAfterSeconds }` 포함.
+        - `AUTH_LOGIN_RATE_LIMITED` — 로그인 실패 누적으로 일시 차단(brute-force 방어, email+IP 고정 윈도우). 잠시 후 재시도.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }

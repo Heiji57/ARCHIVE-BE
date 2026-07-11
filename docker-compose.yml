@@ -5,7 +5,7 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - .env.local
     volumes:
       - .:/app
     depends_on:
@@ -56,7 +56,7 @@ services:
     build: .
     command: celery -A app.worker.celery_app worker -Q ai_tasks --concurrency=3 --loglevel=info
     env_file:
-      - .env
+      - .env.local
     volumes:
       - .:/app
     depends_on:
@@ -73,7 +73,7 @@ services:
     build: .
     command: celery -A app.worker.celery_app worker --beat -Q default --concurrency=2 --schedule=/tmp/celerybeat-schedule --loglevel=info
     env_file:
-      - .env
+      - .env.local
     volumes:
       - .:/app
     depends_on:
@@ -90,7 +90,7 @@ services:
     build: .
     command: celery -A app.worker.celery_app worker -Q calendar --concurrency=3 --loglevel=info
     env_file:
-      - .env
+      - .env.local
     volumes:
       - .:/app
     depends_on:

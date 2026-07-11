@@ -148,7 +148,7 @@ class SessionService:
         purged = await self._cache.delete_all(record.user_id)
         self._log.warning(
             "session.refresh_reuse_detected",
-            event="REFRESH_TOKEN_REUSE",
+            event_type="REFRESH_TOKEN_REUSE",
             user_id=record.user_id,
             triggering_session_id=record.session_id,
             presented_hash=presented_hash,

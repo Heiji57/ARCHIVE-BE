@@ -28,6 +28,12 @@ class JournalEntryRepository(IJournalEntryRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def id_exists(self, id: str) -> bool:
+        result = await self._session.execute(
+            select(JournalEntryModel.id).where(JournalEntryModel.id == id).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
     async def find_by_date_key(self, user_id: str, date_key: str, retro_type: str) -> JournalEntry | None:
         result = await self._session.execute(
             select(JournalEntryModel).where(
@@ -66,13 +72,24 @@ class JournalEntryRepository(IJournalEntryRepository):
         return [self._to_entity(m) for m in result.scalars()]
 
     async def find_page(
-        self, user_id: str, retro_type: str | None, page: int, size: int, q: str | None
+        self,
+        user_id: str,
+        retro_type: str | None,
+        page: int,
+        size: int,
+        q: str | None,
+        from_date: date | None,
+        to_date: date | None,
     ) -> tuple[list[JournalEntry], int]:
         stmt = select(JournalEntryModel).where(JournalEntryModel.user_id == user_id)
         if retro_type:
             stmt = stmt.where(JournalEntryModel.retro_type == retro_type)
         if q:
             stmt = stmt.where(JournalEntryModel.content_tsv.match(q))  # type: ignore[union-attr]
+        if from_date:
+            stmt = stmt.where(JournalEntryModel.date_key >= from_date.isoformat())
+        if to_date:
+            stmt = stmt.where(JournalEntryModel.date_key <= to_date.isoformat())
         total = await self._session.scalar(
             select(func.count()).select_from(stmt.subquery())
         )

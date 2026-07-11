@@ -39,6 +39,11 @@ class SessionNotFoundException(BaseAppException):
     code = "AUTH_SESSION_NOT_FOUND"
 
 
+class LoginRateLimitExceededException(BaseAppException):
+    """로그인 실패 누적으로 일시 차단됨 — brute-force 방어 (email+IP 고정 윈도우)."""
+    code = "AUTH_LOGIN_RATE_LIMITED"
+
+
 class EmailNotVerifiedException(BaseAppException):
     code = "AUTH_EMAIL_NOT_VERIFIED"
 

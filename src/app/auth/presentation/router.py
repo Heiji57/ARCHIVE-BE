@@ -1,7 +1,16 @@
 import json
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Cookie, Depends, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Cookie,
+    Depends,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.auth.application.dtos.commands import (
@@ -18,6 +27,7 @@ from app.auth.application.use_cases.complete_onboarding import CompleteOnboardin
 from app.auth.application.use_cases.initiate_oauth_link import InitiateOAuthLinkUseCase
 from app.auth.application.use_cases.list_sessions import ListSessionsUseCase
 from app.auth.application.use_cases.request_password_reset import RequestPasswordResetUseCase
+from app.shared.infrastructure.email.smtp import send_email
 from app.auth.application.use_cases.reset_password import ResetPasswordUseCase
 from app.auth.application.use_cases.revoke_session import (
     RevokeOtherSessionsUseCase,
@@ -406,14 +416,26 @@ async def oauth_link_init(
 )
 async def request_password_reset(
     body: RequestPasswordResetRequest,
+    background_tasks: BackgroundTasks,
     use_case: FromDishka[RequestPasswordResetUseCase],
 ) -> ApiResponse[None]:
     """비밀번호 재설정 요청.
 
     이메일 enumeration 방지를 위해 결과(존재 여부)와 무관하게 항상 200을 반환한다.
     내부적으로 등록된 이메일 + 비밀번호 보유 + 쿨다운 통과 시에만 메일 발송.
+
+    SMTP 전송은 응답 이후 BackgroundTasks 로 처리 — 존재/비존재 이메일의 응답 시간을
+    동일하게 유지해 타이밍 기반 계정 열거를 차단한다.
     """
-    await use_case.execute(RequestPasswordResetCommand(email=body.email))
+    email_job = await use_case.execute(RequestPasswordResetCommand(email=body.email))
+    if email_job is not None:
+        background_tasks.add_task(
+            send_email,
+            to=email_job.to,
+            subject=email_job.subject,
+            body=email_job.body,
+            html_body=email_job.html_body,
+        )
     return ApiResponse.ok(None)
 
 

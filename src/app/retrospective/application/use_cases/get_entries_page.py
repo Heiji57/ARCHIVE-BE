@@ -1,3 +1,5 @@
+from datetime import date
+
 from app.retrospective.application.dtos.queries import GetEntriesPageQuery
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.retro_summary import RetroSummary
@@ -31,11 +33,13 @@ class GetEntriesPageUseCase:
     async def execute(
         self, query: GetEntriesPageQuery
     ) -> tuple[list[JournalEntry] | list[RetroSummary], int]:
+        from_d = date.fromisoformat(query.from_date) if query.from_date else None
+        to_d = date.fromisoformat(query.to_date) if query.to_date else None
         if query.retro_type == RetroType.DAILY.value:
             return await self._entry_repo.find_page(
-                query.user_id, query.retro_type, query.page, query.size, query.q
+                query.user_id, query.retro_type, query.page, query.size, query.q, from_d, to_d
             )
         summary_type = _RETRO_TO_SUMMARY_TYPE[query.retro_type]
         return await self._summary_repo.find_page(
-            query.user_id, summary_type, query.page, query.size, query.q
+            query.user_id, summary_type, query.page, query.size, query.q, from_d, to_d
         )

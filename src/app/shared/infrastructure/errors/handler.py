@@ -10,6 +10,7 @@ from app.auth.domain.exceptions.exceptions import (
     CountryInvalidException,
     CountryTimezoneRequiredException,
     EmailNotVerifiedException,
+    LoginRateLimitExceededException,
     OAuthAccountAlreadyLinkedException,
     OAuthProviderAlreadyLinkedException,
     OAuthStateInvalidException,
@@ -134,6 +135,7 @@ _STATUS_MAP: dict[str, int] = {
     # 429
     GitHubRateLimitedException.code: 429,
     SummaryRateLimitExceededException.code: 429,
+    LoginRateLimitExceededException.code: 429,
     # 502
     GitHubPushFailedException.code: 502,
     # 503

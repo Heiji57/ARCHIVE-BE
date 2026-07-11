@@ -72,7 +72,14 @@ class RetroSummaryRepository(IRetroSummaryRepository):
         return [self._to_entity(m) for m in result.scalars()]
 
     async def find_page(
-        self, user_id: str, summary_type: SummaryType, page: int, size: int, q: str | None
+        self,
+        user_id: str,
+        summary_type: SummaryType,
+        page: int,
+        size: int,
+        q: str | None,
+        from_date: date | None,
+        to_date: date | None,
     ) -> tuple[list[RetroSummary], int]:
         stmt = select(RetroSummaryModel).where(
             RetroSummaryModel.user_id == user_id,
@@ -86,6 +93,10 @@ class RetroSummaryRepository(IRetroSummaryRepository):
                     RetroSummaryModel.edited_content.ilike(pattern),
                 )
             )
+        if from_date:
+            stmt = stmt.where(RetroSummaryModel.period_end >= from_date)
+        if to_date:
+            stmt = stmt.where(RetroSummaryModel.period_start <= to_date)
         total = await self._session.scalar(
             select(func.count()).select_from(stmt.subquery())
         )

@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class AuthConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env.local", extra="ignore")
 
     secret_key: str
     access_token_expire_minutes: int = 15
@@ -21,6 +21,10 @@ class AuthConfig(BaseSettings):
     # Password reset
     password_reset_ttl_seconds: int = 1800              # 비밀번호 재설정 토큰 만료 (30분)
     password_reset_cooldown_ttl_seconds: int = 60       # 재설정 메일 재발송 쿨다운
+
+    # Login brute-force 방어 (Redis 고정 윈도우, email+IP 키)
+    login_max_attempts: int = 10                # window 안 허용 실패 횟수
+    login_attempt_window_seconds: int = 900     # 실패 카운터 윈도우(15분)
 
     # Session security
     session_grace_window_seconds: float = 5.0   # 동시 refresh race 흡수 윈도

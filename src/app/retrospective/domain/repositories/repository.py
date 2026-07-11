@@ -16,6 +16,13 @@ class IJournalEntryRepository(ABC):
     async def find_by_id(self, id: str, user_id: str) -> JournalEntry | None: ...
 
     @abstractmethod
+    async def id_exists(self, id: str) -> bool:
+        """소유자 무관 전역 id 존재 여부. upsert(PUT /entries/:id) 의 생성 분기에서
+        find_by_id(스코프 조회)가 None 이어도 그 id 가 '남의 엔트리'인지 '진짜 미존재'인지
+        구분해 PK 탈취(merge 로 타 유저 행 덮어쓰기)를 막는 데 사용."""
+        ...
+
+    @abstractmethod
     async def find_by_date_key(
         self, user_id: str, date_key: str, retro_type: str
     ) -> JournalEntry | None: ...
@@ -35,10 +42,18 @@ class IJournalEntryRepository(ABC):
 
     @abstractmethod
     async def find_page(
-        self, user_id: str, retro_type: str | None, page: int, size: int, q: str | None
+        self,
+        user_id: str,
+        retro_type: str | None,
+        page: int,
+        size: int,
+        q: str | None,
+        from_date: date | None,
+        to_date: date | None,
     ) -> tuple[list[JournalEntry], int]:
         """전체 이력 페이지네이션(최신순) — 회고록 목록 페이지용. retro_type 미지정 시
-        전체 타입 대상. q 있으면 content_tsv(제목+본문) 매칭."""
+        전체 타입 대상. q 있으면 content_tsv(제목+본문) 매칭. from_date/to_date 있으면
+        date_key 범위로 필터."""
         ...
 
     @abstractmethod
@@ -77,9 +92,18 @@ class IRetroSummaryRepository(ABC):
 
     @abstractmethod
     async def find_page(
-        self, user_id: str, summary_type: SummaryType, page: int, size: int, q: str | None
+        self,
+        user_id: str,
+        summary_type: SummaryType,
+        page: int,
+        size: int,
+        q: str | None,
+        from_date: date | None,
+        to_date: date | None,
     ) -> tuple[list[RetroSummary], int]:
-        """전체 이력 페이지네이션(period_start desc). q 는 content/edited_content ILIKE."""
+        """전체 이력 페이지네이션(period_start desc). q 는 content/edited_content ILIKE.
+        from_date/to_date 있으면 기간 겹침(overlap) 필터 — period_end >= from_date AND
+        period_start <= to_date (엄격 포함이 아니라, 조회 범위와 겹치는 요약을 모두 포함)."""
         ...
 
 
