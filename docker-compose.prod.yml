@@ -1,0 +1,41 @@
+# 배포용 오버레이 — base 와 함께 병합해서 실행한다:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# docker-compose.yml 은 로컬 개발 기본값(build+bind mount+--reload+DB 포트 노출)을
+# 그대로 유지한다. 이 파일은 배포에 필요한 차이점만 오버라이드한다.
+services:
+  api:
+    build: !reset null
+    image: ${IMAGE_REPO:-ghcr.io/heiji57/archive-be}:${IMAGE_TAG:-latest}
+    command: !reset null   # Dockerfile CMD(uvicorn, --reload 없음)로 폴백
+    volumes: !reset []     # 소스 bind mount 제거 — 이미지에 baked-in 된 코드만 사용
+    env_file:
+      - .env.production
+
+  worker-ai:
+    build: !reset null
+    image: ${IMAGE_REPO:-ghcr.io/heiji57/archive-be}:${IMAGE_TAG:-latest}
+    volumes: !reset []
+    env_file:
+      - .env.production
+
+  worker-beat:
+    build: !reset null
+    image: ${IMAGE_REPO:-ghcr.io/heiji57/archive-be}:${IMAGE_TAG:-latest}
+    volumes: !reset []
+    env_file:
+      - .env.production
+
+  worker-calendar:
+    build: !reset null
+    image: ${IMAGE_REPO:-ghcr.io/heiji57/archive-be}:${IMAGE_TAG:-latest}
+    volumes: !reset []
+    env_file:
+      - .env.production
+
+  postgres:
+    ports: !reset []   # 호스트 노출 제거 — api/worker 만 archive-net 내부에서 접근
+
+  redis:
+    ports: !reset []

@@ -53,6 +53,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## Harness
+
+코드를 수정하는 작업(기능 추가, 리팩토링, 버그 수정)을 시작할 때는 `harness/README.md` 를 먼저 읽고 그 **로딩 규칙**을 따른다 — 작업 유형을 먼저 분류하고, 필요한 파일만 읽는다(무조건 전부 읽지 않는다).
+
+- `harness/mission.md` — AI 의 최우선 목표/성공 기준 (아래 `@import` 로 항상 로드)
+- `harness/feature-checklist.md` — 새 기능/엔드포인트 추가 시 레이어별 체크리스트
+- `harness/review-checklist.md` — 구현 완료 후 자기검증(reflection)
+
+> 강제력이 필요한 규칙(Model Selection, Pre-Implementation Workflow)은 위 섹션에 그대로 유지된다. harness 는 상세 체크리스트를 **해당 작업일 때만** 로드해 컨텍스트 비용을 아낀다.
+
+@harness/mission.md
+
+---
+
 ## Project Overview
 
 **ARCHIVE-BE** — 개인 생산성 및 회고 관리 백엔드 (FastAPI, Python 3.12)
@@ -210,6 +224,19 @@ celery -A app.worker.celery_app worker -Q calendar --concurrency=3 --loglevel=in
 ```
 
 > **큐 분리**: `ai_tasks` = AI 요약 task (`worker.generate_summary`, priority=9), `default` = 스케줄 dispatcher (`worker.dispatch_summaries_for_tz` + `worker.sync_all_calendars` beat 발사), `calendar` = 캘린더 백그라운드 동기화 (`worker.sync_all_calendars` dispatcher + `worker.sync_user_calendar` fan-out). worker 를 `-Q` 없이 띄우면 `task_default_queue=default` 만 소비해 요약 task 가 영원히 처리되지 않으니 **`ai_tasks` 를 반드시 포함**한다. 마찬가지로 **`calendar` 큐를 소비하는 worker 가 없으면 백그라운드 캘린더 sync 가 영원히 처리되지 않는다.** docker-compose 는 `worker-ai`(ai_tasks) / `worker-beat`(default+beat) / `worker-calendar`(calendar) 세 컨테이너로 분리되어 있다. 캘린더 sync 는 시간에 민감한 요약 dispatcher 와 무거운 AI 요약 양쪽에서 격리된다.
+
+### 배포 (Production)
+
+로컬 `docker-compose.yml`(build+bind mount+`--reload`+DB 포트 노출)은 그대로 두고, `docker-compose.prod.yml` 오버레이로 배포 차이점만 병합한다:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+- 이미지는 `.github/workflows/build-and-push.yml`(main push / `v*` 태그 push 시 트리거)이 GHCR(`ghcr.io/heiji57/archive-be`)로 빌드·push. `IMAGE_REPO`/`IMAGE_TAG` env var로 다른 레지스트리/태그 지정 가능.
+- `docker-compose.prod.yml`은 `!reset`(Compose merge 문법)으로 `build`/`volumes`/`command`(api)/`ports`(postgres, redis)를 제거한다 — 소스 bind mount 없이 이미지에 baked-in 된 코드만 실행되고, DB/Redis 포트는 호스트에 노출되지 않는다(archive-net 내부에서만 api/worker 가 접근).
+- `env_file`은 `.env.production` — protected file(`.env.*`)이라 `.env.example`을 복사해 직접 채워야 한다.
 
 ## Protected Files (DO NOT READ OR MODIFY)
 
