@@ -13,7 +13,7 @@ from .retrospective import RetrospectiveConfig
 
 
 class AppConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env.local", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: str = "development"
     cors_origins: list[str] = Field(default_factory=list)

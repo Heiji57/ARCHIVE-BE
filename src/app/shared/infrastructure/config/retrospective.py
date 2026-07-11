@@ -8,6 +8,6 @@ class RetrospectiveConfig(BaseSettings):
     - SUMMARY_TEMPLATE_MAX_PER_TYPE : 사용자 1명이 한 summary_type 안에 만들 수 있는
       템플릿 최대 개수 (기본 5)
     """
-    model_config = SettingsConfigDict(env_file=".env.local", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     summary_template_max_per_type: int = 5

@@ -264,7 +264,7 @@ async def run_test_with_callout_check(label: str, template: str, entries: str) -
 
 async def main() -> None:
     if not API_KEY:
-        print("❌ GOOGLE_API_KEY 가 설정되지 않았습니다. .env.local 를 확인하세요.")
+        print("❌ GOOGLE_API_KEY 가 설정되지 않았습니다. .env 를 확인하세요.")
         return
 
     print(f"모델: {MODEL}")

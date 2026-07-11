@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class EmailConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="SMTP_", env_file=".env.local", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="SMTP_", env_file=".env", extra="ignore")
 
     host: str = ""
     port: int = 587
