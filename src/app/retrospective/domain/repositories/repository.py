@@ -121,14 +121,15 @@ class IRetroSummaryRepository(ABC):
     async def find_page(
         self,
         user_id: str,
-        summary_type: SummaryType,
+        summary_type: SummaryType | None,
         page: int,
         size: int,
         q: str | None,
         from_date: date | None,
         to_date: date | None,
     ) -> tuple[list[RetroSummary], int]:
-        """전체 이력 페이지네이션(period_start desc). q 는 content/edited_content ILIKE.
+        """전체 이력 페이지네이션(period_start desc). summary_type 미지정 시
+        전체 타입(weekly/monthly/annual) 대상. q 는 content/edited_content ILIKE.
         from_date/to_date 있으면 기간 겹침(overlap) 필터 — period_end >= from_date AND
         period_start <= to_date (엄격 포함이 아니라, 조회 범위와 겹치는 요약을 모두 포함)."""
         ...

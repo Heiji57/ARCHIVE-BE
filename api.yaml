@@ -829,9 +829,11 @@ paths:
         전체 이력을 최신순으로 페이지네이션 조회한다. `GET /entries`(초기 하이드레이션용,
         최근 30일 기본)와 달리 과거 전체 이력을 훑어보는 회고록 목록 페이지용.
 
-        - `retroType` **필수**. daily 는 `journal_entries`, weekly/monthly/annual 은
-          `retro_summaries`(AI 생성 요약)에서 조회한다 — 소스 테이블이 달라 타입 없이
-          섞어서 조회할 수 없다.
+        - `retroType` 지정 시 daily 는 `journal_entries`, weekly/monthly/annual 은
+          `retro_summaries`(AI 생성 요약)에서 조회한다 — 소스 테이블이 다르다.
+        - `retroType` **생략 시** 두 소스(daily + weekly/monthly/annual)를 합쳐
+          최신순("전체" 뷰)으로 반환한다. 정렬 기준은 daily 는 `date_key`, summary 는
+          `period_start` (레코드 생성 시각이 아니라 회고 대상 날짜 기준).
         - 응답 각 항목의 `isSummary`(요약 여부) + `status`(요약 전용:
           pending/in_progress/completed/failed, entry 는 null)로 출처 구분.
         - `githubPush` 는 이 엔드포인트에서 항상 키가 존재한다(nullable) — `GET /entries`
@@ -846,7 +848,7 @@ paths:
       parameters:
         - in: query
           name: retroType
-          required: true
+          description: 생략 시 전체 타입을 합친 "전체" 뷰.
           schema: { $ref: "#/components/schemas/RetroType" }
         - in: query
           name: page

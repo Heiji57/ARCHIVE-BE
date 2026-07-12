@@ -114,7 +114,7 @@ async def get_entries_paginated(
     push_repo: FromDishka[IRetrospectivePushRepository],
     oauth_repo: FromDishka[IOAuthConnectionRepository],
     current_user: UserContext = Depends(get_current_user),
-    retro_type: str = Query(alias="retroType"),
+    retro_type: str | None = Query(default=None, alias="retroType"),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=10, ge=1, le=_MAX_ENTRY_PAGE_SIZE),
     q: str | None = Query(default=None, min_length=1),
@@ -123,11 +123,12 @@ async def get_entries_paginated(
 ) -> ApiResponse[EntryPageResponse]:
     """회고록 목록 페이지 — 최신순 페이지네이션(기본 10개씩).
 
-    daily 는 journal_entries, weekly/monthly/annual 은 retro_summaries 에서 조회한다
-    (소스 테이블이 달라 retroType 필수). from/to 있으면 기간 필터 — daily 는 date_key
-    범위, summary 는 겹침(overlap) 기준(기간 일부라도 겹치면 포함).
+    daily 는 journal_entries, weekly/monthly/annual 은 retro_summaries 에서
+    조회한다(소스 테이블이 다름). retroType 미지정 시 두 소스를 합쳐 최신순으로
+    정렬한 "전체" 뷰. from/to 있으면 기간 필터 — daily 는 date_key 범위, summary
+    는 겹침(overlap) 기준(기간 일부라도 겹치면 포함).
     """
-    if retro_type not in _VALID_RETRO_TYPES:
+    if retro_type is not None and retro_type not in _VALID_RETRO_TYPES:
         raise HTTPException(
             status_code=422,
             detail=f"retroType 은 {sorted(_VALID_RETRO_TYPES)} 중 하나여야 합니다.",
@@ -155,7 +156,26 @@ async def get_entries_paginated(
     # nullable) — get_entries 와 달리 두 응답 클래스를 섞으면 pydantic 이 직접 생성
     # 시점에 타입 불일치로 거부한다(FastAPI 의 response_model 관대한 재구성과 달리
     # 여기선 EntryPageResponse 를 직접 생성하므로).
-    if retro_type == RetroType.DAILY.value:
+    if retro_type is None:
+        entries_mixed = [i for i in items_raw if isinstance(i, JournalEntry)]
+        summaries_mixed = [i for i in items_raw if not isinstance(i, JournalEntry)]
+        push_map_e = (
+            await _push_map_for_entries(push_repo, current_user.id, entries_mixed)
+            if is_dev_with_github
+            else {}
+        )
+        push_map_s = (
+            await _push_map_for_summaries(push_repo, current_user.id, summaries_mixed)
+            if is_dev_with_github
+            else {}
+        )
+        items = [
+            EntryWithGithubResponse.from_entity(i, push_map_e.get(entry_to_period(i)))
+            if isinstance(i, JournalEntry)
+            else EntryWithGithubResponse.from_summary(i, push_map_s.get(summary_to_period(i)))
+            for i in items_raw
+        ]
+    elif retro_type == RetroType.DAILY.value:
         entries: list[JournalEntry] = items_raw  # type: ignore[assignment]
         push_map_e = (
             await _push_map_for_entries(push_repo, current_user.id, entries)

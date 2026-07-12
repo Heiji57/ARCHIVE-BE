@@ -91,17 +91,16 @@ class RetroSummaryRepository(IRetroSummaryRepository):
     async def find_page(
         self,
         user_id: str,
-        summary_type: SummaryType,
+        summary_type: SummaryType | None,
         page: int,
         size: int,
         q: str | None,
         from_date: date | None,
         to_date: date | None,
     ) -> tuple[list[RetroSummary], int]:
-        stmt = select(RetroSummaryModel).where(
-            RetroSummaryModel.user_id == user_id,
-            RetroSummaryModel.summary_type == summary_type.value,
-        )
+        stmt = select(RetroSummaryModel).where(RetroSummaryModel.user_id == user_id)
+        if summary_type is not None:
+            stmt = stmt.where(RetroSummaryModel.summary_type == summary_type.value)
         if q:
             pattern = f"%{q}%"
             stmt = stmt.where(
