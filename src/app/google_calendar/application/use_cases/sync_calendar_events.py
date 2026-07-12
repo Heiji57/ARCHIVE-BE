@@ -111,12 +111,21 @@ class SyncCalendarEventsUseCase:
         # 이 테이블에 쌓이지 않고 전부 todo 로 승격되므로 cancelled_ids 정리만 유지.
         cancelled_ids: list[str] = []
         auto_delete: bool | None = None  # cancelled 이벤트 등장 시에만 lazy 조회
+
+        # 이벤트별 개별 조회(N+1) 대신, 조회가 필요한 이벤트(cancelled 또는 Google 원본)의
+        # google_event_id 를 모아 1회 batch 조회 후 in-memory dict 로 참조한다.
+        lookup_ids = [
+            raw.google_event_id
+            for raw in page.events
+            if raw.status == "cancelled" or raw.archive_todo_id is None
+        ]
+        existing_todos = await self._todo_repo.find_by_google_event_ids(user_id, lookup_ids)
+        todo_by_event_id = {t.google_event_id: t for t in existing_todos}
+
         for raw in page.events:
             if raw.status == "cancelled":
                 cancelled_ids.append(raw.google_event_id)
-                linked = await self._todo_repo.find_by_google_event_id(
-                    user_id, raw.google_event_id
-                )
+                linked = todo_by_event_id.get(raw.google_event_id)
                 if linked is not None:
                     if auto_delete is None:
                         user_settings = await self._settings_repo.find_by_user_id(user_id)
@@ -135,9 +144,7 @@ class SyncCalendarEventsUseCase:
                 # Google 에서 직접 만든 이벤트 — 읽기전용 CalendarEvent 대신 수정 가능한
                 # Todo 로 승격(google_event_id 로 dedup). 이미 승격돼 있으면 ARCHIVE 가
                 # source of truth 이므로 Google 쪽 변경은 조용히 무시한다.
-                existing_todo = await self._todo_repo.find_by_google_event_id(
-                    user_id, raw.google_event_id
-                )
+                existing_todo = todo_by_event_id.get(raw.google_event_id)
                 if existing_todo is None:
                     todo = Todo(
                         id=generate_id("todo"),

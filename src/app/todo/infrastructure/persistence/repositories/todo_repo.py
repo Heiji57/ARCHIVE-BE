@@ -98,6 +98,19 @@ class TodoRepository(ITodoRepository):
         row = result.first()
         return self._row_to_entity(row) if row else None
 
+    async def find_by_google_event_ids(
+        self, user_id: str, google_event_ids: list[str]
+    ) -> list[Todo]:
+        if not google_event_ids:
+            return []
+        result = await self._session.execute(
+            select(TodoModel).where(
+                TodoModel.user_id == user_id,
+                TodoModel.google_event_id.in_(set(google_event_ids)),
+            )
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     async def create_from_calendar_event(self, todo: Todo) -> Todo | None:
         # save()/_to_model() 은 push 제어 컬럼을 의도적으로 제외하므로, Google 원본
         # 이벤트를 이미-synced 상태의 Todo 로 최초 승격할 때는 이 전용 INSERT 를 쓴다.

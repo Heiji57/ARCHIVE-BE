@@ -36,6 +36,14 @@ class ITodoRepository(ABC):
         ...
 
     @abstractmethod
+    async def find_by_google_event_ids(
+        self, user_id: str, google_event_ids: list[str]
+    ) -> list[Todo]:
+        """find_by_google_event_id 의 batch 버전 — 캘린더 동기화 시 이벤트별 개별
+        조회(N+1) 대신 1회 IN 조회로 처리하기 위해 사용."""
+        ...
+
+    @abstractmethod
     async def create_from_calendar_event(self, todo: Todo) -> Todo | None:
         """Google Calendar 원본 이벤트를 Todo 로 최초 승격 — content + push 제어
         컬럼(calendar_push_status/google_event_id 등)을 한 번에 INSERT 한다.

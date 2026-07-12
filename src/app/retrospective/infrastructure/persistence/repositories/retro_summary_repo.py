@@ -44,6 +44,23 @@ class RetroSummaryRepository(IRetroSummaryRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def find_by_periods(
+        self,
+        user_id: str,
+        summary_type: SummaryType,
+        period_starts: list[date],
+    ) -> list[RetroSummary]:
+        if not period_starts:
+            return []
+        result = await self._session.execute(
+            select(RetroSummaryModel).where(
+                RetroSummaryModel.user_id == user_id,
+                RetroSummaryModel.summary_type == summary_type.value,
+                RetroSummaryModel.period_start.in_(set(period_starts)),
+            )
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     async def find_all_by_type(self, user_id: str, summary_type: SummaryType) -> list[RetroSummary]:
         result = await self._session.execute(
             select(RetroSummaryModel)

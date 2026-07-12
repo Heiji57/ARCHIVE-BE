@@ -1,11 +1,10 @@
-from datetime import date
-
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 
 from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
+from app.shared.presentation.validators import parse_date_range
 from app.todo.application.dtos.commands import UNSET, CreateTodoCommand, UpdateTodoCommand
 from app.todo.application.dtos.queries import GetTodosByDateQuery, GetTodosByRangeQuery
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
@@ -66,15 +65,7 @@ async def get_todos(
             GetTodosByDateQuery(user_id=current_user.id, date_key=date_key)
         )
     elif from_date and to_date:
-        try:
-            f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
-        if (t - f).days > _MAX_TODO_RANGE_DAYS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"날짜 범위는 최대 {_MAX_TODO_RANGE_DAYS}일입니다.",
-            )
+        parse_date_range(from_date, to_date, _MAX_TODO_RANGE_DAYS)
         await calendar_uc.execute(current_user.id, from_date, to_date)
         todos = await by_range_uc.execute(
             GetTodosByRangeQuery(user_id=current_user.id, from_date=from_date, to_date=to_date)

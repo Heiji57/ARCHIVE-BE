@@ -70,17 +70,40 @@ async def _get_or_create_summary(
 ) -> RetroSummary | None:
     existing = await summary_repo.find_by_period(user_id, summary_type, period_start)
     now = datetime.now(timezone.utc)
+    summary, needs_save = _reconcile_summary(
+        existing, user_id, summary_type, period_start, period_end, now
+    )
+    if summary is None:
+        return None
+    return await summary_repo.save(summary) if needs_save else summary
 
+
+def _reconcile_summary(
+    existing: RetroSummary | None,
+    user_id: str,
+    summary_type: SummaryType,
+    period_start: date,
+    period_end: date,
+    now: datetime,
+) -> tuple[RetroSummary | None, bool]:
+    """_get_or_create_summary 의 순수 버전 — 이미 batch 조회된 existing 을 받아 DB 를
+    다시 조회하지 않는다. annual 처럼 다수 period 를 순회할 때 N+1 조회를 피하기 위해
+    분리(읽기만 batch 화, 저장 로직/조건은 기존과 동일하게 유지).
+
+    Returns: (enqueue 대상 summary 또는 None, save 필요 여부).
+    COMPLETED 는 (None, False) — 재생성 불필요. PENDING/IN_PROGRESS 는 (existing, False)
+    — 이미 대기 중이므로 저장 없이 그대로 enqueue.
+    """
     if existing:
         if existing.status == SummaryStatus.COMPLETED:
-            return None
+            return None, False
         if existing.status in (SummaryStatus.PENDING, SummaryStatus.IN_PROGRESS):
-            return existing
+            return existing, False
         existing.status = SummaryStatus.PENDING
         existing.content = None
         existing.edited_content = None  # 재생성 시 편집 오버라이드 초기화 (AI 원본으로 복구)
         existing.updated_at = now
-        return await summary_repo.save(existing)
+        return existing, True
 
     summary = RetroSummary(
         id=generate_id("summ"),
@@ -92,7 +115,7 @@ async def _get_or_create_summary(
         content=None,
         created_at=now,
     )
-    return await summary_repo.save(summary)
+    return summary, True
 
 
 async def _build_chain_for_user(
@@ -119,30 +142,57 @@ async def _build_chain_for_user(
 
     if schedule_type == "annual":
         year = local_today.year - 1
-        for m_start, _ in get_months_in_year(year):
-            for w_start, w_end in weeks_owned_by_month(m_start.year, m_start.month):
-                week_summary = await _get_or_create_summary(
-                    summary_repo, user_id, SummaryType.WEEKLY, w_start, w_end
+        now = datetime.now(timezone.utc)
+        months = get_months_in_year(year)
+        weeks_by_month = {
+            m_start: weeks_owned_by_month(m_start.year, m_start.month) for m_start, _ in months
+        }
+
+        # 이 해의 모든 week/month period_start 를 모아 타입별 1회씩 batch 조회
+        # (기존: period 마다 개별 find_by_period → 사용자당 최대 ~65회 조회).
+        all_week_starts = [w_start for weeks in weeks_by_month.values() for w_start, _ in weeks]
+        existing_weeks = {
+            s.period_start: s
+            for s in await summary_repo.find_by_periods(user_id, SummaryType.WEEKLY, all_week_starts)
+        }
+        existing_months = {
+            s.period_start: s
+            for s in await summary_repo.find_by_periods(
+                user_id, SummaryType.MONTHLY, [m_start for m_start, _ in months]
+            )
+        }
+        existing_annual = await summary_repo.find_by_period(
+            user_id, SummaryType.ANNUAL, date(year, 1, 1)
+        )
+
+        for m_start, _ in months:
+            for w_start, w_end in weeks_by_month[m_start]:
+                week_summary, needs_save = _reconcile_summary(
+                    existing_weeks.get(w_start), user_id, SummaryType.WEEKLY, w_start, w_end, now
                 )
                 if week_summary:
+                    if needs_save:
+                        week_summary = await summary_repo.save(week_summary)
                     _enqueue(week_summary, notify=False)
-            month_summary = await _get_or_create_summary(
-                summary_repo,
+            month_summary, needs_save = _reconcile_summary(
+                existing_months.get(m_start),
                 user_id,
                 SummaryType.MONTHLY,
                 m_start,
                 _month_end(m_start),
+                now,
             )
             if month_summary:
+                if needs_save:
+                    month_summary = await summary_repo.save(month_summary)
                 _enqueue(month_summary, notify=False)
-        annual_summary = await _get_or_create_summary(
-            summary_repo,
-            user_id,
-            SummaryType.ANNUAL,
-            date(year, 1, 1),
-            date(year, 12, 31),
+
+        annual_summary, needs_save = _reconcile_summary(
+            existing_annual, user_id, SummaryType.ANNUAL, date(year, 1, 1), date(year, 12, 31), now
         )
         if annual_summary:
+            if needs_save:
+                annual_summary = await summary_repo.save(annual_summary)
             _enqueue(annual_summary, notify=True)
 
     elif schedule_type == "monthly":

@@ -1,5 +1,3 @@
-from datetime import date
-
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
@@ -30,6 +28,7 @@ from app.retrospective.presentation.responses.responses import (
 from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
+from app.shared.presentation.validators import parse_date_range
 
 router = APIRouter(prefix="/entries", tags=["entries"], route_class=DishkaRoute)
 
@@ -81,16 +80,7 @@ async def get_entries(
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
 ) -> ApiResponse[list[EntryWithGithubResponse]]:
-    if from_date and to_date:
-        try:
-            f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
-        if (t - f).days > _MAX_ENTRY_RANGE_DAYS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"날짜 범위는 최대 {_MAX_ENTRY_RANGE_DAYS}일입니다.",
-            )
+    parse_date_range(from_date, to_date, _MAX_ENTRY_RANGE_DAYS)
 
     entries = await use_case.execute(
         GetEntriesQuery(
@@ -140,16 +130,7 @@ async def get_entries_paginated(
             detail=f"retroType 은 {sorted(_VALID_RETRO_TYPES)} 중 하나여야 합니다.",
         )
 
-    if from_date and to_date:
-        try:
-            f, t = date.fromisoformat(from_date), date.fromisoformat(to_date)
-        except ValueError:
-            raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
-        if (t - f).days > _MAX_ENTRY_RANGE_DAYS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"날짜 범위는 최대 {_MAX_ENTRY_RANGE_DAYS}일입니다.",
-            )
+    parse_date_range(from_date, to_date, _MAX_ENTRY_RANGE_DAYS)
 
     items_raw, total = await use_case.execute(
         GetEntriesPageQuery(

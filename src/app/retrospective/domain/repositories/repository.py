@@ -81,6 +81,17 @@ class IRetroSummaryRepository(ABC):
     ) -> RetroSummary | None: ...
 
     @abstractmethod
+    async def find_by_periods(
+        self,
+        user_id: str,
+        summary_type: SummaryType,
+        period_starts: list[date],
+    ) -> list[RetroSummary]:
+        """find_by_period 의 batch 버전 — annual dispatch 처럼 여러 period 를 순회하며
+        개별 조회(N+1)하는 대신 1회 IN 조회로 처리하기 위해 사용."""
+        ...
+
+    @abstractmethod
     async def find_all_by_type(
         self, user_id: str, summary_type: SummaryType
     ) -> list[RetroSummary]: ...
