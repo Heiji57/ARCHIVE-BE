@@ -116,6 +116,35 @@ class JournalEntryRepository(IJournalEntryRepository):
         )
         return [self._to_entity(m) for m in result.scalars()], total or 0
 
+    async def find_by_folder(
+        self, user_id: str, folder_id: str | None, retro_type: str | None = None
+    ) -> list[JournalEntry]:
+        stmt = select(JournalEntryModel).where(JournalEntryModel.user_id == user_id)
+        stmt = stmt.where(
+            JournalEntryModel.folder_id.is_(None)
+            if folder_id is None
+            else JournalEntryModel.folder_id == folder_id
+        )
+        if retro_type:
+            stmt = stmt.where(JournalEntryModel.retro_type == retro_type)
+        result = await self._session.execute(stmt.order_by(JournalEntryModel.created_at.desc()))
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def count_by_folder_ids(
+        self, user_id: str, folder_ids: list[str]
+    ) -> dict[str, int]:
+        if not folder_ids:
+            return {}
+        result = await self._session.execute(
+            select(JournalEntryModel.folder_id, func.count())
+            .where(
+                JournalEntryModel.user_id == user_id,
+                JournalEntryModel.folder_id.in_(folder_ids),
+            )
+            .group_by(JournalEntryModel.folder_id)
+        )
+        return {row[0]: row[1] for row in result.all()}
+
     async def delete(self, id: str, user_id: str) -> None:
         result = await self._session.execute(
             select(JournalEntryModel).where(
@@ -134,6 +163,7 @@ class JournalEntryRepository(IJournalEntryRepository):
             title=entity.title,
             content=entity.content,
             retro_type=entity.retro_type.value,
+            folder_id=entity.folder_id,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -146,6 +176,7 @@ class JournalEntryRepository(IJournalEntryRepository):
             title=model.title,
             content=model.content,
             retro_type=RetroType(model.retro_type),
+            folder_id=model.folder_id,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

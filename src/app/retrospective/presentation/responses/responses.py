@@ -42,6 +42,7 @@ class EntryResponse(BaseModel):
     # journal_entries 항목과 구분이 필요 — isSummary=true 면 status 도 함께 채워진다.
     is_summary: bool = Field(default=False, serialization_alias="isSummary")
     status: str | None = Field(default=None)
+    folder_id: str | None = Field(default=None, serialization_alias="folderId")
 
     model_config = {"populate_by_name": True}
 
@@ -56,6 +57,7 @@ class EntryResponse(BaseModel):
             retro_type=entry.retro_type.value,
             created_at=entry.created_at,
             updated_at=entry.updated_at,
+            folder_id=entry.folder_id,
         )
 
     @classmethod
@@ -76,6 +78,7 @@ class EntryResponse(BaseModel):
             updated_at=summary.updated_at,
             is_summary=True,
             status=summary.status.value,
+            folder_id=summary.folder_id,
         )
 
 
@@ -102,6 +105,7 @@ class EntryWithGithubResponse(EntryResponse):
             github_push=GithubPushResponse.from_entity(push) if push else None,
             created_at=entry.created_at,
             updated_at=entry.updated_at,
+            folder_id=entry.folder_id,
         )
 
     @classmethod

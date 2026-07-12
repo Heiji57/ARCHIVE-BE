@@ -107,9 +107,14 @@ from app.notification.application.use_cases.mark_as_read import MarkAsReadUseCas
 from app.notification.domain.repositories.repository import INotificationRepository
 from app.notification.infrastructure.persistence.repositories.notification_repo import NotificationRepository
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
+from app.retrospective.application.use_cases.create_folder import CreateFolderUseCase
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
+from app.retrospective.application.use_cases.delete_folder import DeleteFolderUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
 from app.retrospective.application.use_cases.get_entries_page import GetEntriesPageUseCase
+from app.retrospective.application.use_cases.get_folder_contents import GetFolderContentsUseCase
+from app.retrospective.application.use_cases.move_entry_to_folder import MoveEntryToFolderUseCase
+from app.retrospective.application.use_cases.update_folder import UpdateFolderUseCase
 from app.search.application.use_cases.global_search import GlobalSearchUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
 from app.retrospective.application.use_cases.edit_summary import EditSummaryUseCase
@@ -149,6 +154,7 @@ from app.retrospective.application.use_cases.update_summary_template import (
 )
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.repositories.repository import (
+    IFolderRepository,
     IJournalEntryRepository,
     IRetroSummaryRepository,
     IRetroTemplateRepository,
@@ -156,6 +162,7 @@ from app.retrospective.domain.repositories.repository import (
 )
 from app.retrospective.infrastructure.persistence.repositories.retro_template_repo import RetroTemplateRepository
 from app.retrospective.infrastructure.cache.summary_rate_limiter import SummaryRateLimiter
+from app.retrospective.infrastructure.persistence.repositories.folder_repo import FolderRepository
 from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import JournalEntryRepository
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import RetroSummaryRepository
 from app.retrospective.infrastructure.persistence.repositories.summary_template_repo import (
@@ -306,6 +313,10 @@ class RequestProvider(Provider):
     @provide
     def retro_summary_repo(self, session: AsyncSession) -> IRetroSummaryRepository:
         return RetroSummaryRepository(session)
+
+    @provide
+    def folder_repo(self, session: AsyncSession) -> IFolderRepository:
+        return FolderRepository(session)
 
     @provide
     def summary_template_repo(
@@ -689,6 +700,38 @@ class RequestProvider(Provider):
         self, entry_repo: IJournalEntryRepository
     ) -> DeleteEntryUseCase:
         return DeleteEntryUseCase(entry_repo)
+
+    # ── Folder Use Cases ──────────────────────────────────────────────────────
+
+    @provide
+    def create_folder_use_case(self, folder_repo: IFolderRepository) -> CreateFolderUseCase:
+        return CreateFolderUseCase(folder_repo)
+
+    @provide
+    def update_folder_use_case(self, folder_repo: IFolderRepository) -> UpdateFolderUseCase:
+        return UpdateFolderUseCase(folder_repo)
+
+    @provide
+    def delete_folder_use_case(self, folder_repo: IFolderRepository) -> DeleteFolderUseCase:
+        return DeleteFolderUseCase(folder_repo)
+
+    @provide
+    def get_folder_contents_use_case(
+        self,
+        folder_repo: IFolderRepository,
+        entry_repo: IJournalEntryRepository,
+        summary_repo: IRetroSummaryRepository,
+    ) -> GetFolderContentsUseCase:
+        return GetFolderContentsUseCase(folder_repo, entry_repo, summary_repo)
+
+    @provide
+    def move_entry_to_folder_use_case(
+        self,
+        entry_repo: IJournalEntryRepository,
+        summary_repo: IRetroSummaryRepository,
+        folder_repo: IFolderRepository,
+    ) -> MoveEntryToFolderUseCase:
+        return MoveEntryToFolderUseCase(entry_repo, summary_repo, folder_repo)
 
     # ── Summary Use Cases ─────────────────────────────────────────────────────
 

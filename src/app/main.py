@@ -15,6 +15,7 @@ from app.google_calendar.presentation.router import router as calendar_router
 from app.notification.presentation.router import router as notification_router
 from app.settings.presentation.router import router as settings_router
 from app.retrospective.presentation.router import router as entry_router
+from app.retrospective.presentation.folder_router import router as folder_router
 from app.retrospective.presentation.summary_router import router as summary_router
 from app.retrospective.presentation.retro_template_router import router as retro_template_router
 from app.retrospective.presentation.template_router import (
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(todo_router, prefix="/api/v1")
     app.include_router(entry_router, prefix="/api/v1")
+    app.include_router(folder_router, prefix="/api/v1")
     # /summaries/templates 가 /summaries/{summary_id} 로 가로채이지 않도록
     # template 라우터를 summary 라우터보다 먼저 등록한다.
     app.include_router(summary_template_router, prefix="/api/v1")

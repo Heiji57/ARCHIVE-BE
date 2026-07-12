@@ -22,6 +22,7 @@ class RetroSummary(BaseEntity):
     status: SummaryStatus
     content: SummaryContent | None  # None — pending / in_progress / failed
     edited_content: str | None = None  # 사용자 편집 마크다운 오버라이드 (있으면 FE 가 우선 렌더)
+    folder_id: str | None = None
 
     def mark_in_progress(self) -> None:
         if self.status == SummaryStatus.IN_PROGRESS:

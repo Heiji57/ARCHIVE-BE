@@ -9,16 +9,19 @@ from app.github.domain.repositories.retrospective_push_repository import (
 )
 from app.github.domain.utils.period_mapping import entry_to_period, summary_to_period
 from app.retrospective.application.dtos.commands import CreateEntryCommand, UpsertEntryCommand
+from app.retrospective.application.dtos.folder_commands import MoveEntryToFolderCommand
 from app.retrospective.application.dtos.queries import GetEntriesPageQuery, GetEntriesQuery
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
 from app.retrospective.application.use_cases.get_entries_page import GetEntriesPageUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
+from app.retrospective.application.use_cases.move_entry_to_folder import MoveEntryToFolderUseCase
 from app.retrospective.application.use_cases.upsert_entry import UpsertEntryUseCase
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import RetroType
+from app.retrospective.presentation.requests.folder_requests import MoveEntryFolderRequest
 from app.retrospective.presentation.requests.requests import EntryCreateRequest, EntryUpsertRequest
 from app.retrospective.presentation.responses.responses import (
     EntryPageResponse,
@@ -244,6 +247,38 @@ async def upsert_entry(
         )
     )
     return ApiResponse.ok(EntryResponse.from_entity(entry))
+
+
+@router.patch(
+    "/{entry_id}/folder",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[None],
+)
+async def move_entry_to_folder(
+    entry_id: str,
+    body: MoveEntryFolderRequest,
+    use_case: FromDishka[MoveEntryToFolderUseCase],
+    current_user: UserContext = Depends(get_current_user),
+    retro_type: str = Query(alias="retroType"),
+) -> ApiResponse[None]:
+    """회고록을 다른 폴더로 이동(또는 폴더 해제). retroType 으로 daily
+    (journal_entries)/weekly·monthly·yearly(retro_summaries) 중 조회할 테이블을
+    라우팅한다 — 두 테이블 id 공간이 달라 retroType 없이는 구분이 안 된다."""
+    if retro_type not in _VALID_RETRO_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"retroType 은 {sorted(_VALID_RETRO_TYPES)} 중 하나여야 합니다.",
+        )
+
+    await use_case.execute(
+        MoveEntryToFolderCommand(
+            entry_id=entry_id,
+            user_id=current_user.id,
+            retro_type=retro_type,
+            folder_id=body.folder_id,
+        )
+    )
+    return ApiResponse.ok(None)
 
 
 @router.delete(

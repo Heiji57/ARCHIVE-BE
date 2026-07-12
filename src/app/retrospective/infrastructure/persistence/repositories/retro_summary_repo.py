@@ -124,6 +124,35 @@ class RetroSummaryRepository(IRetroSummaryRepository):
         )
         return [self._to_entity(m) for m in result.scalars()], total or 0
 
+    async def find_by_folder(
+        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
+    ) -> list[RetroSummary]:
+        stmt = select(RetroSummaryModel).where(RetroSummaryModel.user_id == user_id)
+        stmt = stmt.where(
+            RetroSummaryModel.folder_id.is_(None)
+            if folder_id is None
+            else RetroSummaryModel.folder_id == folder_id
+        )
+        if summary_type:
+            stmt = stmt.where(RetroSummaryModel.summary_type == summary_type.value)
+        result = await self._session.execute(stmt.order_by(RetroSummaryModel.period_start.desc()))
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def count_by_folder_ids(
+        self, user_id: str, folder_ids: list[str]
+    ) -> dict[str, int]:
+        if not folder_ids:
+            return {}
+        result = await self._session.execute(
+            select(RetroSummaryModel.folder_id, func.count())
+            .where(
+                RetroSummaryModel.user_id == user_id,
+                RetroSummaryModel.folder_id.in_(folder_ids),
+            )
+            .group_by(RetroSummaryModel.folder_id)
+        )
+        return {row[0]: row[1] for row in result.all()}
+
     def _to_model(self, entity: RetroSummary) -> RetroSummaryModel:
         return RetroSummaryModel(
             id=entity.id,
@@ -134,6 +163,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             status=entity.status.value,
             content=entity.content.text if entity.content else None,
             edited_content=entity.edited_content,
+            folder_id=entity.folder_id,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -148,6 +178,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             status=SummaryStatus(model.status),
             content=SummaryContent.from_text(model.content) if model.content else None,
             edited_content=model.edited_content,
+            folder_id=model.folder_id,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

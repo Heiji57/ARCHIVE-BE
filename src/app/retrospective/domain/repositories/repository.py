@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from datetime import date
 
+from app.retrospective.domain.models.folder import Folder
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.retro_template import RetroTemplate
@@ -62,6 +63,21 @@ class IJournalEntryRepository(ABC):
     ) -> tuple[list[JournalEntry], int]: ...
 
     @abstractmethod
+    async def find_by_folder(
+        self, user_id: str, folder_id: str | None, retro_type: str | None = None
+    ) -> list[JournalEntry]:
+        """폴더 뷰용 — 이 폴더에 직접 속한 엔트리(folder_id 일치)만, retro_type
+        지정 시 그 타입만. folder_id=None 이면 미분류(최상위) 엔트리."""
+        ...
+
+    @abstractmethod
+    async def count_by_folder_ids(
+        self, user_id: str, folder_ids: list[str]
+    ) -> dict[str, int]:
+        """폴더별 직속 엔트리 개수 (폴더 카드 entryCount 뱃지용)."""
+        ...
+
+    @abstractmethod
     async def delete(self, id: str, user_id: str) -> None: ...
 
 
@@ -117,6 +133,21 @@ class IRetroSummaryRepository(ABC):
         period_start <= to_date (엄격 포함이 아니라, 조회 범위와 겹치는 요약을 모두 포함)."""
         ...
 
+    @abstractmethod
+    async def find_by_folder(
+        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
+    ) -> list[RetroSummary]:
+        """폴더 뷰용 — 이 폴더에 직접 속한 요약(folder_id 일치)만, summary_type
+        지정 시 그 타입만. folder_id=None 이면 미분류(최상위) 요약."""
+        ...
+
+    @abstractmethod
+    async def count_by_folder_ids(
+        self, user_id: str, folder_ids: list[str]
+    ) -> dict[str, int]:
+        """폴더별 직속 요약 개수 (폴더 카드 entryCount 뱃지용)."""
+        ...
+
 
 class IUserSummaryTemplateRepository(ABC):
     @abstractmethod
@@ -170,6 +201,43 @@ class IRetroTemplateRepository(ABC):
     async def find_by_name(
         self, user_id: str, retro_type: RetroType, name: str
     ) -> RetroTemplate | None: ...
+
+    @abstractmethod
+    async def delete(self, id: str, user_id: str) -> None: ...
+
+
+class IFolderRepository(ABC):
+    @abstractmethod
+    async def save(self, folder: Folder) -> Folder: ...
+
+    @abstractmethod
+    async def find_by_id(self, id: str, user_id: str) -> Folder | None: ...
+
+    @abstractmethod
+    async def find_by_name(
+        self, user_id: str, parent_folder_id: str | None, name: str
+    ) -> Folder | None:
+        """같은 부모(최상위 포함) 아래 이름 중복 검사용."""
+        ...
+
+    @abstractmethod
+    async def find_children(
+        self, user_id: str, parent_folder_id: str | None
+    ) -> list[Folder]:
+        """직계 하위 폴더 목록. parent_folder_id=None 이면 최상위 폴더들."""
+        ...
+
+    @abstractmethod
+    async def count_children_by_parent_ids(
+        self, user_id: str, parent_ids: list[str]
+    ) -> dict[str, int]:
+        """폴더별 직계 하위 폴더 개수 (폴더 카드 folderCount 뱃지용)."""
+        ...
+
+    @abstractmethod
+    async def find_ancestors(self, folder_id: str, user_id: str) -> list[Folder]:
+        """자기 자신 제외 조상 체인(가까운 부모 → 최상위 순). 이동 시 순환참조 검증에 사용."""
+        ...
 
     @abstractmethod
     async def delete(self, id: str, user_id: str) -> None: ...

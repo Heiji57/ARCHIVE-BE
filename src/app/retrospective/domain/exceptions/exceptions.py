@@ -66,6 +66,19 @@ class RetroTemplateNameDuplicatedException(BaseAppException):
     code = "TEMPLATE_NAME_DUPLICATED"
 
 
+class FolderNotFoundException(BaseAppException):
+    code = "FOLDER_NOT_FOUND"
+
+
+class FolderNameDuplicatedException(BaseAppException):
+    code = "FOLDER_NAME_DUPLICATED"
+
+
+class FolderCircularReferenceException(BaseAppException):
+    """폴더를 자기 자신 또는 자신의 자손 아래로 이동하려는 시도."""
+    code = "FOLDER_CIRCULAR_REFERENCE"
+
+
 class SummaryRateLimitExceededException(BaseAppException):
     code = "RETRO_SUMMARY_RATE_LIMIT_EXCEEDED"
 

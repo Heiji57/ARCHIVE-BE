@@ -45,6 +45,9 @@ from app.google_calendar.domain.exceptions.exceptions import (
 )
 from app.notification.domain.exceptions.exceptions import NotificationNotFoundException
 from app.retrospective.domain.exceptions.exceptions import (
+    FolderCircularReferenceException,
+    FolderNameDuplicatedException,
+    FolderNotFoundException,
     JournalEntryAlreadyExistsException,
     JournalEntryNotFoundException,
     RetroSummaryNotFoundException,
@@ -113,6 +116,7 @@ _STATUS_MAP: dict[str, int] = {
     SessionNotFoundException.code: 404,
     SummaryTemplateNotFoundException.code: 404,
     RetroTemplateNotFoundException.code: 404,
+    FolderNotFoundException.code: 404,
     # 409
     UserEmailDuplicatedException.code: 409,
     TodoAlreadyCompletedException.code: 409,
@@ -126,12 +130,14 @@ _STATUS_MAP: dict[str, int] = {
     SummaryTemplateLimitReachedException.code: 409,
     SummaryTemplateInUseException.code: 409,
     RetroTemplateNameDuplicatedException.code: 409,
+    FolderNameDuplicatedException.code: 409,
     # 422
     RetroTemplateTypeMismatchException.code: 422,
     CountryInvalidException.code: 422,
     CountryTimezoneRequiredException.code: 422,
     TimezoneInvalidException.code: 422,
     SummaryReadinessUnsupportedException.code: 422,
+    FolderCircularReferenceException.code: 422,
     # 429
     GitHubRateLimitedException.code: 429,
     SummaryRateLimitExceededException.code: 429,

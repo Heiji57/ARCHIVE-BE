@@ -11,3 +11,4 @@ class JournalEntry(BaseEntity):
     title: str
     content: str
     retro_type: RetroType
+    folder_id: str | None = None
