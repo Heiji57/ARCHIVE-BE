@@ -1,5 +1,4 @@
 import json
-from datetime import date
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, Query, status
@@ -34,6 +33,7 @@ from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.presentation.schemas.response import ApiResponse
+from app.shared.presentation.validators import parse_date_range
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], route_class=DishkaRoute)
 
@@ -41,20 +41,21 @@ _MAX_DATE_RANGE_DAYS = 62  # 두 달
 
 
 def _validate_date_range(from_date: str, to_date: str) -> None:
-    """from~to 범위가 최대 62일(두 달)을 초과하면 422."""
+    """from~to 범위가 최대 62일(두 달)을 초과하면 422.
+
+    from/to 는 이 라우터에서 Query(...) 로 필수지만, FastAPI 는 빈 문자열("")도 값이
+    없다고 보지 않고 그대로 통과시킨다. parse_date_range 는 빈 문자열을 falsy 로 보고
+    None 을 반환하므로(다른 optional 호출부를 위한 설계), 여기서는 그 None 을 언패킹
+    하기 전에 먼저 걸러 422 로 변환한다.
+    """
     from fastapi import HTTPException
-    try:
-        f = date.fromisoformat(from_date)
-        t = date.fromisoformat(to_date)
-    except ValueError:
+
+    if not from_date or not to_date:
         raise HTTPException(status_code=422, detail="날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).")
+
+    f, t = parse_date_range(from_date, to_date, _MAX_DATE_RANGE_DAYS)
     if t < f:
         raise HTTPException(status_code=422, detail="to 는 from 보다 크거나 같아야 합니다.")
-    if (t - f).days > _MAX_DATE_RANGE_DAYS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"날짜 범위는 최대 {_MAX_DATE_RANGE_DAYS}일입니다.",
-        )
 
 
 def _callback_html(message_type: str, frontend_origin: str, **extra: str) -> str:
