@@ -92,8 +92,9 @@ class TodoRepository(ITodoRepository):
             select(TodoModel)
             .where(
                 TodoModel.user_id == user_id,
-                # base event 는 검색 결과에서 제외 (series_id IS NULL 인 base 는 숨김)
+                # base event 제외, CANCELLED 예외 row 제외
                 text(_NOT_BASE_FILTER),
+                TodoModel.status != "cancelled",
             )
             .where(TodoModel.title_tsv.match(query))  # type: ignore[union-attr]
         )
