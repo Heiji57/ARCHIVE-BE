@@ -701,6 +701,21 @@ paths:
       description: >
         연동돼 있던 Google Calendar 이벤트가 있으면 best-effort 로 함께 삭제된다
         (백그라운드 task, 응답을 지연시키지 않음).
+        반복 시리즈의 경우 `recurrenceScope` 로 삭제 범위를 지정할 수 있다.
+      parameters:
+        - name: recurrenceScope
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [this, following, all]
+            default: this
+          description: >
+            반복 시리즈 삭제 범위.
+            `this` = 해당 회차만 취소,
+            `following` = 해당 회차부터 이후 모든 회차 삭제(시리즈 잘라내기),
+            `all` = 시리즈 전체(베이스 + 모든 예외) 삭제.
+            비반복 todo 에는 무시된다.
       responses:
         "200":
           description: 삭제 성공
@@ -3233,6 +3248,10 @@ components:
           description: >
             null(생략) = user_settings.calendarAutoPushTodo 기본값 적용,
             true/false = 개별 지정(생성 시 Google Calendar push 여부).
+        recurrence_rule:
+          $ref: "#/components/schemas/RecurrenceRule"
+          nullable: true
+          description: '반복 규칙. null 이면 단건 todo.'
 
     TodoUpdateRequest:
       type: object
@@ -3256,6 +3275,19 @@ components:
           type: string
           nullable: true
           description: 'IANA timezone. omit = unchanged, null = clear, string = set. Required when start_time or end_time is set to non-null.'
+        recurrence_scope:
+          type: string
+          enum: [this, following]
+          default: this
+          description: >
+            반복 시리즈 수정 범위.
+            `this` = 해당 회차만 수정(예외 row 생성),
+            `following` = 해당 회차부터 이후 시리즈 분기(새 베이스 생성).
+            비반복 todo 에는 무시된다.
+        recurrence_rule:
+          $ref: "#/components/schemas/RecurrenceRule"
+          nullable: true
+          description: '`recurrence_scope: following` 일 때 새 시리즈에 적용할 규칙. 생략 시 기존 규칙 유지.'
 
     TodoResponse:
       type: object
@@ -3293,6 +3325,40 @@ components:
           nullable: true
           enum: [pending, syncing, synced, failed, pending_delete]
           description: '연동 세부 상태. null 이면 미연동.'
+        is_virtual:
+          type: boolean
+          description: '반복 시리즈의 가상 인스턴스(DB row 없음). ID 형식: "{base_id}::{slot_date}".'
+        series_id:
+          type: string
+          nullable: true
+          description: '예외 row의 베이스 todo ID. 비반복 및 베이스는 null.'
+        original_date_key:
+          type: string
+          nullable: true
+          description: '예외 row가 커버하는 원래 슬롯 날짜(YYYY-MM-DD). 시리즈 멤버십 키.'
+        recurrence_rule:
+          $ref: "#/components/schemas/RecurrenceRule"
+          nullable: true
+          description: '반복 베이스 row에만 존재. 예외/일반 todo 는 null.'
+
+    RecurrenceRule:
+      type: object
+      required: [unit, interval]
+      properties:
+        unit:
+          type: string
+          enum: [day, week]
+          description: '반복 단위.'
+        interval:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: '반복 간격 (예: unit=week, interval=2 → 2주마다).'
+        until:
+          type: string
+          nullable: true
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          description: '반복 종료 날짜(포함, 로컬 날짜 YYYY-MM-DD). null 이면 무기한.'
 
     ApiResponseTodo:
       allOf:

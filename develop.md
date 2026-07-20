@@ -296,6 +296,18 @@ class TaskStatus(StrEnum):
 - Value Object는 불변입니다 (`frozen=True` dataclass 또는 `StrEnum`).
 - 비즈니스 유효성 검사 로직을 Value Object 안에 포함합니다.
 
+> **반복 Todo 모델 (Google Calendar exception-based)**:
+> - `TaskStatus.CANCELLED` — 시리즈 단일 회차 취소 전용 (API 입력 불가, 내부 전용).
+> - `RecurrenceRule` — frozen dataclass `{unit: "day"|"week", interval: int, until: str|None}`.
+> - **베이스 row**: `recurrence_rule IS NOT NULL AND series_id IS NULL`. 화면에 직접 노출 안 됨.
+> - **예외 row**: `series_id = base_id`. `original_date_key` = 커버하는 슬롯 날짜(불변 키).
+> - **가상 인스턴스**: DB row 없음, 조회 시 확장. ID 형식 `"{base_id}::{slot_date}"`.
+> - 삭제 범위: `recurrenceScope = "this"` (슬롯 취소) / `"following"` (이후 분기) / `"all"` (전체 삭제).
+> - race condition 방어: `ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL DO UPDATE`.
+> - `find_by_date_key`/`find_by_date_range` — 베이스 row 제외 필터 적용.
+> - `find_by_full_text` — 베이스 row + CANCELLED 예외 row 제외 (`status != 'cancelled'`).
+> - 반복 유틸리티: `todo/domain/utils/recurrence.py` (`generate_slots_from`, `make_virtual`, `build_gcal_instance_id`).
+
 ### 도메인 예외
 
 ```python
