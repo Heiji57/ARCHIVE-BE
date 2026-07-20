@@ -1,0 +1,111 @@
+services:
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6384:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  # AI 요약 작업 처리 (수동 priority=9, 스케줄 priority=2)
+  worker-ai:
+    build: .
+    command: celery -A app.worker.celery_app worker -Q ai_tasks --concurrency=3 --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  # Beat 스케줄러 + schedule_summaries 태스크 처리
+  worker-beat:
+    build: .
+    command: celery -A app.worker.celery_app worker --beat -Q default --concurrency=2 --schedule=/tmp/celerybeat-schedule --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+  # Google Calendar 백그라운드 동기화 전용 (calendar 큐) — dispatcher/AI 요약과 격리
+  worker-calendar:
+    build: .
+    command: celery -A app.worker.celery_app worker -Q calendar --concurrency=3 --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - archive-net
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  archive-net:
+    driver: bridge

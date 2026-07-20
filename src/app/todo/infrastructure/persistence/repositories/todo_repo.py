@@ -1,0 +1,381 @@
+from datetime import datetime
+
+from sqlalchemy import func, select, text
+from sqlalchemy.engine import Row
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.todo.domain.models.todo import Todo
+from app.todo.domain.models.value_objects import TaskStatus
+from app.todo.domain.repositories.repository import ITodoRepository
+from app.todo.infrastructure.persistence.models.todo_model import TodoModel
+
+# claim(UPDATE todos ... FROM candidates ... RETURNING) 에서 Todo 엔티티 복원용 컬럼.
+# candidates 도 id 를 가지므로 RETURNING 에서 반드시 todos. 로 한정(ambiguous 방지).
+# 결과 컬럼 라벨은 한정자를 벗은 bare name 이라 _row_to_entity 의 by-name 접근과 호환.
+_TODO_RETURNING = (
+    "todos.id, todos.user_id, todos.title, todos.status, todos.date_key, "
+    "todos.description, todos.start_time, todos.end_time, todos.timezone, "
+    "todos.created_at, todos.updated_at, todos.completed_at, "
+    "todos.calendar_push_status, todos.google_event_id, todos.push_intent, "
+    "todos.push_started_at, todos.sync_attempt_id, todos.push_retry_count"
+)
+
+
+class TodoRepository(ITodoRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def save(self, todo: Todo) -> Todo:
+        # _to_model 은 push 제어 컬럼을 설정하지 않는다 → merge 가 해당 컬럼을 건드리지
+        # 않아(미설정 속성 skip) 워커의 push 진행 상태를 보존한다.
+        model = self._to_model(todo)
+        merged = await self._session.merge(model)
+        await self._session.flush()
+        return self._to_entity(merged)
+
+    async def find_by_id(self, id: str, user_id: str) -> Todo | None:
+        result = await self._session.execute(
+            select(TodoModel).where(TodoModel.id == id, TodoModel.user_id == user_id)
+        )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
+    async def find_by_date_range(self, user_id: str, from_date: str, to_date: str) -> list[Todo]:
+        result = await self._session.execute(
+            select(TodoModel)
+            .where(
+                TodoModel.user_id == user_id,
+                TodoModel.date_key >= from_date,
+                TodoModel.date_key <= to_date,
+            )
+            .order_by(TodoModel.date_key, TodoModel.created_at)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_by_date_key(self, user_id: str, date_key: str) -> list[Todo]:
+        result = await self._session.execute(
+            select(TodoModel)
+            .where(TodoModel.user_id == user_id, TodoModel.date_key == date_key)
+            .order_by(TodoModel.created_at)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_by_full_text(
+        self, user_id: str, query: str, page: int, size: int
+    ) -> tuple[list[Todo], int]:
+        stmt = (
+            select(TodoModel)
+            .where(TodoModel.user_id == user_id)
+            .where(TodoModel.title_tsv.match(query))  # type: ignore[union-attr]
+        )
+        total = await self._session.scalar(
+            select(func.count()).select_from(stmt.subquery())
+        )
+        result = await self._session.execute(
+            stmt.order_by(TodoModel.created_at.desc()).offset((page - 1) * size).limit(size)
+        )
+        return [self._to_entity(m) for m in result.scalars()], total or 0
+
+    async def delete(self, id: str, user_id: str) -> None:
+        model = await self._session.execute(
+            select(TodoModel).where(TodoModel.id == id, TodoModel.user_id == user_id)
+        )
+        row = model.scalar_one_or_none()
+        if row:
+            await self._session.delete(row)
+
+    async def find_by_google_event_id(
+        self, user_id: str, google_event_id: str
+    ) -> Todo | None:
+        result = await self._session.execute(
+            text(
+                f"SELECT {_TODO_RETURNING} FROM todos"
+                " WHERE user_id=:user_id AND google_event_id=:google_event_id"
+                " LIMIT 1"
+            ),
+            {"user_id": user_id, "google_event_id": google_event_id},
+        )
+        row = result.first()
+        return self._row_to_entity(row) if row else None
+
+    async def find_by_google_event_ids(
+        self, user_id: str, google_event_ids: list[str]
+    ) -> list[Todo]:
+        if not google_event_ids:
+            return []
+        result = await self._session.execute(
+            select(TodoModel).where(
+                TodoModel.user_id == user_id,
+                TodoModel.google_event_id.in_(set(google_event_ids)),
+            )
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def create_from_calendar_event(self, todo: Todo) -> Todo | None:
+        # save()/_to_model() 은 push 제어 컬럼을 의도적으로 제외하므로, Google 원본
+        # 이벤트를 이미-synced 상태의 Todo 로 최초 승격할 때는 이 전용 INSERT 를 쓴다.
+        # ON CONFLICT: uq_todos_user_google_event (partial unique) — 동시 sync race 로
+        # 다른 워커가 먼저 승격한 경우 조용히 skip (None 반환).
+        result = await self._session.execute(
+            text(
+                "INSERT INTO todos ("
+                "  id, user_id, title, status, date_key, description,"
+                "  start_time, end_time, timezone, created_at, updated_at, completed_at,"
+                "  calendar_push_status, google_event_id, push_intent, push_retry_count"
+                ") VALUES ("
+                "  :id, :user_id, :title, :status, :date_key, :description,"
+                "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
+                "  'synced', :google_event_id, NULL, 0"
+                ") ON CONFLICT (user_id, google_event_id) WHERE google_event_id IS NOT NULL"
+                "  DO NOTHING"
+                f" RETURNING {_TODO_RETURNING}"
+            ),
+            {
+                "id": todo.id,
+                "user_id": todo.user_id,
+                "title": todo.title,
+                "status": todo.status.value,
+                "date_key": todo.date_key,
+                "description": todo.description,
+                "start_time": todo.start_time,
+                "end_time": todo.end_time,
+                "timezone": todo.timezone,
+                "created_at": todo.created_at,
+                "updated_at": todo.updated_at,
+                "completed_at": todo.completed_at,
+                "google_event_id": todo.google_event_id,
+            },
+        )
+        row = result.first()
+        return self._row_to_entity(row) if row else None
+
+    async def clear_calendar_link(self, todo_id: str, user_id: str) -> None:
+        await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status=NULL, google_event_id=NULL, "
+                "push_intent=NULL, push_started_at=NULL, sync_attempt_id=NULL, push_retry_count=0 "
+                "WHERE id=:id AND user_id=:user_id"
+            ),
+            {"id": todo_id, "user_id": user_id},
+        )
+
+    # ── Calendar push 상태 관리 (타겟 SQL) ─────────────────────────────────────
+
+    async def mark_for_push(self, todo_id: str, user_id: str) -> None:
+        await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status='pending', push_intent='push', "
+                "push_retry_count=0, sync_attempt_id=NULL, push_started_at=NULL "
+                "WHERE id=:id AND user_id=:user_id"
+            ),
+            {"id": todo_id, "user_id": user_id},
+        )
+
+    async def mark_for_delete(self, todo_id: str, user_id: str) -> None:
+        await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status='pending_delete', push_intent='delete', "
+                "push_retry_count=0, sync_attempt_id=NULL, push_started_at=NULL "
+                "WHERE id=:id AND user_id=:user_id"
+            ),
+            {"id": todo_id, "user_id": user_id},
+        )
+
+    async def claim_pending_pushes(
+        self,
+        user_id: str,
+        attempt_id: str,
+        max_retries: int,
+        stuck_before: datetime,
+        batch_size: int,
+    ) -> list[Todo]:
+        result = await self._session.execute(
+            text(
+                "WITH candidates AS ("
+                "  SELECT id FROM todos"
+                "  WHERE user_id = :user_id"
+                "    AND calendar_push_status IN ('pending','pending_delete','failed','syncing')"
+                "    AND push_retry_count < :max_retries"
+                # v10: staleness 게이트는 'syncing' 에만 — pending/failed 등은 즉시 claim.
+                "    AND (calendar_push_status <> 'syncing'"
+                "         OR push_started_at IS NULL OR push_started_at < :stuck_before)"
+                "  ORDER BY updated_at"
+                "  LIMIT :batch_size"
+                "  FOR UPDATE SKIP LOCKED"
+                ")"
+                " UPDATE todos SET calendar_push_status='syncing', push_started_at=now(),"
+                "   sync_attempt_id=:attempt_id"
+                " FROM candidates WHERE todos.id = candidates.id"
+                f" RETURNING {_TODO_RETURNING}"
+            ),
+            {
+                "user_id": user_id,
+                "attempt_id": attempt_id,
+                "max_retries": max_retries,
+                "stuck_before": stuck_before,
+                "batch_size": batch_size,
+            },
+        )
+        return [self._row_to_entity(r) for r in result.all()]
+
+    async def claim_single_pending_push(
+        self, todo_id: str, user_id: str, attempt_id: str
+    ) -> Todo | None:
+        result = await self._session.execute(
+            text(
+                "WITH candidates AS ("
+                "  SELECT id FROM todos"
+                "  WHERE id = :id AND user_id = :user_id"
+                "    AND calendar_push_status IN ('pending','pending_delete')"
+                "  FOR UPDATE SKIP LOCKED"
+                ")"
+                " UPDATE todos SET calendar_push_status='syncing', push_started_at=now(),"
+                "   sync_attempt_id=:attempt_id"
+                " FROM candidates WHERE todos.id = candidates.id"
+                f" RETURNING {_TODO_RETURNING}"
+            ),
+            {"id": todo_id, "user_id": user_id, "attempt_id": attempt_id},
+        )
+        row = result.first()
+        return self._row_to_entity(row) if row else None
+
+    async def heartbeat_push(self, todo_id: str, user_id: str, attempt_id: str) -> bool:
+        result = await self._session.execute(
+            text(
+                "UPDATE todos SET push_started_at=now() "
+                "WHERE id=:id AND user_id=:user_id AND sync_attempt_id=:attempt_id "
+                "RETURNING id"
+            ),
+            {"id": todo_id, "user_id": user_id, "attempt_id": attempt_id},
+        )
+        return result.first() is not None
+
+    async def finalize_push_success(
+        self, todo_id: str, user_id: str, attempt_id: str, google_event_id: str
+    ) -> bool:
+        result = await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status='synced', google_event_id=:gid, "
+                "push_intent=NULL, push_started_at=NULL, sync_attempt_id=NULL, push_retry_count=0 "
+                "WHERE id=:id AND user_id=:user_id AND sync_attempt_id=:attempt_id "
+                "RETURNING id"
+            ),
+            {"id": todo_id, "user_id": user_id, "attempt_id": attempt_id, "gid": google_event_id},
+        )
+        return result.first() is not None
+
+    async def finalize_delete_success(
+        self, todo_id: str, user_id: str, attempt_id: str
+    ) -> bool:
+        result = await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status=NULL, google_event_id=NULL, "
+                "push_intent=NULL, push_started_at=NULL, sync_attempt_id=NULL, push_retry_count=0 "
+                "WHERE id=:id AND user_id=:user_id AND sync_attempt_id=:attempt_id "
+                "RETURNING id"
+            ),
+            {"id": todo_id, "user_id": user_id, "attempt_id": attempt_id},
+        )
+        return result.first() is not None
+
+    async def finalize_push_failure(
+        self, todo_id: str, user_id: str, attempt_id: str, retry_count: int
+    ) -> bool:
+        result = await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status='failed', push_started_at=NULL, "
+                "sync_attempt_id=NULL, push_retry_count=:retry_count "
+                "WHERE id=:id AND user_id=:user_id AND sync_attempt_id=:attempt_id "
+                "RETURNING id"
+            ),
+            {"id": todo_id, "user_id": user_id, "attempt_id": attempt_id, "retry_count": retry_count},
+        )
+        return result.first() is not None
+
+    async def bulk_clear_calendar_push(self, user_id: str) -> None:
+        # google_event_id 는 의도적으로 보존한다 — calendar_push_status=NULL 이면
+        # worker(claim 대상: pending/pending_delete/failed/syncing)가 어차피 이 todo 를
+        # 절대 건드리지 않으므로 안전하고, 재연결 시 find_by_google_event_id 의 dedup
+        # 키로 재사용돼 같은 이벤트가 중복 todo 로 재생성되는 것을 막는다.
+        await self._session.execute(
+            text(
+                "UPDATE todos SET calendar_push_status=NULL, "
+                "push_intent=NULL, push_started_at=NULL, sync_attempt_id=NULL, push_retry_count=0 "
+                "WHERE user_id=:user_id AND calendar_push_status IS NOT NULL"
+            ),
+            {"user_id": user_id},
+        )
+
+    async def reset_failed_retry_counts(self, user_id: str) -> None:
+        await self._session.execute(
+            text(
+                "UPDATE todos SET push_retry_count=0 "
+                "WHERE user_id=:user_id AND calendar_push_status='failed'"
+            ),
+            {"user_id": user_id},
+        )
+
+    # ── Mapping ────────────────────────────────────────────────────────────────
+
+    def _to_model(self, entity: Todo) -> TodoModel:
+        # push 제어 컬럼은 의도적으로 제외 — merge 가 해당 속성을 관리하지 않게 하여
+        # 워커 push 상태를 보존한다(콘텐츠 save 와 push 상태 쓰기 분리).
+        return TodoModel(
+            id=entity.id,
+            user_id=entity.user_id,
+            title=entity.title,
+            status=entity.status.value,
+            date_key=entity.date_key,
+            description=entity.description,
+            start_time=entity.start_time,
+            end_time=entity.end_time,
+            timezone=entity.timezone,
+            created_at=entity.created_at,
+            updated_at=entity.updated_at,
+            completed_at=entity.completed_at,
+        )
+
+    def _to_entity(self, model: TodoModel) -> Todo:
+        return Todo(
+            id=model.id,
+            user_id=model.user_id,
+            title=model.title,
+            status=TaskStatus(model.status),
+            date_key=model.date_key,
+            description=model.description,
+            start_time=model.start_time,
+            end_time=model.end_time,
+            timezone=model.timezone,
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+            completed_at=model.completed_at,
+            calendar_push_status=model.calendar_push_status,
+            google_event_id=model.google_event_id,
+            push_intent=model.push_intent,
+            push_started_at=model.push_started_at,
+            sync_attempt_id=model.sync_attempt_id,
+            push_retry_count=model.push_retry_count,
+        )
+
+    def _row_to_entity(self, row: Row) -> Todo:
+        m = row._mapping
+        return Todo(
+            id=m["id"],
+            user_id=m["user_id"],
+            title=m["title"],
+            status=TaskStatus(m["status"]),
+            date_key=m["date_key"],
+            description=m["description"],
+            start_time=m["start_time"],
+            end_time=m["end_time"],
+            timezone=m["timezone"],
+            created_at=m["created_at"],
+            updated_at=m["updated_at"],
+            completed_at=m["completed_at"],
+            calendar_push_status=m["calendar_push_status"],
+            google_event_id=m["google_event_id"],
+            push_intent=m["push_intent"],
+            push_started_at=m["push_started_at"],
+            sync_attempt_id=m["sync_attempt_id"],
+            push_retry_count=m["push_retry_count"],
+        )

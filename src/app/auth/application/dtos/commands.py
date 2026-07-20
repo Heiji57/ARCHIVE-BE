@@ -1,0 +1,50 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class SendEmailVerificationCommand:
+    email: str
+
+
+@dataclass(frozen=True)
+class VerifyEmailCodeCommand:
+    email: str
+    code: str
+
+
+@dataclass(frozen=True)
+class RegisterCommand:
+    email: str
+    password: str
+    country: str
+    timezone: str | None = None    # 다중 tz 국가일 때만 필수
+    device_info: str | None = None
+    ip: str | None = None
+
+
+@dataclass(frozen=True)
+class LoginCommand:
+    email: str
+    password: str
+    device_info: str | None = None
+    ip: str | None = None
+
+
+@dataclass(frozen=True)
+class CompleteOnboardingCommand:
+    onboarding_token: str
+    country: str
+    timezone: str | None = None
+    device_info: str | None = None
+    ip: str | None = None
+
+
+@dataclass(frozen=True)
+class RequestPasswordResetCommand:
+    email: str
+
+
+@dataclass(frozen=True)
+class ResetPasswordCommand:
+    token: str
+    new_password: str
