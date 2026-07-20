@@ -148,6 +148,12 @@ class UpdateTodoUseCase:
     # ── 실제 DB row (exception 또는 일반 todo) 수정 ─────────────────────────────
 
     async def _update_real(self, todo: Todo, cmd: UpdateTodoCommand) -> Todo:
+        # 일반 todo(series_id 없음)에 recurrence_rule 이 오면 반복 시리즈 base 로 전환한다
+        # (is_series_base = recurrence_rule 존재 AND series_id 없음 → 자동 충족).
+        # 이미 다른 시리즈의 예외 row(series_id 있음)는 대상에서 제외 — 그 경우는
+        # 가상 인스턴스의 "following" 분리 흐름(_update_following)을 써야 한다.
+        if cmd.recurrence_rule is not None and todo.series_id is None:
+            todo.recurrence_rule = cmd.recurrence_rule
         self._apply_patch(todo, cmd)
         re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
         saved = await self._todo_repo.save(todo)

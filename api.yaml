@@ -3285,9 +3285,16 @@ components:
             `following` = 해당 회차부터 이후 시리즈 분기(새 베이스 생성).
             비반복 todo 에는 무시된다.
         recurrence_rule:
-          $ref: "#/components/schemas/RecurrenceRule"
           nullable: true
-          description: '`recurrence_scope: following` 일 때 새 시리즈에 적용할 규칙. 생략 시 기존 규칙 유지.'
+          allOf:
+            - $ref: "#/components/schemas/RecurrenceRule"
+          description: >
+            `recurrence_scope: following` 일 때 새 시리즈에 적용할 규칙. 생략 시 기존 규칙 유지.
+            대상 todo 가 비반복 단독 항목(series_id 없음, 어떤 시리즈에도 속하지 않음)이면
+            `recurrence_scope` 값과 무관하게 이 규칙으로 반복 시리즈 base 로 전환된다
+            (이 회차 자체가 새 시리즈의 첫 회차가 됨). 이미 다른 시리즈의 예외 row 에는 무시된다 —
+            그 경우는 가상 인스턴스(`{base_id}::{slot_date}`)를 `recurrence_scope: following` 으로
+            수정해야 한다.
 
     TodoResponse:
       type: object
