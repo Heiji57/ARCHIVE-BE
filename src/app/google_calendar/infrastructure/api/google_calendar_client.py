@@ -73,6 +73,7 @@ class CalendarEventWrite:
 
     start_at 이 None 이면 date_key 종일(all-day) 이벤트, non-null 이면 시간 이벤트.
     시간은 UTC datetime 으로 전달하고 timezone(IANA snapshot)은 표시용으로 함께 보낸다.
+    recurrence: RRULE 문자열 (반복 base event 에만 세팅, 예: "RRULE:FREQ=DAILY;INTERVAL=1").
     """
     archive_todo_id: str
     title: str
@@ -81,6 +82,7 @@ class CalendarEventWrite:
     start_at: datetime | None
     end_at: datetime | None
     timezone: str | None
+    recurrence: str | None = None
 
 
 @dataclass(frozen=True)
@@ -329,6 +331,8 @@ class GoogleCalendarApiClient:
             end_at = ev.end_at or (ev.start_at + timedelta(hours=1))
             body["start"] = {"dateTime": ev.start_at.isoformat(), "timeZone": tz}
             body["end"] = {"dateTime": end_at.isoformat(), "timeZone": tz}
+        if ev.recurrence:
+            body["recurrence"] = [ev.recurrence]
         return body
 
     async def create_event(
@@ -394,6 +398,55 @@ class GoogleCalendarApiClient:
             raise CalendarReauthRequiredException("Calendar API returned 401 on delete.")
         raise CalendarApiUnavailableException(
             f"Calendar delete failed {response.status_code}: {response.text[:200]}"
+        )
+
+    async def patch_instance(
+        self,
+        access_token: str,
+        instance_id: str,
+        ev: CalendarEventWrite,
+        calendar_id: str = _PRIMARY_CALENDAR,
+    ) -> str | None:
+        """반복 이벤트 instance 를 PATCH 로 수정. 404 → None(인스턴스 미존재)."""
+        base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
+        body = self._build_event_body(ev)
+        # recurrence 는 instance 에 설정 불가 — 제거
+        body.pop("recurrence", None)
+        response = await self._client.patch(
+            f"{base}/{instance_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json=body,
+        )
+        if response.status_code in (404, 410):
+            return None
+        if response.status_code == 401:
+            raise CalendarReauthRequiredException("Calendar API returned 401 on patch instance.")
+        if response.status_code >= 400:
+            raise CalendarApiUnavailableException(
+                f"Calendar patch instance failed {response.status_code}: {response.text[:200]}"
+            )
+        return response.json()["id"]
+
+    async def patch_event_status(
+        self,
+        access_token: str,
+        instance_id: str,
+        event_status: str,
+        calendar_id: str = _PRIMARY_CALENDAR,
+    ) -> None:
+        """이벤트/인스턴스 status PATCH (예: 'cancelled' — 슬롯 삭제). 404/410 멱등 처리."""
+        base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
+        response = await self._client.patch(
+            f"{base}/{instance_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"status": event_status},
+        )
+        if response.status_code in (200, 204, 404, 410):
+            return
+        if response.status_code == 401:
+            raise CalendarReauthRequiredException("Calendar API returned 401 on status patch.")
+        raise CalendarApiUnavailableException(
+            f"Calendar status patch failed {response.status_code}: {response.text[:200]}"
         )
 
     async def find_event_id_by_archive_todo_id(

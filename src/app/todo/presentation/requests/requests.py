@@ -1,13 +1,39 @@
 import re
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.shared.domain.utils.timezone import validate_timezone
+from app.todo.domain.models.todo import RecurrenceRule
 
 
 _VALID_STATUSES = {"not-start", "in-progress", "done"}
 _DATE_KEY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_VALID_SCOPES = {"this", "following", "all"}
+
+
+class RecurrenceRuleRequest(BaseModel):
+    unit: Literal["day", "week"]
+    interval: int
+    until: str | None = None
+
+    @field_validator("interval")
+    @classmethod
+    def interval_range(cls, v: int) -> int:
+        if not (1 <= v <= 365):
+            raise ValueError("interval must be between 1 and 365")
+        return v
+
+    @field_validator("until")
+    @classmethod
+    def until_format(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            raise ValueError("until must be in YYYY-MM-DD format")
+        return v
+
+    def to_domain(self) -> RecurrenceRule:
+        return RecurrenceRule(unit=self.unit, interval=self.interval, until=self.until)
 
 
 class TodoCreateRequest(BaseModel):
@@ -20,6 +46,7 @@ class TodoCreateRequest(BaseModel):
     timezone: str | None = None
     # None → user_settings.calendar_auto_push_todo 기본값. True/False → 개별 지정.
     push_to_calendar: bool | None = None
+    recurrence_rule: RecurrenceRuleRequest | None = None
 
     @field_validator("status")
     @classmethod
@@ -61,6 +88,8 @@ class TodoUpdateRequest(BaseModel):
     start_time: datetime | None = None
     end_time: datetime | None = None
     timezone: str | None = None
+    recurrence_scope: str = "this"
+    recurrence_rule: RecurrenceRuleRequest | None = None
 
     @field_validator("status")
     @classmethod
@@ -81,6 +110,13 @@ class TodoUpdateRequest(BaseModel):
     def timezone_valid(cls, v: str | None) -> str | None:
         if v is not None and not validate_timezone(v):
             raise ValueError(f"Invalid IANA timezone: {v}")
+        return v
+
+    @field_validator("recurrence_scope")
+    @classmethod
+    def scope_valid(cls, v: str) -> str:
+        if v not in _VALID_SCOPES:
+            raise ValueError(f"recurrenceScope must be one of {_VALID_SCOPES}")
         return v
 
     @model_validator(mode="after")

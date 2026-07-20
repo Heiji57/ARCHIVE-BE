@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
+from app.todo.domain.models.todo import RecurrenceRule
+
 
 class _Unset:
     """Sentinel for 'field not provided' in partial-update commands.
@@ -40,6 +42,7 @@ class CreateTodoCommand:
     # None → user_settings.calendar_auto_push_todo 기본값 적용.
     # True/False → 사이드바에서 개별 지정(기본값 override).
     push_to_calendar: bool | None = None
+    recurrence_rule: RecurrenceRule | None = None
 
 
 @dataclass(frozen=True)
@@ -54,3 +57,6 @@ class UpdateTodoCommand:
     start_time: datetime | None | _Unset = UNSET
     end_time: datetime | None | _Unset = UNSET
     timezone: str | None | _Unset = UNSET
+    # 반복 Todo 편집 범위: "this" | "following" | "all"
+    recurrence_scope: str = "this"
+    recurrence_rule: RecurrenceRule | None = None

@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, SmallInteger, String, Text, text
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -23,6 +23,12 @@ class TodoModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ── 반복 Todo 필드 ──────────────────────────────────────────────────────────
+    recurrence_rule: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    series_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    original_date_key: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    original_start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    master_google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     # ── Google Calendar push 상태 (쓰기는 타겟 SQL 전용, merge 관여 안 함) ────────
     calendar_push_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -51,5 +57,15 @@ class TodoModel(Base):
             "google_event_id",
             unique=True,
             postgresql_where=text("google_event_id IS NOT NULL"),
+        ),
+        # 반복 시리즈 조회용 인덱스
+        Index("ix_todos_series_id", "series_id", postgresql_where=text("series_id IS NOT NULL")),
+        # exception row 의 중복 방어 — (series_id, original_date_key) 유니크
+        Index(
+            "uq_todos_series_original_date",
+            "series_id",
+            "original_date_key",
+            unique=True,
+            postgresql_where=text("series_id IS NOT NULL"),
         ),
     )

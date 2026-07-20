@@ -1,8 +1,19 @@
+from datetime import datetime, timezone
+
+from app.shared.domain.utils.id import generate_id
 from app.todo.application.dtos.commands import UNSET, UpdateTodoCommand
 from app.todo.domain.exceptions.exceptions import TodoNotFoundException
 from app.todo.domain.models.todo import Todo
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import ITodoRepository
+from app.todo.domain.utils.recurrence import (
+    compute_instance_start,
+    compute_instance_end,
+    generate_slots_from,
+    is_virtual_id,
+    make_virtual,
+    parse_virtual_id,
+)
 
 
 class UpdateTodoUseCase:
@@ -10,10 +21,145 @@ class UpdateTodoUseCase:
         self._todo_repo = todo_repo
 
     async def execute(self, cmd: UpdateTodoCommand) -> Todo:
+        if is_virtual_id(cmd.id):
+            return await self._update_virtual(cmd)
         todo = await self._todo_repo.find_by_id(cmd.id, cmd.user_id)
         if not todo:
             raise TodoNotFoundException()
+        if todo.is_series_base:
+            return await self._update_base(todo, cmd)
+        # 일반 exception row 또는 일반 todo
+        return await self._update_real(todo, cmd)
 
+    # ── 가상 인스턴스 (DB 미저장) → 실체화 후 수정 ─────────────────────────────
+
+    async def _update_virtual(self, cmd: UpdateTodoCommand) -> Todo:
+        base_id, slot_date = parse_virtual_id(cmd.id)
+        master = await self._todo_repo.find_series_base(base_id, cmd.user_id)
+        if not master:
+            raise TodoNotFoundException()
+
+        scope = cmd.recurrence_scope
+        if scope == "all":
+            # base 자체를 수정
+            return await self._update_base(master, cmd)
+        if scope == "following":
+            return await self._update_following(master, slot_date, cmd)
+        # "this" — exception row 생성/수정
+        return await self._materialize_and_update(master, slot_date, cmd)
+
+    async def _materialize_and_update(
+        self, master: Todo, slot_date: str, cmd: UpdateTodoCommand
+    ) -> Todo:
+        """가상 슬롯 → exception row 생성 후 패치 적용."""
+        now = datetime.now(timezone.utc)
+        inst_start = compute_instance_start(master.start_time, master.date_key, slot_date)
+        inst_end = compute_instance_end(master.end_time, master.date_key, slot_date)
+        exc = Todo(
+            id=generate_id("todo"),
+            user_id=master.user_id,
+            title=master.title,
+            status=master.status,
+            date_key=slot_date,
+            description=master.description,
+            start_time=inst_start,
+            end_time=inst_end,
+            timezone=master.timezone,
+            created_at=now,
+            updated_at=now,
+            recurrence_rule=None,
+            series_id=master.id,
+            original_date_key=slot_date,
+            original_start_time=inst_start,
+            master_google_event_id=master.google_event_id,
+        )
+        self._apply_patch(exc, cmd)
+        return await self._todo_repo.upsert_exception(exc)
+
+    # ── "following" scope — 시리즈 분리 ────────────────────────────────────────
+
+    async def _update_following(self, master: Todo, from_slot: str, cmd: UpdateTodoCommand) -> Todo:
+        """from_slot 이후를 새 시리즈로 분리.
+
+        1. 기존 base 의 until 을 from_slot 전날로 설정.
+        2. 기존 exception row 중 from_slot 이후 것은 새 base 로 이전.
+        3. 새 base 생성 후 패치 적용.
+        """
+        from app.todo.domain.models.todo import RecurrenceRule
+        from datetime import date, timedelta
+
+        prev_date = (date.fromisoformat(from_slot) - timedelta(days=1)).isoformat()
+
+        # 기존 base until 을 truncate
+        old_rule = master.recurrence_rule
+        if old_rule:
+            new_until = prev_date if (old_rule.until is None or old_rule.until > prev_date) else old_rule.until
+            master.recurrence_rule = RecurrenceRule(
+                unit=old_rule.unit, interval=old_rule.interval, until=new_until
+            )
+        await self._todo_repo.save(master)
+
+        # from_slot 이후 exception row 삭제 (새 base 로 재생성)
+        await self._todo_repo.delete_exceptions_from(master.id, master.user_id, from_slot)
+
+        # 새 base 생성
+        now = datetime.now(timezone.utc)
+        new_start = compute_instance_start(master.start_time, master.date_key, from_slot)
+        new_end = compute_instance_end(master.end_time, master.date_key, from_slot)
+        new_rule = RecurrenceRule(
+            unit=master.recurrence_rule.unit if master.recurrence_rule else (old_rule.unit if old_rule else "day"),
+            interval=master.recurrence_rule.interval if master.recurrence_rule else (old_rule.interval if old_rule else 1),
+            until=None,
+        )
+        if cmd.recurrence_rule:
+            new_rule = cmd.recurrence_rule
+
+        new_base = Todo(
+            id=generate_id("todo"),
+            user_id=master.user_id,
+            title=master.title,
+            status=master.status,
+            date_key=from_slot,
+            description=master.description,
+            start_time=new_start,
+            end_time=new_end,
+            timezone=master.timezone,
+            created_at=now,
+            updated_at=now,
+            recurrence_rule=new_rule,
+        )
+        self._apply_patch(new_base, cmd)
+        return await self._todo_repo.save(new_base)
+
+    # ── base event 수정 ─────────────────────────────────────────────────────────
+
+    async def _update_base(self, todo: Todo, cmd: UpdateTodoCommand) -> Todo:
+        if cmd.recurrence_rule is not None:
+            todo.recurrence_rule = cmd.recurrence_rule
+        self._apply_patch(todo, cmd)
+        re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
+        saved = await self._todo_repo.save(todo)
+        if re_push:
+            await self._todo_repo.mark_for_push(saved.id, cmd.user_id)
+            saved.calendar_push_status = "pending"
+            saved.push_intent = "push"
+        return saved
+
+    # ── 실제 DB row (exception 또는 일반 todo) 수정 ─────────────────────────────
+
+    async def _update_real(self, todo: Todo, cmd: UpdateTodoCommand) -> Todo:
+        self._apply_patch(todo, cmd)
+        re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
+        saved = await self._todo_repo.save(todo)
+        if re_push:
+            await self._todo_repo.mark_for_push(saved.id, cmd.user_id)
+            saved.calendar_push_status = "pending"
+            saved.push_intent = "push"
+        return saved
+
+    # ── 공통 패치 헬퍼 ─────────────────────────────────────────────────────────
+
+    def _apply_patch(self, todo: Todo, cmd: UpdateTodoCommand) -> None:
         if cmd.title is not None:
             todo.title = cmd.title
         if cmd.description is not None:
@@ -28,25 +174,9 @@ class UpdateTodoUseCase:
                 todo.start()
             else:
                 todo.status = TaskStatus.NOT_START
-
-        # sentinel 기반: 키가 전송된 경우에만 갱신 (None 도 적용 = clear)
         if cmd.start_time is not UNSET:
             todo.start_time = cmd.start_time  # type: ignore[assignment]
         if cmd.end_time is not UNSET:
             todo.end_time = cmd.end_time  # type: ignore[assignment]
         if cmd.timezone is not UNSET:
             todo.timezone = cmd.timezone  # type: ignore[assignment]
-
-        # 캘린더 연동된 todo(삭제 진행 중 제외)는 콘텐츠 변경을 Google 에 재반영.
-        # push 상태 전이는 콘텐츠 save(merge)와 분리된 타겟 SQL 로 처리 —
-        # mark_for_push 가 sync_attempt_id 를 NULL 로 무효화해 진행 중이던 워커
-        # finalize 가 이 편집을 덮어쓰지 못하게 한다(lost-update 방지).
-        re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
-
-        saved = await self._todo_repo.save(todo)
-
-        if re_push:
-            await self._todo_repo.mark_for_push(saved.id, cmd.user_id)
-            saved.calendar_push_status = "pending"
-            saved.push_intent = "push"
-        return saved
