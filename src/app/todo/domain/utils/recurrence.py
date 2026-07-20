@@ -23,6 +23,8 @@ def generate_slots_from(
     range_end: str,      # 조회 범위 끝 (포함)
 ) -> list[str]:
     """series_start 에서 delta 씩 증가해 [range_start, range_end] 에 속하는 슬롯 반환."""
+    if rule is None:
+        return []
     if rule.unit == "day":
         delta = timedelta(days=rule.interval)
     else:

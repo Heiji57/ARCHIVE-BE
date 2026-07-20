@@ -24,7 +24,7 @@ class TodoModel(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # ── 반복 Todo 필드 ──────────────────────────────────────────────────────────
-    recurrence_rule: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    recurrence_rule: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     series_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     original_date_key: Mapped[str | None] = mapped_column(String(10), nullable=True)
     original_start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
