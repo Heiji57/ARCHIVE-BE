@@ -145,3 +145,56 @@ class ITodoRepository(ABC):
     async def reset_failed_retry_counts(self, user_id: str) -> None:
         """재연결 시 failed 로 소진된 재시도 카운트 리셋 — 재연결만으로 재시도 재개."""
         ...
+
+    # ── 반복 Todo 전용 ──────────────────────────────────────────────────────────
+
+    @abstractmethod
+    async def find_series_base(self, series_id: str, user_id: str) -> Todo | None:
+        """series_id 로 base event 조회 (recurrence_rule IS NOT NULL, series_id IS NULL)."""
+        ...
+
+    @abstractmethod
+    async def find_masters_overlapping(
+        self, user_id: str, from_date: str, to_date: str
+    ) -> list[Todo]:
+        """조회 범위와 겹치는 반복 시리즈 base event 목록.
+
+        겹침 조건: base.date_key <= to_date AND (until IS NULL OR until >= from_date).
+        """
+        ...
+
+    @abstractmethod
+    async def find_exceptions_batch(
+        self, user_id: str, series_ids: list[str], from_date: str, to_date: str
+    ) -> list[Todo]:
+        """복수 시리즈의 exception row 를 1회 IN 조회로 가져온다.
+
+        original_date_key 가 [from_date, to_date] 에 속하는 행만 반환.
+        """
+        ...
+
+    @abstractmethod
+    async def find_all_exceptions(self, series_id: str, user_id: str) -> list[Todo]:
+        """시리즈 전체 exception row 조회 (삭제·이동 시 사용)."""
+        ...
+
+    @abstractmethod
+    async def upsert_exception(self, todo: Todo) -> Todo:
+        """exception row INSERT or UPDATE.
+
+        ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL
+        DO UPDATE SET ... — 동시 요청 레이스 방어.
+        """
+        ...
+
+    @abstractmethod
+    async def delete_exceptions_from(
+        self, series_id: str, user_id: str, from_date: str
+    ) -> None:
+        """original_date_key >= from_date 인 exception row 삭제 ("이후 전체 삭제" 시)."""
+        ...
+
+    @abstractmethod
+    async def delete_all_exceptions(self, series_id: str, user_id: str) -> None:
+        """시리즈의 모든 exception row 삭제 ("전체 삭제" 시)."""
+        ...

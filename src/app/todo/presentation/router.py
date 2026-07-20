@@ -96,6 +96,7 @@ async def create_todo(
             end_time=body.end_time,
             timezone=body.timezone,
             push_to_calendar=body.push_to_calendar,
+            recurrence_rule=body.recurrence_rule.to_domain() if body.recurrence_rule else None,
         )
     )
     if todo.calendar_push_status in ("pending", "pending_delete"):
@@ -126,6 +127,8 @@ async def update_todo(
             start_time=body.start_time if "start_time" in provided else UNSET,
             end_time=body.end_time if "end_time" in provided else UNSET,
             timezone=body.timezone if "timezone" in provided else UNSET,
+            recurrence_scope=body.recurrence_scope,
+            recurrence_rule=body.recurrence_rule.to_domain() if body.recurrence_rule else None,
         )
     )
     if todo.calendar_push_status in ("pending", "pending_delete"):
@@ -142,8 +145,11 @@ async def delete_todo(
     todo_id: str,
     use_case: FromDishka[DeleteTodoUseCase],
     current_user: UserContext = Depends(get_current_user),
+    recurrence_scope: str = Query(default="this", alias="recurrenceScope"),
 ) -> ApiResponse[None]:
-    google_event_id = await use_case.execute(todo_id=todo_id, user_id=current_user.id)
+    google_event_id = await use_case.execute(
+        todo_id=todo_id, user_id=current_user.id, recurrence_scope=recurrence_scope
+    )
     if google_event_id:
         _enqueue_delete(current_user.id, google_event_id)
     return ApiResponse.ok(None)

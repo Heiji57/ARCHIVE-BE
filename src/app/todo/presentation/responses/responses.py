@@ -1,8 +1,19 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
-from app.todo.domain.models.todo import Todo
+from app.todo.domain.models.todo import RecurrenceRule, Todo
+
+
+class RecurrenceRuleResponse(BaseModel):
+    unit: Literal["day", "week"]
+    interval: int
+    until: str | None
+
+    @classmethod
+    def from_domain(cls, rule: RecurrenceRule) -> "RecurrenceRuleResponse":
+        return cls(unit=rule.unit, interval=rule.interval, until=rule.until)
 
 
 class TodoResponse(BaseModel):
@@ -23,6 +34,11 @@ class TodoResponse(BaseModel):
     # calendar_linked: 연동됨(또는 진행/대기 중). calendar_push_status: 세부 상태.
     calendar_linked: bool
     calendar_push_status: str | None
+    # 반복 Todo 필드
+    is_virtual: bool
+    series_id: str | None
+    original_date_key: str | None
+    recurrence_rule: RecurrenceRuleResponse | None
 
     @classmethod
     def from_entity(cls, todo: Todo) -> "TodoResponse":
@@ -42,4 +58,12 @@ class TodoResponse(BaseModel):
             completed_at=todo.completed_at,
             calendar_linked=todo.is_calendar_linked,
             calendar_push_status=todo.calendar_push_status,
+            is_virtual="::" in todo.id,
+            series_id=todo.series_id,
+            original_date_key=todo.original_date_key,
+            recurrence_rule=(
+                RecurrenceRuleResponse.from_domain(todo.recurrence_rule)
+                if todo.recurrence_rule
+                else None
+            ),
         )

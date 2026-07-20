@@ -30,6 +30,7 @@ class CreateTodoUseCase:
             end_time=cmd.end_time,
             timezone=cmd.timezone,
             created_at=now,
+            recurrence_rule=cmd.recurrence_rule,
         )
         saved = await self._todo_repo.save(todo)
 
