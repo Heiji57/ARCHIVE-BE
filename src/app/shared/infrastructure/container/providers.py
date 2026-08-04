@@ -174,6 +174,7 @@ from app.shared.infrastructure.config.settings import AppConfig, get_settings
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
+from app.todo.application.use_cases.get_todo_stats import GetTodoStatsUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
 from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
@@ -614,6 +615,12 @@ class RequestProvider(Provider):
     @provide
     def get_todos_by_range_use_case(self, todo_repo: ITodoRepository) -> GetTodosByRangeUseCase:
         return GetTodosByRangeUseCase(todo_repo)
+
+    @provide
+    def get_todo_stats_use_case(
+        self, todo_repo: ITodoRepository, entry_repo: IJournalEntryRepository
+    ) -> GetTodoStatsUseCase:
+        return GetTodoStatsUseCase(todo_repo, entry_repo)
 
     # ── Retro Template Use Cases ──────────────────────────────────────────────
 

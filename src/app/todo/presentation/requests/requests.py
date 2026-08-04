@@ -7,10 +7,27 @@ from pydantic import BaseModel, field_validator, model_validator
 from app.shared.domain.utils.timezone import validate_timezone
 from app.todo.domain.models.todo import RecurrenceRule
 
+_TAG_MAX_LEN = 20
+_TAGS_MAX_COUNT = 10
+
 
 _VALID_STATUSES = {"not-start", "in-progress", "done"}
 _DATE_KEY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _VALID_SCOPES = {"this", "following", "all"}
+
+
+def _validate_tags(v: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for tag in v:
+        if len(tag) < 1 or len(tag) > _TAG_MAX_LEN:
+            raise ValueError(f"each tag must be between 1 and {_TAG_MAX_LEN} characters")
+        if tag not in seen:
+            seen.add(tag)
+            deduped.append(tag)
+    if len(deduped) > _TAGS_MAX_COUNT:
+        raise ValueError(f"tags must have at most {_TAGS_MAX_COUNT} items")
+    return deduped
 
 
 class RecurrenceRuleRequest(BaseModel):
@@ -47,6 +64,12 @@ class TodoCreateRequest(BaseModel):
     # None → user_settings.calendar_auto_push_todo 기본값. True/False → 개별 지정.
     push_to_calendar: bool | None = None
     recurrence_rule: RecurrenceRuleRequest | None = None
+    tags: list[str] = []
+
+    @field_validator("tags")
+    @classmethod
+    def tags_valid(cls, v: list[str]) -> list[str]:
+        return _validate_tags(v)
 
     @field_validator("status")
     @classmethod
@@ -90,6 +113,12 @@ class TodoUpdateRequest(BaseModel):
     timezone: str | None = None
     recurrence_scope: str = "this"
     recurrence_rule: RecurrenceRuleRequest | None = None
+    tags: list[str] | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def tags_valid_update(cls, v: list[str] | None) -> list[str] | None:
+        return _validate_tags(v) if v is not None else v
 
     @field_validator("status")
     @classmethod

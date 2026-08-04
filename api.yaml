@@ -638,7 +638,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "422":
-          $ref: "#/components/responses/UnprocessableEntity_422"
+          $ref: "#/components/responses/ValidationError_422"
 
     post:
       tags: [todos]
@@ -662,6 +662,44 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "422": { $ref: "#/components/responses/ValidationError_422" }
+
+  /todos/stats:
+    get:
+      tags: [todos]
+      summary: 대시보드 통계 조회
+      description: >
+        지정 범위의 Todo 상태 카운트·완료율·태그 분포 + 항상 이번 ISO주 7일 trend +
+        작성한 회고 전체 수를 한 번에 반환한다. FE 대시보드 전용.
+      parameters:
+        - in: query
+          name: range
+          schema:
+            type: string
+            enum: [today, week, month]
+            default: today
+          description: '집계 범위. today = 오늘, week = 이번 ISO주(월~일), month = 이번 달.'
+        - in: query
+          name: tz
+          schema: { type: string }
+          example: "Asia/Seoul"
+          description: >
+            IANA timezone (예: Asia/Seoul). 로컬 day 경계 계산에 사용.
+            생략 시 사용자 계정 timezone 자동 사용.
+      responses:
+        "200":
+          description: 통계 조회 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseEmpty"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TodoStatsResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422":
+          $ref: "#/components/responses/ValidationError_422"
 
   /todos/{todo_id}:
     parameters:
@@ -2567,7 +2605,7 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "422":
-          $ref: "#/components/responses/UnprocessableEntity_422"
+          $ref: "#/components/responses/ValidationError_422"
         "503":
           $ref: "#/components/responses/ServiceUnavailable_503"
       x-error-codes:
@@ -3252,6 +3290,12 @@ components:
           $ref: "#/components/schemas/RecurrenceRule"
           nullable: true
           description: '반복 규칙. null 이면 단건 todo.'
+        tags:
+          type: array
+          items: { type: string, minLength: 1, maxLength: 20 }
+          maxItems: 10
+          default: []
+          description: '태그 목록 (각 1~20자, 최대 10개, 중복 제거됨). 생략 시 빈 배열.'
 
     TodoUpdateRequest:
       type: object
@@ -3295,6 +3339,12 @@ components:
             (이 회차 자체가 새 시리즈의 첫 회차가 됨). 이미 다른 시리즈의 예외 row 에는 무시된다 —
             그 경우는 가상 인스턴스(`{base_id}::{slot_date}`)를 `recurrence_scope: following` 으로
             수정해야 한다.
+        tags:
+          type: array
+          nullable: true
+          items: { type: string, minLength: 1, maxLength: 20 }
+          maxItems: 10
+          description: 'omit = unchanged, null = 빈 배열과 동일하게 처리(전체 삭제), array = 전체 교체. 각 1~20자, 최대 10개, 중복 제거됨.'
 
     TodoResponse:
       type: object
@@ -3309,6 +3359,7 @@ components:
           completed,
           created_at,
           calendar_linked,
+          tags,
         ]
       properties:
         id: { type: string }
@@ -3347,6 +3398,10 @@ components:
           $ref: "#/components/schemas/RecurrenceRule"
           nullable: true
           description: '반복 베이스 row에만 존재. 예외/일반 todo 는 null.'
+        tags:
+          type: array
+          items: { type: string }
+          description: '태그 목록 (0~10개, 각 1~20자). 없으면 빈 배열.'
 
     RecurrenceRule:
       type: object
@@ -3366,6 +3421,53 @@ components:
           nullable: true
           pattern: '^\d{4}-\d{2}-\d{2}$'
           description: '반복 종료 날짜(포함, 로컬 날짜 YYYY-MM-DD). null 이면 무기한.'
+
+    WeeklyTrendDay:
+      type: object
+      required: [date_key, done_count]
+      properties:
+        date_key: { type: string, pattern: '^\d{4}-\d{2}-\d{2}$', description: 'YYYY-MM-DD (로컬 날짜).' }
+        done_count: { type: integer, minimum: 0 }
+
+    TagCount:
+      type: object
+      required: [tag, count]
+      properties:
+        tag: { type: string }
+        count: { type: integer, minimum: 0 }
+
+    TodoStatsResponse:
+      type: object
+      required:
+        [range, total, done_count, in_progress_count, not_start_count,
+         completion_rate, weekly_trend, tag_distribution, retro_count]
+      properties:
+        range:
+          type: string
+          enum: [today, week, month]
+        total: { type: integer, minimum: 0 }
+        done_count: { type: integer, minimum: 0 }
+        in_progress_count: { type: integer, minimum: 0 }
+        not_start_count: { type: integer, minimum: 0 }
+        completion_rate:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: '0~100 정수 (반올림). done_count / total × 100. total=0 이면 0.'
+        weekly_trend:
+          type: array
+          items: { $ref: "#/components/schemas/WeeklyTrendDay" }
+          description: '항상 이번 ISO주 월~일 7칸 (range 와 무관). 완료(completed_at) 기준.'
+        tag_distribution:
+          type: array
+          items: { $ref: "#/components/schemas/TagCount" }
+          description: 'range 범위 내 태그별 todo 수, 내림차순. tag=null 인 항목 제외.'
+        retro_count:
+          type: integer
+          minimum: 0
+          description: >
+            사용자가 직접 작성한 회고(journal_entries) 전체 개수. range 파라미터와 무관한 all-time 집계.
+            AI 자동 생성 요약(retro_summaries)은 제외한다.
 
     ApiResponseTodo:
       allOf:

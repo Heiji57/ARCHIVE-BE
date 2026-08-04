@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.todo.domain.models.todo import RecurrenceRule, Todo
 from app.todo.domain.models.value_objects import TaskStatus
-from app.todo.domain.repositories.repository import ITodoRepository
+from app.todo.domain.repositories.repository import (
+    ITodoRepository,
+    TagCount,
+    TodoStatsRaw,
+    WeeklyTrendDay,
+)
 from app.todo.infrastructure.persistence.models.todo_model import TodoModel
 
 # claim(UPDATE todos ... FROM candidates ... RETURNING) 에서 Todo 엔티티 복원용 컬럼.
@@ -20,7 +25,7 @@ _TODO_RETURNING = (
     "todos.calendar_push_status, todos.google_event_id, todos.push_intent, "
     "todos.push_started_at, todos.sync_attempt_id, todos.push_retry_count, "
     "todos.recurrence_rule, todos.series_id, todos.original_date_key, "
-    "todos.original_start_time, todos.master_google_event_id"
+    "todos.original_start_time, todos.master_google_event_id, todos.tags"
 )
 
 # base event 를 date_key 조회에서 제외하는 필터
@@ -151,11 +156,11 @@ class TodoRepository(ITodoRepository):
                 "INSERT INTO todos ("
                 "  id, user_id, title, status, date_key, description,"
                 "  start_time, end_time, timezone, created_at, updated_at, completed_at,"
-                "  calendar_push_status, google_event_id, push_intent, push_retry_count"
+                "  calendar_push_status, google_event_id, push_intent, push_retry_count, tags"
                 ") VALUES ("
                 "  :id, :user_id, :title, :status, :date_key, :description,"
                 "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
-                "  'synced', :google_event_id, NULL, 0"
+                "  'synced', :google_event_id, NULL, 0, :tags"
                 ") ON CONFLICT (user_id, google_event_id) WHERE google_event_id IS NOT NULL"
                 "  DO NOTHING"
                 f" RETURNING {_TODO_RETURNING}"
@@ -174,6 +179,7 @@ class TodoRepository(ITodoRepository):
                 "updated_at": todo.updated_at,
                 "completed_at": todo.completed_at,
                 "google_event_id": todo.google_event_id,
+                "tags": todo.tags,
             },
         )
         row = result.first()
@@ -420,19 +426,20 @@ class TodoRepository(ITodoRepository):
                 "  id, user_id, title, status, date_key, description,"
                 "  start_time, end_time, timezone, created_at, updated_at, completed_at,"
                 "  recurrence_rule, series_id, original_date_key,"
-                "  original_start_time, master_google_event_id"
+                "  original_start_time, master_google_event_id, tags"
                 ") VALUES ("
                 "  :id, :user_id, :title, :status, :date_key, :description,"
                 "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
-                "  :recurrence_rule::jsonb, :series_id, :original_date_key,"
-                "  :original_start_time, :master_google_event_id"
+                "  CAST(:recurrence_rule AS jsonb), :series_id, :original_date_key,"
+                "  :original_start_time, :master_google_event_id, :tags"
                 ") ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL"
                 " DO UPDATE SET"
                 "  title=EXCLUDED.title, status=EXCLUDED.status, date_key=EXCLUDED.date_key,"
                 "  description=EXCLUDED.description, start_time=EXCLUDED.start_time,"
                 "  end_time=EXCLUDED.end_time, timezone=EXCLUDED.timezone,"
                 "  updated_at=now(), completed_at=EXCLUDED.completed_at,"
-                "  master_google_event_id=EXCLUDED.master_google_event_id"
+                "  master_google_event_id=EXCLUDED.master_google_event_id,"
+                "  tags=EXCLUDED.tags"
                 f" RETURNING {_TODO_RETURNING}"
             ),
             {
@@ -453,6 +460,7 @@ class TodoRepository(ITodoRepository):
                 "original_date_key": todo.original_date_key,
                 "original_start_time": todo.original_start_time,
                 "master_google_event_id": todo.master_google_event_id,
+                "tags": todo.tags,
             },
         )
         row = result.first()
@@ -501,6 +509,7 @@ class TodoRepository(ITodoRepository):
             original_date_key=entity.original_date_key,
             original_start_time=entity.original_start_time,
             master_google_event_id=entity.master_google_event_id,
+            tags=entity.tags,
         )
 
     def _to_entity(self, model: TodoModel) -> Todo:
@@ -528,6 +537,7 @@ class TodoRepository(ITodoRepository):
             push_started_at=model.push_started_at,
             sync_attempt_id=model.sync_attempt_id,
             push_retry_count=model.push_retry_count,
+            tags=model.tags,
         )
 
     def _row_to_entity(self, row: Row) -> Todo:
@@ -558,6 +568,7 @@ class TodoRepository(ITodoRepository):
             push_started_at=m["push_started_at"],
             sync_attempt_id=m["sync_attempt_id"],
             push_retry_count=m["push_retry_count"],
+            tags=list(m["tags"]) if m["tags"] is not None else [],
         )
 
     def _mapping_to_entity(self, m: dict) -> Todo:
@@ -590,4 +601,79 @@ class TodoRepository(ITodoRepository):
             push_started_at=m.get("push_started_at"),
             sync_attempt_id=m.get("sync_attempt_id"),
             push_retry_count=m.get("push_retry_count") or 0,
+            tags=list(m.get("tags") or []),
+        )
+
+    # ── Stats ──────────────────────────────────────────────────────────────────
+
+    async def get_todo_stats(
+        self,
+        user_id: str,
+        range_from: str,
+        range_to: str,
+        week_from: str,
+        week_to: str,
+        tz: str,
+    ) -> TodoStatsRaw:
+        _NOT_BASE = "NOT (recurrence_rule IS NOT NULL AND series_id IS NULL)"
+
+        # 1) 상태별 카운트 (range 기준)
+        status_rows = await self._session.execute(
+            text(
+                f"SELECT status, COUNT(*)::int AS cnt FROM todos"
+                f" WHERE user_id=:user_id AND date_key BETWEEN :from_d AND :to_d"
+                f" AND {_NOT_BASE}"
+                f" GROUP BY status"
+            ),
+            {"user_id": user_id, "from_d": range_from, "to_d": range_to},
+        )
+        total = done_count = in_progress_count = not_start_count = 0
+        for row in status_rows:
+            cnt = row.cnt
+            total += cnt
+            if row.status == "done":
+                done_count = cnt
+            elif row.status == "in-progress":
+                in_progress_count = cnt
+            elif row.status == "not-start":
+                not_start_count = cnt
+
+        # 2) tag 분포 (range 기준). 태그가 여러 개인 todo는 각 태그 버킷에 중복 집계된다.
+        tag_rows = await self._session.execute(
+            text(
+                f"SELECT unnest(tags) AS tag, COUNT(*)::int AS cnt FROM todos"
+                f" WHERE user_id=:user_id AND date_key BETWEEN :from_d AND :to_d"
+                f" AND cardinality(tags) > 0 AND {_NOT_BASE}"
+                f" GROUP BY tag ORDER BY cnt DESC"
+            ),
+            {"user_id": user_id, "from_d": range_from, "to_d": range_to},
+        )
+        tag_distribution = [TagCount(tag=row.tag, count=row.cnt) for row in tag_rows]
+
+        # 3) weekly_trend: 이번 ISO주, completed_at 로컬 날짜 기준
+        trend_rows = await self._session.execute(
+            text(
+                f"SELECT (completed_at AT TIME ZONE :tz)::date::text AS local_date,"
+                f"       COUNT(*)::int AS cnt"
+                f" FROM todos"
+                f" WHERE user_id=:user_id AND status='done'"
+                f"   AND completed_at IS NOT NULL"
+                f"   AND (completed_at AT TIME ZONE :tz)::date::text BETWEEN :wfrom AND :wto"
+                f"   AND {_NOT_BASE}"
+                f" GROUP BY local_date"
+            ),
+            {"user_id": user_id, "tz": tz, "wfrom": week_from, "wto": week_to},
+        )
+        weekly_trend = [
+            WeeklyTrendDay(date_key=row.local_date, done_count=row.cnt)
+            for row in trend_rows
+        ]
+
+        return TodoStatsRaw(
+            total=total,
+            done_count=done_count,
+            in_progress_count=in_progress_count,
+            not_start_count=not_start_count,
+            weekly_trend=weekly_trend,
+            tag_distribution=tag_distribution,
         )

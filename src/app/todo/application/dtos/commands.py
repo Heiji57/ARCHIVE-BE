@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Final
 
@@ -43,6 +43,7 @@ class CreateTodoCommand:
     # True/False → 사이드바에서 개별 지정(기본값 override).
     push_to_calendar: bool | None = None
     recurrence_rule: RecurrenceRule | None = None
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -60,3 +61,4 @@ class UpdateTodoCommand:
     # 반복 Todo 편집 범위: "this" | "following" | "all"
     recurrence_scope: str = "this"
     recurrence_rule: RecurrenceRule | None = None
+    tags: list[str] | _Unset = UNSET

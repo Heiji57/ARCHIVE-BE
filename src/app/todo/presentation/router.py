@@ -6,10 +6,11 @@ from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 from app.shared.presentation.validators import parse_date_range
 from app.todo.application.dtos.commands import UNSET, CreateTodoCommand, UpdateTodoCommand
-from app.todo.application.dtos.queries import GetTodosByDateQuery, GetTodosByRangeQuery
+from app.todo.application.dtos.queries import GetTodosByDateQuery, GetTodosByRangeQuery, GetTodoStatsQuery
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
+from app.todo.application.use_cases.get_todo_stats import GetTodoStatsUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
 from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
@@ -18,7 +19,8 @@ from app.google_calendar.application.use_cases.get_calendar_events import (
     GetCalendarEventsUseCase,
 )
 from app.todo.presentation.requests.requests import TodoCreateRequest, TodoUpdateRequest
-from app.todo.presentation.responses.responses import TodoResponse
+from app.todo.presentation.responses.responses import TodoResponse, TodoStatsResponse
+from app.user.domain.repositories.repository import IUserRepository
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
 
@@ -75,6 +77,27 @@ async def get_todos(
     return ApiResponse.ok([TodoResponse.from_entity(t) for t in todos])
 
 
+@router.get(
+    "/stats",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[TodoStatsResponse],
+)
+async def get_todo_stats(
+    use_case: FromDishka[GetTodoStatsUseCase],
+    user_repo: FromDishka[IUserRepository],
+    current_user: UserContext = Depends(get_current_user),
+    range: str = Query(default="today", pattern="^(today|week|month)$"),
+    tz: str | None = Query(default=None),
+) -> ApiResponse[TodoStatsResponse]:
+    if tz is None:
+        user = await user_repo.find_by_id(current_user.id)
+        tz = user.timezone if user else "UTC"
+    result = await use_case.execute(
+        GetTodoStatsQuery(user_id=current_user.id, range=range, tz=tz)
+    )
+    return ApiResponse.ok(result)
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -97,6 +120,7 @@ async def create_todo(
             timezone=body.timezone,
             push_to_calendar=body.push_to_calendar,
             recurrence_rule=body.recurrence_rule.to_domain() if body.recurrence_rule else None,
+            tags=body.tags,
         )
     )
     if todo.calendar_push_status in ("pending", "pending_delete"):
@@ -129,6 +153,7 @@ async def update_todo(
             timezone=body.timezone if "timezone" in provided else UNSET,
             recurrence_scope=body.recurrence_scope,
             recurrence_rule=body.recurrence_rule.to_domain() if body.recurrence_rule else None,
+            tags=(body.tags or []) if "tags" in provided else UNSET,
         )
     )
     if todo.calendar_push_status in ("pending", "pending_delete"):

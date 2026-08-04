@@ -31,6 +31,7 @@ class CreateTodoUseCase:
             timezone=cmd.timezone,
             created_at=now,
             recurrence_rule=cmd.recurrence_rule,
+            tags=cmd.tags,
         )
         saved = await self._todo_repo.save(todo)
 

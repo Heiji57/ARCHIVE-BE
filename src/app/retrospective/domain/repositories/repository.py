@@ -78,6 +78,11 @@ class IJournalEntryRepository(ABC):
         ...
 
     @abstractmethod
+    async def count_all_by_user_id(self, user_id: str) -> int:
+        """사용자가 작성한 journal_entries 전체 개수 (all-time, AI 요약 제외)."""
+        ...
+
+    @abstractmethod
     async def delete(self, id: str, user_id: str) -> None: ...
 
 

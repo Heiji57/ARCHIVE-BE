@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, SmallInteger, String, Text, text
-from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -29,6 +29,9 @@ class TodoModel(Base):
     original_date_key: Mapped[str | None] = mapped_column(String(10), nullable=True)
     original_start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     master_google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(String(20)), nullable=False, server_default=text("'{}'")
+    )
     # ── Google Calendar push 상태 (쓰기는 타겟 SQL 전용, merge 관여 안 함) ────────
     calendar_push_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -58,6 +61,7 @@ class TodoModel(Base):
             unique=True,
             postgresql_where=text("google_event_id IS NOT NULL"),
         ),
+        Index("ix_todos_tags_gin", "tags", postgresql_using="gin"),
         # 반복 시리즈 조회용 인덱스
         Index("ix_todos_series_id", "series_id", postgresql_where=text("series_id IS NOT NULL")),
         # exception row 의 중복 방어 — (series_id, original_date_key) 유니크

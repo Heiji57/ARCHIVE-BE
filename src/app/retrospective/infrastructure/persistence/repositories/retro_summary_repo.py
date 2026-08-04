@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import SummaryContent, SummaryStatus, SummaryType
 from app.retrospective.domain.repositories.repository import IRetroSummaryRepository
+from app.retrospective.infrastructure.persistence.models.folder_model import FolderModel  # noqa: F401
 from app.retrospective.infrastructure.persistence.models.retro_summary_model import RetroSummaryModel
 
 

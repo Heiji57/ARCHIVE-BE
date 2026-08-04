@@ -1,7 +1,30 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
 
 from app.todo.domain.models.todo import Todo
+
+
+@dataclass(frozen=True)
+class WeeklyTrendDay:
+    date_key: str
+    done_count: int
+
+
+@dataclass(frozen=True)
+class TagCount:
+    tag: str
+    count: int
+
+
+@dataclass(frozen=True)
+class TodoStatsRaw:
+    total: int
+    done_count: int
+    in_progress_count: int
+    not_start_count: int
+    weekly_trend: list[WeeklyTrendDay]
+    tag_distribution: list[TagCount]
 
 
 class ITodoRepository(ABC):
@@ -197,4 +220,22 @@ class ITodoRepository(ABC):
     @abstractmethod
     async def delete_all_exceptions(self, series_id: str, user_id: str) -> None:
         """시리즈의 모든 exception row 삭제 ("전체 삭제" 시)."""
+        ...
+
+    @abstractmethod
+    async def get_todo_stats(
+        self,
+        user_id: str,
+        range_from: str,
+        range_to: str,
+        week_from: str,
+        week_to: str,
+        tz: str,
+    ) -> TodoStatsRaw:
+        """대시보드 통계 집계.
+
+        range_from/to = 상태 카운트·tag 분포 집계 범위 (YYYY-MM-DD).
+        week_from/to  = weekly_trend 슬롯 범위 (항상 이번 ISO 주).
+        tz            = completed_at → 로컬 날짜 변환용 IANA timezone.
+        """
         ...

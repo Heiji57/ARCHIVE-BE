@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from app.todo.domain.models.todo import RecurrenceRule, Todo
+from app.todo.domain.repositories.repository import TagCount, WeeklyTrendDay
 
 
 class RecurrenceRuleResponse(BaseModel):
@@ -39,6 +40,7 @@ class TodoResponse(BaseModel):
     series_id: str | None
     original_date_key: str | None
     recurrence_rule: RecurrenceRuleResponse | None
+    tags: list[str]
 
     @classmethod
     def from_entity(cls, todo: Todo) -> "TodoResponse":
@@ -66,4 +68,35 @@ class TodoResponse(BaseModel):
                 if todo.recurrence_rule
                 else None
             ),
+            tags=todo.tags,
         )
+
+
+class WeeklyTrendDayResponse(BaseModel):
+    date_key: str
+    done_count: int
+
+    @classmethod
+    def from_domain(cls, d: WeeklyTrendDay) -> "WeeklyTrendDayResponse":
+        return cls(date_key=d.date_key, done_count=d.done_count)
+
+
+class TagCountResponse(BaseModel):
+    tag: str
+    count: int
+
+    @classmethod
+    def from_domain(cls, t: TagCount) -> "TagCountResponse":
+        return cls(tag=t.tag, count=t.count)
+
+
+class TodoStatsResponse(BaseModel):
+    range: str
+    total: int
+    done_count: int
+    in_progress_count: int
+    not_start_count: int
+    completion_rate: int
+    weekly_trend: list[WeeklyTrendDayResponse]
+    tag_distribution: list[TagCountResponse]
+    retro_count: int

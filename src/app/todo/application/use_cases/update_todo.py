@@ -72,6 +72,7 @@ class UpdateTodoUseCase:
             original_date_key=slot_date,
             original_start_time=inst_start,
             master_google_event_id=master.google_event_id,
+            tags=master.tags,
         )
         self._apply_patch(exc, cmd)
         return await self._todo_repo.upsert_exception(exc)
@@ -127,6 +128,7 @@ class UpdateTodoUseCase:
             created_at=now,
             updated_at=now,
             recurrence_rule=new_rule,
+            tags=master.tags,
         )
         self._apply_patch(new_base, cmd)
         return await self._todo_repo.save(new_base)
@@ -186,3 +188,5 @@ class UpdateTodoUseCase:
             todo.end_time = cmd.end_time  # type: ignore[assignment]
         if cmd.timezone is not UNSET:
             todo.timezone = cmd.timezone  # type: ignore[assignment]
+        if cmd.tags is not UNSET:
+            todo.tags = cmd.tags  # type: ignore[assignment]

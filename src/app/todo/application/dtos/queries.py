@@ -12,3 +12,10 @@ class GetTodosByRangeQuery:
     user_id: str
     from_date: str
     to_date: str
+
+
+@dataclass(frozen=True)
+class GetTodoStatsQuery:
+    user_id: str
+    range: str  # "today" | "week" | "month"
+    tz: str     # IANA timezone

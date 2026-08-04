@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.value_objects import RetroType
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
+from app.retrospective.infrastructure.persistence.models.folder_model import FolderModel  # noqa: F401
 from app.retrospective.infrastructure.persistence.models.journal_entry_model import JournalEntryModel
 
 
@@ -144,6 +145,12 @@ class JournalEntryRepository(IJournalEntryRepository):
             .group_by(JournalEntryModel.folder_id)
         )
         return {row[0]: row[1] for row in result.all()}
+
+    async def count_all_by_user_id(self, user_id: str) -> int:
+        result = await self._session.scalar(
+            select(func.count()).where(JournalEntryModel.user_id == user_id)
+        )
+        return result or 0
 
     async def delete(self, id: str, user_id: str) -> None:
         result = await self._session.execute(

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -37,6 +37,7 @@ class Todo(BaseEntity):
     original_date_key: str | None = None  # 원래 슬롯 날짜 (이동해도 불변 — GCal instance key)
     original_start_time: datetime | None = None  # 슬롯 start_time (UTC, GCal instance ID 계산용)
     master_google_event_id: str | None = None  # base 의 GCal event id 스냅샷 (exception push용)
+    tags: list[str] = field(default_factory=list)
     # ── Google Calendar push 상태 (읽기 전용 뷰) ────────────────────────────────
     # 이 필드들은 응답 노출 / claim 결과 매핑을 위해 엔티티가 실어 나르지만,
     # 쓰기는 repo 의 타겟 SQL(mark_for_push / claim / heartbeat / finalize / bulk_clear)
