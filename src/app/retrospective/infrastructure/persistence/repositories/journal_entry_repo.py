@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.retrospective.domain.models.journal_entry import JournalEntry
@@ -120,6 +120,38 @@ class JournalEntryRepository(IJournalEntryRepository):
     async def find_by_folder(
         self, user_id: str, folder_id: str | None, retro_type: str | None = None
     ) -> list[JournalEntry]:
+        stmt = self._folder_scope(user_id, folder_id, retro_type)
+        result = await self._session.execute(stmt.order_by(JournalEntryModel.created_at.desc()))
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_by_folder_page(
+        self,
+        user_id: str,
+        folder_id: str | None,
+        retro_type: str | None,
+        offset: int,
+        limit: int,
+    ) -> list[JournalEntry]:
+        if limit <= 0:
+            return []
+        stmt = self._folder_scope(user_id, folder_id, retro_type)
+        result = await self._session.execute(
+            stmt.order_by(JournalEntryModel.date_key.desc(), JournalEntryModel.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def count_by_folder(
+        self, user_id: str, folder_id: str | None, retro_type: str | None = None
+    ) -> int:
+        stmt = self._folder_scope(user_id, folder_id, retro_type)
+        total = await self._session.scalar(select(func.count()).select_from(stmt.subquery()))
+        return total or 0
+
+    def _folder_scope(
+        self, user_id: str, folder_id: str | None, retro_type: str | None
+    ) -> Select[tuple[JournalEntryModel]]:
         stmt = select(JournalEntryModel).where(JournalEntryModel.user_id == user_id)
         stmt = stmt.where(
             JournalEntryModel.folder_id.is_(None)
@@ -128,8 +160,7 @@ class JournalEntryRepository(IJournalEntryRepository):
         )
         if retro_type:
             stmt = stmt.where(JournalEntryModel.retro_type == retro_type)
-        result = await self._session.execute(stmt.order_by(JournalEntryModel.created_at.desc()))
-        return [self._to_entity(m) for m in result.scalars()]
+        return stmt
 
     async def count_by_folder_ids(
         self, user_id: str, folder_ids: list[str]

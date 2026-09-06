@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.retrospective.domain.models.folder import Folder
@@ -40,13 +40,37 @@ class FolderRepository(IFolderRepository):
     async def find_children(
         self, user_id: str, parent_folder_id: str | None
     ) -> list[Folder]:
+        stmt = self._children_scope(user_id, parent_folder_id)
+        result = await self._session.execute(stmt.order_by(FolderModel.name))
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_children_page(
+        self, user_id: str, parent_folder_id: str | None, offset: int, limit: int
+    ) -> list[Folder]:
+        if limit <= 0:
+            return []
+        stmt = self._children_scope(user_id, parent_folder_id)
+        result = await self._session.execute(
+            stmt.order_by(FolderModel.name.asc(), FolderModel.id.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def count_children(self, user_id: str, parent_folder_id: str | None) -> int:
+        stmt = self._children_scope(user_id, parent_folder_id)
+        total = await self._session.scalar(select(func.count()).select_from(stmt.subquery()))
+        return total or 0
+
+    def _children_scope(
+        self, user_id: str, parent_folder_id: str | None
+    ) -> Select[tuple[FolderModel]]:
         stmt = select(FolderModel).where(FolderModel.user_id == user_id)
         if parent_folder_id is None:
             stmt = stmt.where(FolderModel.parent_folder_id.is_(None))
         else:
             stmt = stmt.where(FolderModel.parent_folder_id == parent_folder_id)
-        result = await self._session.execute(stmt.order_by(FolderModel.name))
-        return [self._to_entity(m) for m in result.scalars()]
+        return stmt
 
     async def count_children_by_parent_ids(
         self, user_id: str, parent_ids: list[str]

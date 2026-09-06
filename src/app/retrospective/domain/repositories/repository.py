@@ -78,6 +78,27 @@ class IJournalEntryRepository(ABC):
         ...
 
     @abstractmethod
+    async def find_by_folder_page(
+        self,
+        user_id: str,
+        folder_id: str | None,
+        retro_type: str | None,
+        offset: int,
+        limit: int,
+    ) -> list[JournalEntry]:
+        """폴더 뷰 통합 페이지네이션용 슬라이스 — date_key DESC, id DESC.
+        id tie-break 는 필수다(같은 date_key 가 여러 건이면 정렬이 비결정적이라
+        페이지 경계에서 누락/중복이 생긴다)."""
+        ...
+
+    @abstractmethod
+    async def count_by_folder(
+        self, user_id: str, folder_id: str | None, retro_type: str | None = None
+    ) -> int:
+        """폴더 뷰 통합 페이지네이션용 — 이 폴더 직계 엔트리 총건수."""
+        ...
+
+    @abstractmethod
     async def count_all_by_user_id(self, user_id: str) -> int:
         """사용자가 작성한 journal_entries 전체 개수 (all-time, AI 요약 제외)."""
         ...
@@ -152,6 +173,25 @@ class IRetroSummaryRepository(ABC):
         self, user_id: str, folder_ids: list[str]
     ) -> dict[str, int]:
         """폴더별 직속 요약 개수 (폴더 카드 entryCount 뱃지용)."""
+        ...
+
+    @abstractmethod
+    async def find_by_folder_page(
+        self,
+        user_id: str,
+        folder_id: str | None,
+        summary_type: SummaryType | None,
+        offset: int,
+        limit: int,
+    ) -> list[RetroSummary]:
+        """폴더 뷰 통합 페이지네이션용 슬라이스 — period_start DESC, id DESC."""
+        ...
+
+    @abstractmethod
+    async def count_by_folder(
+        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
+    ) -> int:
+        """폴더 뷰 통합 페이지네이션용 — 이 폴더 직계 요약 총건수."""
         ...
 
 
@@ -231,6 +271,18 @@ class IFolderRepository(ABC):
         self, user_id: str, parent_folder_id: str | None
     ) -> list[Folder]:
         """직계 하위 폴더 목록. parent_folder_id=None 이면 최상위 폴더들."""
+        ...
+
+    @abstractmethod
+    async def find_children_page(
+        self, user_id: str, parent_folder_id: str | None, offset: int, limit: int
+    ) -> list[Folder]:
+        """직계 하위 폴더 슬라이스 — name ASC, id ASC (통합 페이지네이션의 앞 블록)."""
+        ...
+
+    @abstractmethod
+    async def count_children(self, user_id: str, parent_folder_id: str | None) -> int:
+        """직계 하위 폴더 총개수 (통합 페이지네이션의 folderTotal)."""
         ...
 
     @abstractmethod

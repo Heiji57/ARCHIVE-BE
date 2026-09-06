@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.retrospective.domain.models.retro_summary import RetroSummary
@@ -127,6 +127,38 @@ class RetroSummaryRepository(IRetroSummaryRepository):
     async def find_by_folder(
         self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
     ) -> list[RetroSummary]:
+        stmt = self._folder_scope(user_id, folder_id, summary_type)
+        result = await self._session.execute(stmt.order_by(RetroSummaryModel.period_start.desc()))
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_by_folder_page(
+        self,
+        user_id: str,
+        folder_id: str | None,
+        summary_type: SummaryType | None,
+        offset: int,
+        limit: int,
+    ) -> list[RetroSummary]:
+        if limit <= 0:
+            return []
+        stmt = self._folder_scope(user_id, folder_id, summary_type)
+        result = await self._session.execute(
+            stmt.order_by(RetroSummaryModel.period_start.desc(), RetroSummaryModel.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def count_by_folder(
+        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
+    ) -> int:
+        stmt = self._folder_scope(user_id, folder_id, summary_type)
+        total = await self._session.scalar(select(func.count()).select_from(stmt.subquery()))
+        return total or 0
+
+    def _folder_scope(
+        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None
+    ) -> Select[tuple[RetroSummaryModel]]:
         stmt = select(RetroSummaryModel).where(RetroSummaryModel.user_id == user_id)
         stmt = stmt.where(
             RetroSummaryModel.folder_id.is_(None)
@@ -135,8 +167,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
         )
         if summary_type:
             stmt = stmt.where(RetroSummaryModel.summary_type == summary_type.value)
-        result = await self._session.execute(stmt.order_by(RetroSummaryModel.period_start.desc()))
-        return [self._to_entity(m) for m in result.scalars()]
+        return stmt
 
     async def count_by_folder_ids(
         self, user_id: str, folder_ids: list[str]

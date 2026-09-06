@@ -80,6 +80,12 @@ async def get_folder_contents(
 
     retroType 미지정 시 daily(journal_entries) + weekly/monthly/yearly
     (retro_summaries) 를 합쳐 최신순으로 정렬한 "전체" 뷰.
+
+    page/size 는 폴더와 회고록을 합친 하나의 시퀀스
+    (`[폴더: name ASC, id ASC] ++ [회고록: 날짜 DESC, id DESC]`)에 대한
+    오프셋이다 — 폴더 블록이 먼저 소진된 뒤 회고록이 이어진다. 따라서
+    folders 는 이 페이지 구간에 걸친 폴더 조각이고(직계 하위 폴더 전부가
+    아니다), total 은 폴더 총개수 + 회고록 총건수다.
     """
     if retro_type is not None and retro_type not in _VALID_RETRO_TYPES:
         raise HTTPException(
