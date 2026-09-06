@@ -258,6 +258,14 @@ class IFolderRepository(ABC):
         ...
 
     @abstractmethod
+    async def find_all(self, user_id: str, limit: int) -> list[Folder]:
+        """사용자의 전체 폴더(depth 무관) — name ASC, id ASC, 최대 limit 개.
+
+        경로 조립(id → 이름 → 조상 사슬) 전용이다. 조상이 어느 깊이에 있을지
+        알 수 없어 직계 조회로는 풀 수 없기 때문에 평평한 전체 집합을 준다."""
+        ...
+
+    @abstractmethod
     async def find_children_page(
         self, user_id: str, parent_folder_id: str | None, offset: int, limit: int
     ) -> list[Folder]:

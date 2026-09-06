@@ -14,6 +14,7 @@ from app.retrospective.application.dtos.folder_commands import (
 )
 from app.retrospective.application.dtos.folder_queries import GetFolderContentsQuery
 from app.retrospective.application.use_cases.create_folder import CreateFolderUseCase
+from app.retrospective.application.use_cases.list_folders import ListFoldersUseCase
 from app.retrospective.application.use_cases.delete_folder import DeleteFolderUseCase
 from app.retrospective.application.use_cases.get_folder_contents import (
     GetFolderContentsUseCase,
@@ -27,7 +28,9 @@ from app.retrospective.presentation.requests.folder_requests import (
 )
 from app.retrospective.presentation.responses.folder_responses import (
     FolderContentsResponse,
+    FolderListResponse,
     FolderResponse,
+    FolderSummaryResponse,
 )
 from app.retrospective.presentation.responses.responses import EntryWithGithubResponse
 from app.retrospective.presentation.router import _is_github_connected, _push_map_for_entries, _push_map_for_summaries
@@ -39,6 +42,36 @@ router = APIRouter(prefix="/folders", tags=["folders"], route_class=DishkaRoute)
 
 _VALID_RETRO_TYPES = {t.value for t in RetroType}
 _MAX_CONTENTS_PAGE_SIZE = 50
+
+
+@router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[FolderListResponse],
+)
+async def list_folders(
+    use_case: FromDishka[ListFoldersUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[FolderListResponse]:
+    """전체 폴더 목록 — id·이름·부모만, 평평한 배열(페이지네이션 없음).
+
+    용도는 id → 이름 → 조상 사슬 해결이다. 검색 결과처럼 폴더를 가로지르는
+    목록에서 각 항목의 소속 경로("A › B › C")를 조립할 때 클라이언트는 한 번도
+    열어본 적 없는 폴더의 이름이 필요한데, GET /folders/contents 는 직계 하위만
+    주므로 조상을 알 수 없다.
+
+    폴더 카드 뱃지용 개수(folderCount/entryCount)는 담지 않는다 — 전체 폴더에
+    집계를 걸게 되는데 이 응답의 소비처는 그 값을 쓰지 않는다.
+
+    정렬은 name ASC, id ASC (GET /folders/contents 의 폴더 정렬과 동일).
+    최대 ListFoldersUseCase.MAX_FOLDERS 개까지만 반환한다.
+    """
+    folders = await use_case.execute(current_user.id)
+    return ApiResponse.ok(
+        FolderListResponse(
+            folders=[FolderSummaryResponse.from_entity(f) for f in folders]
+        )
+    )
 
 
 @router.post(

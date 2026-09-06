@@ -44,6 +44,17 @@ class FolderRepository(IFolderRepository):
         result = await self._session.execute(stmt.order_by(FolderModel.name))
         return [self._to_entity(m) for m in result.scalars()]
 
+    async def find_all(self, user_id: str, limit: int) -> list[Folder]:
+        if limit <= 0:
+            return []
+        result = await self._session.execute(
+            select(FolderModel)
+            .where(FolderModel.user_id == user_id)
+            .order_by(FolderModel.name.asc(), FolderModel.id.asc())
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     async def find_children_page(
         self, user_id: str, parent_folder_id: str | None, offset: int, limit: int
     ) -> list[Folder]:

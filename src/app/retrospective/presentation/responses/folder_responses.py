@@ -44,6 +44,35 @@ class FolderResponse(BaseModel):
         )
 
 
+class FolderSummaryResponse(BaseModel):
+    """폴더의 최소 식별 정보. 경로 조립(id → 이름 → 조상)에만 쓰이므로 개수·
+    타임스탬프를 담지 않는다 — 전체 폴더에 집계를 걸지 않기 위해서다.
+    뱃지가 필요한 곳은 FolderResponse 를 쓴다."""
+
+    id: str
+    name: str
+    parent_folder_id: str | None = Field(default=None, serialization_alias="parentFolderId")
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_entity(cls, folder: Folder) -> "FolderSummaryResponse":
+        return cls(
+            id=folder.id,
+            name=folder.name,
+            parent_folder_id=folder.parent_folder_id,
+        )
+
+
+class FolderListResponse(BaseModel):
+    """GET /folders 응답 — 전체 폴더를 평평한 배열로(트리로 감싸지 않는다).
+    페이지네이션 없음, 최대 ListFoldersUseCase.MAX_FOLDERS 개."""
+
+    folders: list[FolderSummaryResponse]
+
+    model_config = {"populate_by_name": True}
+
+
 class FolderContentsResponse(BaseModel):
     """GET /folders/contents 응답 — 하위 폴더와 회고록을 타입별로 분리해서 반환한다
     (search 모듈의 {todos, entries} 분리와 동일한 이유 — 서로 다른 성격의 리소스를

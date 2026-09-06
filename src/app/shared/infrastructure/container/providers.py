@@ -113,6 +113,7 @@ from app.retrospective.application.use_cases.delete_folder import DeleteFolderUs
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
 from app.retrospective.application.use_cases.get_entries_page import GetEntriesPageUseCase
 from app.retrospective.application.use_cases.get_folder_contents import GetFolderContentsUseCase
+from app.retrospective.application.use_cases.list_folders import ListFoldersUseCase
 from app.retrospective.application.use_cases.move_entry_to_folder import MoveEntryToFolderUseCase
 from app.retrospective.application.use_cases.update_folder import UpdateFolderUseCase
 from app.search.application.use_cases.global_search import GlobalSearchUseCase
@@ -713,6 +714,10 @@ class RequestProvider(Provider):
     @provide
     def create_folder_use_case(self, folder_repo: IFolderRepository) -> CreateFolderUseCase:
         return CreateFolderUseCase(folder_repo)
+
+    @provide
+    def list_folders_use_case(self, folder_repo: IFolderRepository) -> ListFoldersUseCase:
+        return ListFoldersUseCase(folder_repo)
 
     @provide
     def update_folder_use_case(self, folder_repo: IFolderRepository) -> UpdateFolderUseCase:
