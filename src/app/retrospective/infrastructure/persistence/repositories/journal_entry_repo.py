@@ -117,13 +117,6 @@ class JournalEntryRepository(IJournalEntryRepository):
         )
         return [self._to_entity(m) for m in result.scalars()], total or 0
 
-    async def find_by_folder(
-        self, user_id: str, folder_id: str | None, retro_type: str | None = None
-    ) -> list[JournalEntry]:
-        stmt = self._folder_scope(user_id, folder_id, retro_type)
-        result = await self._session.execute(stmt.order_by(JournalEntryModel.created_at.desc()))
-        return [self._to_entity(m) for m in result.scalars()]
-
     async def find_by_folder_page(
         self,
         user_id: str,

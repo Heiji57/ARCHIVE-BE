@@ -124,13 +124,6 @@ class RetroSummaryRepository(IRetroSummaryRepository):
         )
         return [self._to_entity(m) for m in result.scalars()], total or 0
 
-    async def find_by_folder(
-        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
-    ) -> list[RetroSummary]:
-        stmt = self._folder_scope(user_id, folder_id, summary_type)
-        result = await self._session.execute(stmt.order_by(RetroSummaryModel.period_start.desc()))
-        return [self._to_entity(m) for m in result.scalars()]
-
     async def find_by_folder_page(
         self,
         user_id: str,

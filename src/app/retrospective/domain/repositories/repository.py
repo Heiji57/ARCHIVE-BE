@@ -63,14 +63,6 @@ class IJournalEntryRepository(ABC):
     ) -> tuple[list[JournalEntry], int]: ...
 
     @abstractmethod
-    async def find_by_folder(
-        self, user_id: str, folder_id: str | None, retro_type: str | None = None
-    ) -> list[JournalEntry]:
-        """폴더 뷰용 — 이 폴더에 직접 속한 엔트리(folder_id 일치)만, retro_type
-        지정 시 그 타입만. folder_id=None 이면 미분류(최상위) 엔트리."""
-        ...
-
-    @abstractmethod
     async def count_by_folder_ids(
         self, user_id: str, folder_ids: list[str]
     ) -> dict[str, int]:
@@ -158,14 +150,6 @@ class IRetroSummaryRepository(ABC):
         전체 타입(weekly/monthly/annual) 대상. q 는 content/edited_content ILIKE.
         from_date/to_date 있으면 기간 겹침(overlap) 필터 — period_end >= from_date AND
         period_start <= to_date (엄격 포함이 아니라, 조회 범위와 겹치는 요약을 모두 포함)."""
-        ...
-
-    @abstractmethod
-    async def find_by_folder(
-        self, user_id: str, folder_id: str | None, summary_type: SummaryType | None = None
-    ) -> list[RetroSummary]:
-        """폴더 뷰용 — 이 폴더에 직접 속한 요약(folder_id 일치)만, summary_type
-        지정 시 그 타입만. folder_id=None 이면 미분류(최상위) 요약."""
         ...
 
     @abstractmethod
