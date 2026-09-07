@@ -11,7 +11,7 @@ from app.retrospective.domain.repositories.repository import (
     IJournalEntryRepository,
     IRetroSummaryRepository,
 )
-from app.retrospective.domain.utils.entry_ordering import merge_sorted_desc_with_id
+from app.retrospective.domain.utils.entry_ordering import merge_sorted_desc
 
 _RETRO_TO_SUMMARY_TYPE = {
     RetroType.WEEKLY.value: SummaryType.WEEKLY,
@@ -143,5 +143,5 @@ class GetFolderContentsUseCase:
         summaries = await self._summary_repo.find_by_folder_page(
             query.user_id, query.folder_id, None, 0, fetch_size
         )
-        merged = merge_sorted_desc_with_id(entries, summaries)
+        merged = merge_sorted_desc(entries, summaries)
         return merged[offset : offset + limit]

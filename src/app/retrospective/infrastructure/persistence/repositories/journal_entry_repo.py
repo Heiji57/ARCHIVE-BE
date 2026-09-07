@@ -95,7 +95,7 @@ class JournalEntryRepository(IJournalEntryRepository):
             select(func.count()).select_from(stmt.subquery())
         )
         result = await self._session.execute(
-            stmt.order_by(JournalEntryModel.date_key.desc())
+            stmt.order_by(JournalEntryModel.date_key.desc(), JournalEntryModel.id.desc())
             .offset((page - 1) * size)
             .limit(size)
         )

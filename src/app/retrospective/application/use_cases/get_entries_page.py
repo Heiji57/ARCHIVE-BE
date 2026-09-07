@@ -56,6 +56,11 @@ class GetEntriesPageUseCase:
         # 전역 상위 (page*size) 개는 각 소스에서 상위 (page*size) 개씩만 가져오면
         # 항상 커버된다(어느 한쪽이 top-K 를 전부 차지해도 K개를 넘을 수 없으므로) —
         # 전체 이력을 다 훑지 않고도 정확한 페이지 슬라이스가 가능하다.
+        #
+        # 이 성질은 소스 정렬과 병합 정렬의 기준이 같을 때만 성립한다. 그래서
+        # find_page 의 ORDER BY 도 (날짜 DESC, id DESC)이고 병합도 같은 키를 쓴다 —
+        # 기준이 어긋나면 경계에서 틀린 집합을 뽑는다. id tie-break 가 없으면
+        # 같은 날짜 항목들의 순서가 비결정적이라 페이지 경계에서 누락/중복이 생긴다.
         fetch_size = query.page * query.size
         entries, entry_total = await self._entry_repo.find_page(
             query.user_id, None, 1, fetch_size, query.q, from_d, to_d

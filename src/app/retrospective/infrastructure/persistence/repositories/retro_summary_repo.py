@@ -118,7 +118,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             select(func.count()).select_from(stmt.subquery())
         )
         result = await self._session.execute(
-            stmt.order_by(RetroSummaryModel.period_start.desc())
+            stmt.order_by(RetroSummaryModel.period_start.desc(), RetroSummaryModel.id.desc())
             .offset((page - 1) * size)
             .limit(size)
         )
