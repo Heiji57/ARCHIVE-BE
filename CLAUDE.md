@@ -2,31 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Model Selection (REQUIRED)
-
-코드를 수정하는 모든 요청이 들어오면 **구현 시작 전 반드시 사용할 모델을 확인한다.**
-
-응답 첫 줄에 아래 형식으로 묻는다:
-
-```
-사용할 모델을 선택하세요: 1) Haiku  2) Sonnet  3) Opus  (기본값: 2)
-```
-
-- 사용자가 **숫자(1·2·3)** 로 답하면 해당 모델로 진행한다.
-- 사용자가 **모델 이름**(haiku / sonnet / opus)으로 답해도 동일하게 처리한다.
-- 사용자가 **Enter(빈 입력)** 하거나 답하지 않으면 **Sonnet(기본값)** 으로 진행한다.
-- 선택된 모델은 `/model` 명령으로 전환할 수 있음을 안내한다.
-
-| 번호 | 모델 | 적합한 상황 |
-|---|---|---|
-| 1 | Haiku | 단순 CRUD, 보일러플레이트, 빠른 수정 |
-| 2 | Sonnet | 일반 기능 구현, 리팩토링 (기본값) |
-| 3 | Opus | 복잡한 아키텍처 설계, 어려운 버그, 성능 최적화 |
-
-> 단순 질문, 코드 설명, 현황 파악 요청은 모델 선택을 묻지 않는다.
-
----
-
 ## Pre-Implementation Workflow (REQUIRED)
 
 코드를 수정하는 모든 요청(기능 추가, 리팩토링, 버그 수정 등)에서 **반드시 아래 순서를 따른다.**
@@ -175,6 +150,7 @@ src/app/
 - **사용자 타임존**: 사용자별 `users.timezone`(IANA tz) 보유. 모든 기간 계산("오늘", "이번 주" 등)은 이 tz 기준으로 처리한다. 절대 서버 UTC 기준으로 계산하지 않는다. `shared/domain/utils/period.py`의 `today_in_tz(tz)`, `now_in_tz(tz)` 사용.
 - **회고 템플릿 정책**: `retro_templates` 테이블에 retro_type별 마크다운 템플릿 저장. 회원가입/OAuth 온보딩 시 기본 4종(daily/weekly/monthly/yearly, `is_default=true`) 자동 시드 (`SeedRetroTemplatesUseCase`). 활성 선택은 `user_settings.active_retro_template_ids` (JSONB). 기본 표준 본문은 `retrospective/domain/constants/retro_template_defaults.py`. `is_default=true` 삭제 불가(400). 활성 템플릿 삭제 시 기본 템플릿으로 자동 폴백. `POST /templates/{id}/reset` 으로 기본 템플릿 내용 복원 가능 (커스텀 불가). 에러 코드: `TEMPLATE_NOT_FOUND`(404), `TEMPLATE_DEFAULT_NOT_DELETABLE`(400), `TEMPLATE_TYPE_MISMATCH`(422), `TEMPLATE_NAME_DUPLICATED`(409).
 - **Todo 시간 저장 정책**: `todos.start_time` / `todos.end_time` 은 UTC `TIMESTAMPTZ` 로 저장. 사용자 로컬 시각 복원을 위해 생성 시점 IANA timezone 을 `todos.timezone`(`VARCHAR(50)`) 에 함께 저장 (스냅샷). FE 는 로컬 시각을 UTC 로 변환해 전송하고, 응답의 `timezone` 으로 역변환. `start_time` 또는 `end_time` 이 non-null 이면 `timezone` 필수 (422). IANA 검증은 `shared/domain/utils/timezone.py`의 `validate_timezone` 사용.
+- **Todo due_date_key 정책**: `todos.due_date_key` (`VARCHAR(10)`, nullable) — 선택적 마감일(포함, YYYY-MM-DD). `due_date_key >= date_key` 제약 (422). POST: Pydantic model_validator에서 검증. PATCH: `omit=unchanged`, `null=clear`, `string=set` 패턴(UNSET sentinel). Pydantic 레벨에서 `date_key`가 같은 요청에 포함된 경우만 체크, 나머지는 `UpdateTodoUseCase._apply_patch`에서 `RequestValidationError` 발생. 반복 Todo exception row(`_materialize_and_update`) 및 following 분리(`_update_following`) 시 source/master의 `due_date_key` 상속.
 - **국가 → tz 매핑**: ISO 3166-1 alpha-2 전 249개국 지원 (`pycountry`). 국가→IANA tz 옵션은 `pytz.country_timezones` (CLDR-derived) 사용. 단일 tz 국가(예: KR, JP, FR)는 `country` 만으로 자동 결정, 다중 tz 국가(예: US, RU, BR)는 IANA `timezone` 명시 필수. 신규 국가/tz 추가는 `pytz`/system tzdata 업데이트로 자동 반영 — 코드 수정 불필요. 국가 입력 핸들러는 `shared/domain/utils/timezone.py`의 `is_supported_country`, `country_timezone_options`, `resolve_timezone` 사용. **`region` 컬럼은 deprecated**: 신규 입력 받지 않음, 기존 DB 컬럼은 호환 위해 유지.
 - **AI 자동 요약 스케줄링**: Celery beat은 매시간 정각 단일 dispatcher(`dispatch_summaries_for_tz`)만 발사. 각 사용자의 현지 1am 도달 시 fan-out. `last_summary_date_local`로 DST 중복 방지. `SUMMARY_JITTER_SECONDS` 환경 변수로 부하 분산 폭 제어 (기본 1800s).
 - **AI 요약 데이터 소스 정책**: 모든 경로(수동/자동)에서 단일 task `worker.generate_summary` 사용. summary_type 별 데이터 소스는 `retrospective/infrastructure/ai/strategies.py` 의 strategy 가 결정한다.

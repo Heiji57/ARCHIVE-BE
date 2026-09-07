@@ -10,6 +10,7 @@ from .email import EmailConfig
 from .oauth import GitHubOAuthConfig, GoogleCalendarConfig, GoogleOAuthConfig
 from .redis import RedisConfig
 from .retrospective import RetrospectiveConfig
+from .topic import TopicConfig
 
 
 class AppConfig(BaseSettings):
@@ -29,6 +30,7 @@ class AppConfig(BaseSettings):
     ai: AIConfig = Field(default_factory=AIConfig)
     email: EmailConfig = Field(default_factory=EmailConfig)
     retrospective: RetrospectiveConfig = Field(default_factory=RetrospectiveConfig)
+    topic: TopicConfig = Field(default_factory=TopicConfig)
 
     @property
     def is_production(self) -> bool:

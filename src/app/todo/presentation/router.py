@@ -6,7 +6,12 @@ from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 from app.shared.presentation.validators import parse_date_range
 from app.todo.application.dtos.commands import UNSET, CreateTodoCommand, UpdateTodoCommand
-from app.todo.application.dtos.queries import GetTodosByDateQuery, GetTodosByRangeQuery, GetTodoStatsQuery
+from app.todo.application.dtos.queries import (
+    GetTodosByDateQuery,
+    GetTodosByRangeQuery,
+    GetTodoStatsQuery,
+    SearchTagsQuery,
+)
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
@@ -14,12 +19,18 @@ from app.todo.application.use_cases.get_todo_stats import GetTodoStatsUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
 from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
+from app.todo.application.use_cases.search_tags import SearchTagsUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.google_calendar.application.use_cases.get_calendar_events import (
     GetCalendarEventsUseCase,
 )
 from app.todo.presentation.requests.requests import TodoCreateRequest, TodoUpdateRequest
-from app.todo.presentation.responses.responses import TodoResponse, TodoStatsResponse
+from app.todo.presentation.responses.responses import (
+    TagSearchResponse,
+    TodoResponse,
+    TodoStatsResponse,
+)
+from app.topic.domain.repositories.repository import IEmbeddingQueueRepository, ITodoEmbeddingRepository
 from app.user.domain.repositories.repository import IUserRepository
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
@@ -98,6 +109,23 @@ async def get_todo_stats(
     return ApiResponse.ok(result)
 
 
+@router.get(
+    "/tags/search",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[TagSearchResponse],
+)
+async def search_tags(
+    use_case: FromDishka[SearchTagsUseCase],
+    current_user: UserContext = Depends(get_current_user),
+    q: str = Query(..., min_length=1, max_length=20),
+    limit: int = Query(default=8, ge=1, le=20),
+) -> ApiResponse[TagSearchResponse]:
+    tags = await use_case.execute(
+        SearchTagsQuery(user_id=current_user.id, query=q, limit=limit)
+    )
+    return ApiResponse.ok(TagSearchResponse(tags=tags))
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
@@ -106,6 +134,7 @@ async def get_todo_stats(
 async def create_todo(
     body: TodoCreateRequest,
     use_case: FromDishka[CreateTodoUseCase],
+    queue_repo: FromDishka[IEmbeddingQueueRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[TodoResponse]:
     todo = await use_case.execute(
@@ -121,10 +150,13 @@ async def create_todo(
             push_to_calendar=body.push_to_calendar,
             recurrence_rule=body.recurrence_rule.to_domain() if body.recurrence_rule else None,
             tags=body.tags,
+            due_date_key=body.due_date_key,
         )
     )
     if todo.calendar_push_status in ("pending", "pending_delete"):
         _enqueue_push(current_user.id, todo.id)
+    if not todo.is_series_base:
+        await queue_repo.enqueue("todo", todo.id, current_user.id)
     return ApiResponse.created(TodoResponse.from_entity(todo))
 
 
@@ -137,10 +169,11 @@ async def update_todo(
     todo_id: str,
     body: TodoUpdateRequest,
     use_case: FromDishka[UpdateTodoUseCase],
+    queue_repo: FromDishka[IEmbeddingQueueRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[TodoResponse]:
     provided = body.model_fields_set
-    todo = await use_case.execute(
+    outcome = await use_case.execute(
         UpdateTodoCommand(
             id=todo_id,
             user_id=current_user.id,
@@ -154,10 +187,16 @@ async def update_todo(
             recurrence_scope=body.recurrence_scope,
             recurrence_rule=body.recurrence_rule.to_domain() if body.recurrence_rule else None,
             tags=(body.tags or []) if "tags" in provided else UNSET,
+            due_date_key=body.due_date_key if "due_date_key" in provided else UNSET,
         )
     )
+    todo = outcome.todo
     if todo.calendar_push_status in ("pending", "pending_delete"):
         _enqueue_push(current_user.id, todo.id)
+    if outcome.extra_push_todo_id:
+        _enqueue_push(current_user.id, outcome.extra_push_todo_id)
+    if not todo.is_series_base:
+        await queue_repo.enqueue("todo", todo.id, current_user.id)
     return ApiResponse.ok(TodoResponse.from_entity(todo))
 
 
@@ -169,14 +208,18 @@ async def update_todo(
 async def delete_todo(
     todo_id: str,
     use_case: FromDishka[DeleteTodoUseCase],
+    todo_emb_repo: FromDishka[ITodoEmbeddingRepository],
     current_user: UserContext = Depends(get_current_user),
     recurrence_scope: str = Query(default="this", alias="recurrenceScope"),
 ) -> ApiResponse[None]:
-    google_event_id = await use_case.execute(
+    outcome = await use_case.execute(
         todo_id=todo_id, user_id=current_user.id, recurrence_scope=recurrence_scope
     )
-    if google_event_id:
-        _enqueue_delete(current_user.id, google_event_id)
+    if outcome.delete_google_event_id:
+        _enqueue_delete(current_user.id, outcome.delete_google_event_id)
+    if outcome.push_todo_id:
+        _enqueue_push(current_user.id, outcome.push_todo_id)
+    await todo_emb_repo.delete_by_todo(todo_id)
     return ApiResponse.ok(None)
 
 

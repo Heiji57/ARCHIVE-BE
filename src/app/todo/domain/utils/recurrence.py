@@ -110,6 +110,7 @@ def make_virtual(base: "Todo", slot_date: str) -> "Todo":
         original_date_key=slot_date,
         original_start_time=inst_start,
         master_google_event_id=base.google_event_id,
+        tags=list(base.tags),
         # GCal push — 가상 인스턴스는 base 와 동일한 push 상태를 노출하지 않는다
         calendar_push_status=None,
         google_event_id=None,

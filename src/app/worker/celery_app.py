@@ -20,7 +20,9 @@ _QUEUES = (
 
 _TASK_ROUTES = {
     "worker.generate_summary": {"queue": "ai_tasks"},
+    "worker.generate_digest": {"queue": "ai_tasks"},
     "worker.dispatch_summaries_for_tz": {"queue": "default"},
+    "worker.embed_stale": {"queue": "default"},
     "worker.sync_all_calendars": {"queue": "calendar"},
     "worker.sync_user_calendar": {"queue": "calendar"},
     # ARCHIVE → Google push — calendar 큐에서 격리 처리(즉시 단건 + 삭제 cleanup).
@@ -57,6 +59,11 @@ def create_celery_app() -> Celery:
                 "task": "worker.sync_all_calendars",
                 "schedule": timedelta(minutes=_CALENDAR_SYNC_INTERVAL_MINUTES),
             },
+            # embedding_queue 드레이너 — 5분마다 stale 항목 처리.
+            "embed-stale-periodic": {
+                "task": "worker.embed_stale",
+                "schedule": timedelta(minutes=5),
+            },
         },
     )
     app.autodiscover_tasks([
@@ -64,6 +71,8 @@ def create_celery_app() -> Celery:
         "app.worker.tasks.dispatch_summaries_for_tz",
         "app.worker.tasks.sync_calendars",
         "app.worker.tasks.push_calendars",
+        "app.worker.tasks.embed_stale",
+        "app.worker.tasks.generate_digest",
     ])
     return app
 

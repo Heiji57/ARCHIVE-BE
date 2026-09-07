@@ -65,6 +65,7 @@ class TodoCreateRequest(BaseModel):
     push_to_calendar: bool | None = None
     recurrence_rule: RecurrenceRuleRequest | None = None
     tags: list[str] = []
+    due_date_key: str | None = None
 
     @field_validator("tags")
     @classmethod
@@ -85,6 +86,13 @@ class TodoCreateRequest(BaseModel):
             raise ValueError("date_key must be in YYYY-MM-DD format")
         return v
 
+    @field_validator("due_date_key")
+    @classmethod
+    def due_date_key_format(cls, v: str | None) -> str | None:
+        if v is not None and not _DATE_KEY_RE.fullmatch(v):
+            raise ValueError("due_date_key must be in YYYY-MM-DD format")
+        return v
+
     @field_validator("timezone")
     @classmethod
     def timezone_valid(cls, v: str | None) -> str | None:
@@ -97,9 +105,8 @@ class TodoCreateRequest(BaseModel):
         has_time = self.start_time is not None or self.end_time is not None
         if has_time and self.timezone is None:
             raise ValueError("timezone is required when start_time or end_time is provided")
-        if self.start_time is not None and self.end_time is not None:
-            if self.end_time <= self.start_time:
-                raise ValueError("end_time must be later than start_time")
+        if self.due_date_key is not None and self.due_date_key < self.date_key:
+            raise ValueError("due_date_key must be >= date_key")
         return self
 
 
@@ -114,6 +121,7 @@ class TodoUpdateRequest(BaseModel):
     recurrence_scope: str = "this"
     recurrence_rule: RecurrenceRuleRequest | None = None
     tags: list[str] | None = None
+    due_date_key: str | None = None
 
     @field_validator("tags")
     @classmethod
@@ -148,6 +156,13 @@ class TodoUpdateRequest(BaseModel):
             raise ValueError(f"recurrenceScope must be one of {_VALID_SCOPES}")
         return v
 
+    @field_validator("due_date_key")
+    @classmethod
+    def due_date_key_format(cls, v: str | None) -> str | None:
+        if v is not None and not _DATE_KEY_RE.fullmatch(v):
+            raise ValueError("due_date_key must be in YYYY-MM-DD format")
+        return v
+
     @model_validator(mode="after")
     def validate_time_fields(self) -> "TodoUpdateRequest":
         provided = self.model_fields_set
@@ -155,8 +170,9 @@ class TodoUpdateRequest(BaseModel):
         end_setting = "end_time" in provided and self.end_time is not None
         if (start_setting or end_setting) and ("timezone" not in provided or self.timezone is None):
             raise ValueError("timezone is required when start_time or end_time is set")
-        if "start_time" in provided and "end_time" in provided:
-            if self.start_time is not None and self.end_time is not None:
-                if self.end_time <= self.start_time:
-                    raise ValueError("end_time must be later than start_time")
+        if "due_date_key" in provided and self.due_date_key is not None:
+            # date_key 가 요청에 함께 포함된 경우만 Presentation 레벨에서 체크
+            # (date_key 미포함 시 use-case _apply_patch 에서 DB 기존값과 비교)
+            if self.date_key is not None and self.due_date_key < self.date_key:
+                raise ValueError("due_date_key must be >= date_key")
         return self

@@ -701,6 +701,40 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError_422"
 
+  /todos/tags/search:
+    get:
+      tags: [todos]
+      summary: 태그 자동완성 검색
+      description: >
+        이 사용자가 지금까지 쓴 전체 태그 이력(현재 FE에 로드된 범위와 무관)에서
+        `q` 접두(prefix) 매칭되는 태그명을 사용 빈도 내림차순(동률 시 가나다순)으로
+        반환한다. Postgres FTS(to_tsvector/to_tsquery, simple config) 기반.
+        태그 입력 UI의 자동완성 "검색 결과" 섹션 전용.
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 20 }
+          example: "업"
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 20, default: 8 }
+      responses:
+        "200":
+          description: 검색 성공
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponseEmpty"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/TagSearchResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "422":
+          $ref: "#/components/responses/ValidationError_422"
+
   /todos/{todo_id}:
     parameters:
       - $ref: "#/components/parameters/TodoIdPath"
@@ -908,7 +942,7 @@ paths:
           schema: { type: integer, minimum: 1, default: 1 }
         - in: query
           name: size
-          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+          schema: { type: integer, minimum: 1, maximum: 50, default: 16 }
         - in: query
           name: q
           schema: { type: string, minLength: 1 }
@@ -1112,9 +1146,22 @@ paths:
           weekly/monthly/yearly=`retro_summaries`).
         - `retroType` 생략 → 4개 타입을 모두 합쳐 최신순으로 정렬한 "전체" 뷰.
 
-        응답은 `folders`(직계 하위 폴더)와 `entries`(직계 회고록)로 분리되어
-        내려온다 — 폴더와 회고록은 서로 다른 리소스라 하나의 배열로 합치지 않는다
-        (`GET /search` 의 `{todos, entries}` 분리와 동일한 이유).
+        **페이지네이션은 폴더와 회고록을 합친 하나의 시퀀스에 적용된다.**
+
+            seq = [폴더: name ASC, id ASC] ++ [회고록: date_key DESC, id DESC]
+
+        `page`/`size` 는 이 `seq` 의 오프셋이다. 폴더 블록이 먼저 소진된 뒤
+        회고록이 이어진다 — 폴더 25개·회고록 100건·size 20 이면 1페이지는
+        폴더 20개, 2페이지는 폴더 5개 + 회고록 15건, 3페이지부터 회고록 20건씩.
+
+        `id` tie-break 는 필수다. "전체" 뷰는 두 테이블을 합치므로 같은
+        `date_key` 가 여러 건 나오고, 정렬이 비결정적이면 페이지 경계에서
+        항목이 누락되거나 중복된다.
+
+        응답은 `folders`(이 페이지 구간의 폴더 조각)와 `entries`(폴더가 쓰고
+        남은 칸에 채운 회고록 조각)로 분리되어 내려온다 — 폴더와 회고록은
+        서로 다른 리소스라 하나의 배열로 합치지 않는다(`GET /search` 의
+        `{todos, entries}` 분리와 동일한 이유).
       parameters:
         - in: query
           name: folderId
@@ -2814,7 +2861,8 @@ components:
       description: |
         상태 충돌 (중복·이미 진행 중 등). 가능한 코드:
         - `USER_EMAIL_DUPLICATED` — 이메일 중복 가입
-        - `TODO_ALREADY_COMPLETED` / `TODO_ALREADY_IN_PROGRESS`
+        - `TODO_ALREADY_COMPLETED` — 이미 완료(done) 상태인 할 일을 다시 완료로 전환할 때. done → not-start / in-progress 는 허용됨
+        - `TODO_ALREADY_IN_PROGRESS`
         - `JOURNAL_ENTRY_ALREADY_EXISTS`
         - `RETRO_SUMMARY_ALREADY_IN_PROGRESS`
         - `GITHUB_REPOSITORY_ALREADY_LINKED`
@@ -3325,6 +3373,13 @@ components:
           maxItems: 10
           default: []
           description: '태그 목록 (각 1~20자, 최대 10개, 중복 제거됨). 생략 시 빈 배열.'
+        due_date_key:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          nullable: true
+          description: >
+            선택적 마감일(포함). date_key 이상이어야 한다.
+            생략/null = 마감일 없음(단일 날짜 할 일).
 
     TodoUpdateRequest:
       type: object
@@ -3374,6 +3429,13 @@ components:
           items: { type: string, minLength: 1, maxLength: 20 }
           maxItems: 10
           description: 'omit = unchanged, null = 빈 배열과 동일하게 처리(전체 삭제), array = 전체 교체. 각 1~20자, 최대 10개, 중복 제거됨.'
+        due_date_key:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}$'
+          nullable: true
+          description: >
+            omit = unchanged, null = 마감일 삭제, YYYY-MM-DD = 설정.
+            non-null 이면 date_key 이상이어야 한다.
 
     TodoResponse:
       type: object
@@ -3431,6 +3493,10 @@ components:
           type: array
           items: { type: string }
           description: '태그 목록 (0~10개, 각 1~20자). 없으면 빈 배열.'
+        due_date_key:
+          type: string
+          nullable: true
+          description: '마감일 (YYYY-MM-DD). null = 단일 날짜.'
 
     RecurrenceRule:
       type: object
@@ -3497,6 +3563,15 @@ components:
           description: >
             사용자가 직접 작성한 회고(journal_entries) 전체 개수. range 파라미터와 무관한 all-time 집계.
             AI 자동 생성 요약(retro_summaries)은 제외한다.
+
+    TagSearchResponse:
+      type: object
+      required: [tags]
+      properties:
+        tags:
+          type: array
+          items: { type: string }
+          description: '`q` 접두 매칭되는 태그명, 사용 빈도 내림차순(동률 시 가나다순). 최대 `limit`개.'
 
     ApiResponseTodo:
       allOf:
@@ -3760,17 +3835,25 @@ components:
       type: object
       required: [folders, entries, total, page, size]
       description: |
-        폴더의 직계 하위 폴더와 직계 회고록을 타입별로 분리해서 반환한다
-        (`GET /search` 의 `{todos, entries}` 분리와 동일한 이유 — 서로 다른
-        리소스를 억지로 하나의 배열에 합치지 않는다).
+        폴더의 직계 하위 폴더와 직계 회고록을, 둘을 합친 단일 시퀀스에 대한
+        페이지 조각으로 반환한다. 두 배열을 이어붙인 것이 그 페이지의 내용이며
+        `len(folders) + len(entries) <= size` 를 항상 만족한다. 타입별 분리는
+        그대로다(`GET /search` 의 `{todos, entries}` 분리와 동일한 이유 — 서로
+        다른 리소스를 억지로 하나의 배열에 합치지 않는다).
       properties:
         folders:
           type: array
           items: { $ref: "#/components/schemas/FolderResponse" }
+          description: 이 페이지 구간에 걸친 폴더 조각(직계 하위 폴더 전부가 아니다).
         entries:
           type: array
           items: { $ref: "#/components/schemas/EntryResponse" }
-        total: { type: integer, description: entries 전체 매칭 건수(페이지 무관) }
+          description: 이 페이지에서 폴더가 쓰고 남은 칸에 채운 회고록 조각.
+        total:
+          type: integer
+          description: >
+            폴더 총개수 + 회고록 총건수(페이지 무관). 폴더 개수는 retroType 과
+            무관하고, 회고록 건수에는 retroType 필터가 적용된다.
         page: { type: integer }
         size: { type: integer }
 

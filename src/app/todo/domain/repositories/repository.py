@@ -239,3 +239,13 @@ class ITodoRepository(ABC):
         tz            = completed_at → 로컬 날짜 변환용 IANA timezone.
         """
         ...
+
+    @abstractmethod
+    async def search_tags(self, user_id: str, query: str, limit: int) -> list[str]:
+        """태그 자동완성 검색 — 이 사용자의 전체 todo 이력(현재 로드 범위와 무관)에서
+        접두(prefix) 매칭되는 태그명을 사용 빈도 내림차순(동률 시 가나다순)으로 반환.
+
+        Postgres FTS(to_tsvector/to_tsquery, 'simple' config) 기반 prefix 매칭.
+        query 정제 후 매칭 가능한 토큰이 하나도 없으면(특수문자만 입력 등) 빈 리스트.
+        """
+        ...

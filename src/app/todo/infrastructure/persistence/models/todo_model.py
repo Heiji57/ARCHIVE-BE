@@ -32,6 +32,7 @@ class TodoModel(Base):
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String(20)), nullable=False, server_default=text("'{}'")
     )
+    due_date_key: Mapped[str | None] = mapped_column(String(10), nullable=True)
     # ── Google Calendar push 상태 (쓰기는 타겟 SQL 전용, merge 관여 안 함) ────────
     calendar_push_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)

@@ -38,6 +38,7 @@ class Todo(BaseEntity):
     original_start_time: datetime | None = None  # 슬롯 start_time (UTC, GCal instance ID 계산용)
     master_google_event_id: str | None = None  # base 의 GCal event id 스냅샷 (exception push용)
     tags: list[str] = field(default_factory=list)
+    due_date_key: str | None = None  # YYYY-MM-DD (inclusive), must be >= date_key
     # ── Google Calendar push 상태 (읽기 전용 뷰) ────────────────────────────────
     # 이 필드들은 응답 노출 / claim 결과 매핑을 위해 엔티티가 실어 나르지만,
     # 쓰기는 repo 의 타겟 SQL(mark_for_push / claim / heartbeat / finalize / bulk_clear)
@@ -67,11 +68,10 @@ class Todo(BaseEntity):
         self.completed_at = datetime.now(timezone.utc)
 
     def start(self) -> None:
-        if self.status == TaskStatus.DONE:
-            raise TodoAlreadyCompletedException()
         if self.status == TaskStatus.IN_PROGRESS:
             raise TodoAlreadyInProgressException()
         self.status = TaskStatus.IN_PROGRESS
+        self.completed_at = None
 
     def move_to(self, date_key: str) -> None:
         self.date_key = date_key

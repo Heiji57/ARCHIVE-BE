@@ -32,6 +32,7 @@ class CreateTodoUseCase:
             created_at=now,
             recurrence_rule=cmd.recurrence_rule,
             tags=cmd.tags,
+            due_date_key=cmd.due_date_key,
         )
         saved = await self._todo_repo.save(todo)
 

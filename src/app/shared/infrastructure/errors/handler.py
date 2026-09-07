@@ -65,6 +65,13 @@ from app.retrospective.domain.exceptions.exceptions import (
     SummaryTemplateNotFoundException,
 )
 from app.shared.domain.exceptions.base import BaseAppException
+from app.topic.domain.exceptions.exceptions import (
+    DigestAlreadyInProgressException,
+    DigestNotFoundException,
+    TopicLimitReachedException,
+    TopicNameDuplicatedException,
+    TopicNotFoundException,
+)
 from app.todo.domain.exceptions.exceptions import (
     TodoAlreadyCompletedException,
     TodoAlreadyInProgressException,
@@ -138,6 +145,14 @@ _STATUS_MAP: dict[str, int] = {
     TimezoneInvalidException.code: 422,
     SummaryReadinessUnsupportedException.code: 422,
     FolderCircularReferenceException.code: 422,
+    # ── Topic ────────────────────────────────────────────────────────────────
+    # 404
+    TopicNotFoundException.code: 404,
+    DigestNotFoundException.code: 404,
+    # 409
+    TopicNameDuplicatedException.code: 409,
+    TopicLimitReachedException.code: 409,
+    DigestAlreadyInProgressException.code: 409,
     # 429
     GitHubRateLimitedException.code: 429,
     SummaryRateLimitExceededException.code: 429,

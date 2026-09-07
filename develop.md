@@ -238,6 +238,7 @@ presentation  →  application  →  domain
 | `notification` | 알림 생성, 읽음 처리 |
 | `github` | GitHub 저장소 연결 (OAuth 토큰 재사용), 저장소 동기화, 커밋 조회, 회고 push, push target 설정 (`user_settings`에 통합) |
 | `search` | Todo + 회고 entry 통합검색(nav). 자체 domain/infrastructure 레이어 없음 — 다른 도메인의 repository 인터페이스(`ITodoRepository`, `IJournalEntryRepository`)를 조합만 하는 얇은 aggregator. |
+| `topic` | 토픽 선언 + AI 다이제스트. 사용자가 토픽(예: "ARCHIVE", "운동")을 정의하면 임베딩 기반 유사도 검색으로 관련 회고·할일을 추출해 마크다운 다이제스트 생성. pgvector HNSW 인덱스, embedding_queue outbox 패턴, 5분 주기 embed_stale beat task. |
 
 > GitHub API, Anthropic API는 도메인이 아닌 infrastructure 어댑터입니다. 별도 Bounded Context를 만들지 않습니다.
 
@@ -303,6 +304,7 @@ class TaskStatus(StrEnum):
 > - **예외 row**: `series_id = base_id`. `original_date_key` = 커버하는 슬롯 날짜(불변 키).
 > - **가상 인스턴스**: DB row 없음, 조회 시 확장. ID 형식 `"{base_id}::{slot_date}"`.
 > - 삭제 범위: `recurrenceScope = "this"` (슬롯 취소) / `"following"` (이후 분기) / `"all"` (전체 삭제).
+> - 수정(`PATCH /todos/{id}`) 범위: `recurrenceScope = "this"` (예외 row 실체화/수정) / `"following"` (이후 분기, 새 base 생성). 대상이 가상 인스턴스든 이미 실체화된 예외 row(`series_id` 있음)든 `UpdateTodoUseCase._update_following`으로 통일 처리 — 후자는 그 row 자신의 현재 필드값을 새 base의 baseline으로 이어받는다(개별 수정 내용 보존).
 > - race condition 방어: `ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL DO UPDATE`.
 > - `find_by_date_key`/`find_by_date_range` — 베이스 row 제외 필터 적용.
 > - `find_by_full_text` — 베이스 row + CANCELLED 예외 row 제외 (`status != 'cancelled'`).
@@ -1054,7 +1056,7 @@ CREATE TRIGGER todo_tsv_update
 | 엔드포인트 | 용도 | 소스 | 범위 |
 |---|---|---|---|
 | `GET /entries?retroType=X` | 초기 하이드레이션 | `journal_entries` | `from`/`to` 없으면 **최근 30일**(`DEFAULT_HYDRATION_DAYS`), 있으면 최대 366일 |
-| `GET /entries/paginated?retroType=X` | 회고록 목록 페이지 | daily→`journal_entries`, weekly/monthly/annual→`retro_summaries` | 전체 이력, 페이지네이션(기본 10개) |
+| `GET /entries/paginated?retroType=X` | 회고록 목록 페이지 | daily→`journal_entries`, weekly/monthly/annual→`retro_summaries` | 전체 이력, 페이지네이션(기본 16개) |
 | `GET /search?q=` | nav 통합검색 | `todos` + `journal_entries`(daily 만) | 타입별 상위 N개(기본 5) |
 
 **설계 결정**:

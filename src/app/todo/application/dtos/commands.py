@@ -44,6 +44,7 @@ class CreateTodoCommand:
     push_to_calendar: bool | None = None
     recurrence_rule: RecurrenceRule | None = None
     tags: list[str] = field(default_factory=list)
+    due_date_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -62,3 +63,4 @@ class UpdateTodoCommand:
     recurrence_scope: str = "this"
     recurrence_rule: RecurrenceRule | None = None
     tags: list[str] | _Unset = UNSET
+    due_date_key: str | None | _Unset = UNSET

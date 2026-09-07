@@ -4,12 +4,14 @@ from app.retrospective.domain.repositories.repository import IJournalEntryReposi
 from app.shared.domain.utils.period import monday_of_week
 from app.shared.domain.utils.period import today_in_tz
 from app.todo.application.dtos.queries import GetTodoStatsQuery
+from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import (
     ITodoRepository,
     TagCount,
     TodoStatsRaw,
     WeeklyTrendDay,
 )
+from app.todo.domain.utils.recurrence import generate_slots_from
 from app.todo.presentation.responses.responses import (
     TagCountResponse,
     TodoStatsResponse,
@@ -74,18 +76,65 @@ class GetTodoStatsUseCase:
         )
         retro_count = await self._entry_repo.count_all_by_user_id(query.user_id)
 
+        # ── 반복 Todo 가상 인스턴스 집계 ────────────────────────────────────────
+        # DB 쿼리는 exception row(series_id IS NOT NULL)만 집계하고,
+        # DB에 row가 없는 가상 인스턴스(미수정 반복 발생)는 누락된다.
+        # get_todos_by_date 와 동일한 패턴으로 가상 슬롯을 보정한다.
+        virtual_total = virtual_done = virtual_in_progress = virtual_not_start = 0
+
+        masters = await self._todo_repo.find_masters_overlapping(
+            query.user_id, range_from.isoformat(), range_to.isoformat()
+        )
+        if masters:
+            series_ids = [m.id for m in masters]
+            exceptions = await self._todo_repo.find_exceptions_batch(
+                query.user_id, series_ids, range_from.isoformat(), range_to.isoformat()
+            )
+            # (series_id, original_date_key) 로 점유된 슬롯 — cancelled 포함하여
+            # 해당 슬롯을 가상 인스턴스로 중복 집계하지 않는다.
+            covered: set[tuple[str, str]] = {
+                (e.series_id, e.original_date_key)  # type: ignore[index]
+                for e in exceptions
+            }
+
+            for master in masters:
+                slots = generate_slots_from(
+                    master.recurrence_rule,  # type: ignore[arg-type]
+                    master.date_key,
+                    range_from.isoformat(),
+                    range_to.isoformat(),
+                )
+                for slot in slots:
+                    if (master.id, slot) in covered:
+                        continue  # exception row 가 이미 DB 쿼리에서 집계됨
+                    virtual_total += 1
+                    if master.status == TaskStatus.DONE:
+                        virtual_done += 1
+                    elif master.status == TaskStatus.IN_PROGRESS:
+                        virtual_in_progress += 1
+                    else:
+                        virtual_not_start += 1
+
+        total = raw.total + virtual_total
+        done_count = raw.done_count + virtual_done
+        in_progress_count = raw.in_progress_count + virtual_in_progress
+        not_start_count = raw.not_start_count + virtual_not_start
+
         completion_rate = (
-            round(raw.done_count / raw.total * 100) if raw.total > 0 else 0
+            round(done_count / total * 100) if total > 0 else 0
         )
 
+        # weekly_trend·tag_distribution은 DB row(exception) 기준만 집계한다.
+        # virtual instance는 master의 completed_at이 슬롯별 날짜와 무관하여
+        # 날짜별 추세·태그 분포에 의미있는 값을 낼 수 없다.
         weekly_trend = _fill_weekly_slots(raw.weekly_trend, week_from, week_to)
 
         return TodoStatsResponse(
             range=query.range,
-            total=raw.total,
-            done_count=raw.done_count,
-            in_progress_count=raw.in_progress_count,
-            not_start_count=raw.not_start_count,
+            total=total,
+            done_count=done_count,
+            in_progress_count=in_progress_count,
+            not_start_count=not_start_count,
             completion_rate=completion_rate,
             weekly_trend=[WeeklyTrendDayResponse.from_domain(d) for d in weekly_trend],
             tag_distribution=[TagCountResponse.from_domain(t) for t in raw.tag_distribution],

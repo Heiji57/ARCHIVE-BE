@@ -32,6 +32,7 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 from app.shared.presentation.validators import parse_date_range
+from app.topic.domain.repositories.repository import IEmbeddingQueueRepository, IEntryChunkRepository
 
 router = APIRouter(prefix="/entries", tags=["entries"], route_class=DishkaRoute)
 
@@ -116,12 +117,12 @@ async def get_entries_paginated(
     current_user: UserContext = Depends(get_current_user),
     retro_type: str | None = Query(default=None, alias="retroType"),
     page: int = Query(default=1, ge=1),
-    size: int = Query(default=10, ge=1, le=_MAX_ENTRY_PAGE_SIZE),
+    size: int = Query(default=16, ge=1, le=_MAX_ENTRY_PAGE_SIZE),
     q: str | None = Query(default=None, min_length=1),
     from_date: str | None = Query(default=None, alias="from"),
     to_date: str | None = Query(default=None, alias="to"),
 ) -> ApiResponse[EntryPageResponse]:
-    """회고록 목록 페이지 — 최신순 페이지네이션(기본 10개씩).
+    """회고록 목록 페이지 — 최신순 페이지네이션(기본 16개씩).
 
     daily 는 journal_entries, weekly/monthly/annual 은 retro_summaries 에서
     조회한다(소스 테이블이 다름). retroType 미지정 시 두 소스를 합쳐 최신순으로
@@ -231,6 +232,7 @@ async def get_entry(
 async def create_entry(
     body: EntryCreateRequest,
     use_case: FromDishka[CreateEntryUseCase],
+    queue_repo: FromDishka[IEmbeddingQueueRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[EntryResponse]:
     entry = await use_case.execute(
@@ -242,6 +244,8 @@ async def create_entry(
             retro_type=body.retro_type,
         )
     )
+    if body.retro_type == RetroType.DAILY.value:
+        await queue_repo.enqueue("entry", entry.id, current_user.id)
     return ApiResponse.created(EntryResponse.from_entity(entry))
 
 
@@ -254,6 +258,7 @@ async def upsert_entry(
     entry_id: str,
     body: EntryUpsertRequest,
     use_case: FromDishka[UpsertEntryUseCase],
+    queue_repo: FromDishka[IEmbeddingQueueRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[EntryResponse]:
     entry = await use_case.execute(
@@ -266,6 +271,8 @@ async def upsert_entry(
             retro_type=body.retro_type,
         )
     )
+    if body.retro_type == RetroType.DAILY.value:
+        await queue_repo.enqueue("entry", entry.id, current_user.id)
     return ApiResponse.ok(EntryResponse.from_entity(entry))
 
 
@@ -309,7 +316,9 @@ async def move_entry_to_folder(
 async def delete_entry(
     entry_id: str,
     use_case: FromDishka[DeleteEntryUseCase],
+    chunk_repo: FromDishka[IEntryChunkRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[None]:
     await use_case.execute(entry_id=entry_id, user_id=current_user.id)
+    await chunk_repo.delete_by_entry(entry_id)
     return ApiResponse.ok(None)

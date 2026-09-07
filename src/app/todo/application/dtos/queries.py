@@ -19,3 +19,10 @@ class GetTodoStatsQuery:
     user_id: str
     range: str  # "today" | "week" | "month"
     tz: str     # IANA timezone
+
+
+@dataclass(frozen=True)
+class SearchTagsQuery:
+    user_id: str
+    query: str
+    limit: int

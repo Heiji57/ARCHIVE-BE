@@ -41,6 +41,7 @@ class TodoResponse(BaseModel):
     original_date_key: str | None
     recurrence_rule: RecurrenceRuleResponse | None
     tags: list[str]
+    due_date_key: str | None
 
     @classmethod
     def from_entity(cls, todo: Todo) -> "TodoResponse":
@@ -69,6 +70,7 @@ class TodoResponse(BaseModel):
                 else None
             ),
             tags=todo.tags,
+            due_date_key=todo.due_date_key,
         )
 
 
@@ -100,3 +102,7 @@ class TodoStatsResponse(BaseModel):
     weekly_trend: list[WeeklyTrendDayResponse]
     tag_distribution: list[TagCountResponse]
     retro_count: int
+
+
+class TagSearchResponse(BaseModel):
+    tags: list[str]

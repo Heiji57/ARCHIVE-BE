@@ -172,6 +172,28 @@ from app.retrospective.infrastructure.persistence.repositories.summary_template_
 from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
 from app.shared.infrastructure.config.retrospective import RetrospectiveConfig
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
+from app.shared.infrastructure.config.topic import TopicConfig
+from app.topic.application.use_cases.create_topic import CreateTopicUseCase
+from app.topic.application.use_cases.delete_topic import DeleteTopicUseCase
+from app.topic.application.use_cases.generate_digest import GenerateDigestUseCase
+from app.topic.application.use_cases.get_digest import GetDigestUseCase
+from app.topic.application.use_cases.get_topics import GetTopicsUseCase
+from app.topic.domain.repositories.repository import (
+    IEmbeddingQueueRepository,
+    IEntryChunkRepository,
+    ITopicDigestRepository,
+    ITopicRepository,
+    ITodoEmbeddingRepository,
+)
+from app.topic.infrastructure.persistence.repositories.chunk_repo import (
+    EmbeddingQueueRepository,
+    EntryChunkRepository,
+    TodoEmbeddingRepository,
+)
+from app.topic.infrastructure.persistence.repositories.topic_repo import (
+    TopicDigestRepository,
+    TopicRepository,
+)
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
@@ -179,6 +201,7 @@ from app.todo.application.use_cases.get_todo_stats import GetTodoStatsUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
 from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
+from app.todo.application.use_cases.search_tags import SearchTagsUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
@@ -284,6 +307,10 @@ class AppProvider(Provider):
     @provide
     def retrospective_config(self, config: AppConfig) -> RetrospectiveConfig:
         return config.retrospective
+
+    @provide
+    def topic_config(self, config: AppConfig) -> TopicConfig:
+        return config.topic
 
 
 class RequestProvider(Provider):
@@ -622,6 +649,10 @@ class RequestProvider(Provider):
         self, todo_repo: ITodoRepository, entry_repo: IJournalEntryRepository
     ) -> GetTodoStatsUseCase:
         return GetTodoStatsUseCase(todo_repo, entry_repo)
+
+    @provide
+    def search_tags_use_case(self, todo_repo: ITodoRepository) -> SearchTagsUseCase:
+        return SearchTagsUseCase(todo_repo)
 
     # ── Retro Template Use Cases ──────────────────────────────────────────────
 
@@ -970,3 +1001,59 @@ class RequestProvider(Provider):
         todo_repo: ITodoRepository,
     ) -> DisconnectCalendarUseCase:
         return DisconnectCalendarUseCase(connection_repo, event_repo, todo_repo)
+
+    # ── Topic Repositories ────────────────────────────────────────────────────
+
+    @provide
+    def topic_repo(self, session: AsyncSession) -> ITopicRepository:
+        return TopicRepository(session)
+
+    @provide
+    def topic_digest_repo(self, session: AsyncSession) -> ITopicDigestRepository:
+        return TopicDigestRepository(session)
+
+    @provide
+    def entry_chunk_repo(self, session: AsyncSession) -> IEntryChunkRepository:
+        return EntryChunkRepository(session)
+
+    @provide
+    def todo_embedding_repo(self, session: AsyncSession) -> ITodoEmbeddingRepository:
+        return TodoEmbeddingRepository(session)
+
+    @provide
+    def embedding_queue_repo(self, session: AsyncSession) -> IEmbeddingQueueRepository:
+        return EmbeddingQueueRepository(session)
+
+    # ── Topic Use Cases ───────────────────────────────────────────────────────
+
+    @provide
+    def create_topic_use_case(
+        self,
+        repo: ITopicRepository,
+        config: TopicConfig,
+    ) -> CreateTopicUseCase:
+        return CreateTopicUseCase(repo, config)
+
+    @provide
+    def delete_topic_use_case(self, repo: ITopicRepository) -> DeleteTopicUseCase:
+        return DeleteTopicUseCase(repo)
+
+    @provide
+    def get_topics_use_case(self, repo: ITopicRepository) -> GetTopicsUseCase:
+        return GetTopicsUseCase(repo)
+
+    @provide
+    def generate_digest_use_case(
+        self,
+        topic_repo: ITopicRepository,
+        digest_repo: ITopicDigestRepository,
+    ) -> GenerateDigestUseCase:
+        return GenerateDigestUseCase(topic_repo, digest_repo)
+
+    @provide
+    def get_digest_use_case(
+        self,
+        topic_repo: ITopicRepository,
+        digest_repo: ITopicDigestRepository,
+    ) -> GetDigestUseCase:
+        return GetDigestUseCase(topic_repo, digest_repo)

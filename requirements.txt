@@ -6,6 +6,7 @@ uvicorn[standard]>=0.32.0
 sqlalchemy>=2.0.0
 alembic>=1.14.0
 asyncpg>=0.30.0
+pgvector>=0.3.0
 
 # Cache / Queue
 redis>=5.2.0

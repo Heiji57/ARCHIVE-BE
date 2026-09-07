@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 
 from sqlalchemy import func, select, text
@@ -25,7 +26,8 @@ _TODO_RETURNING = (
     "todos.calendar_push_status, todos.google_event_id, todos.push_intent, "
     "todos.push_started_at, todos.sync_attempt_id, todos.push_retry_count, "
     "todos.recurrence_rule, todos.series_id, todos.original_date_key, "
-    "todos.original_start_time, todos.master_google_event_id, todos.tags"
+    "todos.original_start_time, todos.master_google_event_id, todos.tags, "
+    "todos.due_date_key"
 )
 
 # base event 를 date_key 조회에서 제외하는 필터
@@ -43,6 +45,20 @@ def _dict_to_rule(d: dict | None) -> RecurrenceRule | None:
     if d is None:
         return None
     return RecurrenceRule(unit=d["unit"], interval=d["interval"], until=d.get("until"))
+
+
+# tsquery 구문에서 의미를 갖는 특수문자 — 사용자 입력에 그대로 있으면 문법 오류가 나므로
+# 공백으로 치환해 제거한다. 남은 단어들에 접두(prefix) 연산자 :* 를 붙여 자동완성용
+# tsquery 를 직접 조립한다(plainto_tsquery 는 완성된 단어만 매칭해 prefix 검색 불가).
+_TSQUERY_SPECIAL_RE = re.compile(r"[&|!():<>*'\\]")
+
+
+def _prefix_tsquery(raw: str) -> str | None:
+    cleaned = _TSQUERY_SPECIAL_RE.sub(" ", raw)
+    words = cleaned.split()
+    if not words:
+        return None
+    return " & ".join(f"{w}:*" for w in words)
 
 
 class TodoRepository(ITodoRepository):
@@ -426,12 +442,12 @@ class TodoRepository(ITodoRepository):
                 "  id, user_id, title, status, date_key, description,"
                 "  start_time, end_time, timezone, created_at, updated_at, completed_at,"
                 "  recurrence_rule, series_id, original_date_key,"
-                "  original_start_time, master_google_event_id, tags"
+                "  original_start_time, master_google_event_id, tags, due_date_key"
                 ") VALUES ("
                 "  :id, :user_id, :title, :status, :date_key, :description,"
                 "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
                 "  CAST(:recurrence_rule AS jsonb), :series_id, :original_date_key,"
-                "  :original_start_time, :master_google_event_id, :tags"
+                "  :original_start_time, :master_google_event_id, :tags, :due_date_key"
                 ") ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL"
                 " DO UPDATE SET"
                 "  title=EXCLUDED.title, status=EXCLUDED.status, date_key=EXCLUDED.date_key,"
@@ -439,7 +455,7 @@ class TodoRepository(ITodoRepository):
                 "  end_time=EXCLUDED.end_time, timezone=EXCLUDED.timezone,"
                 "  updated_at=now(), completed_at=EXCLUDED.completed_at,"
                 "  master_google_event_id=EXCLUDED.master_google_event_id,"
-                "  tags=EXCLUDED.tags"
+                "  tags=EXCLUDED.tags, due_date_key=EXCLUDED.due_date_key"
                 f" RETURNING {_TODO_RETURNING}"
             ),
             {
@@ -461,6 +477,7 @@ class TodoRepository(ITodoRepository):
                 "original_start_time": todo.original_start_time,
                 "master_google_event_id": todo.master_google_event_id,
                 "tags": todo.tags,
+                "due_date_key": todo.due_date_key,
             },
         )
         row = result.first()
@@ -510,6 +527,7 @@ class TodoRepository(ITodoRepository):
             original_start_time=entity.original_start_time,
             master_google_event_id=entity.master_google_event_id,
             tags=entity.tags,
+            due_date_key=entity.due_date_key,
         )
 
     def _to_entity(self, model: TodoModel) -> Todo:
@@ -538,6 +556,7 @@ class TodoRepository(ITodoRepository):
             sync_attempt_id=model.sync_attempt_id,
             push_retry_count=model.push_retry_count,
             tags=model.tags,
+            due_date_key=model.due_date_key,
         )
 
     def _row_to_entity(self, row: Row) -> Todo:
@@ -569,6 +588,7 @@ class TodoRepository(ITodoRepository):
             sync_attempt_id=m["sync_attempt_id"],
             push_retry_count=m["push_retry_count"],
             tags=list(m["tags"]) if m["tags"] is not None else [],
+            due_date_key=m.get("due_date_key"),
         )
 
     def _mapping_to_entity(self, m: dict) -> Todo:
@@ -602,6 +622,7 @@ class TodoRepository(ITodoRepository):
             sync_attempt_id=m.get("sync_attempt_id"),
             push_retry_count=m.get("push_retry_count") or 0,
             tags=list(m.get("tags") or []),
+            due_date_key=m.get("due_date_key"),
         )
 
     # ── Stats ──────────────────────────────────────────────────────────────────
@@ -617,12 +638,12 @@ class TodoRepository(ITodoRepository):
     ) -> TodoStatsRaw:
         _NOT_BASE = "NOT (recurrence_rule IS NOT NULL AND series_id IS NULL)"
 
-        # 1) 상태별 카운트 (range 기준)
+        # 1) 상태별 카운트 (range 기준) — cancelled 제외 (get_todos_by_date 와 동일 정책)
         status_rows = await self._session.execute(
             text(
                 f"SELECT status, COUNT(*)::int AS cnt FROM todos"
                 f" WHERE user_id=:user_id AND date_key BETWEEN :from_d AND :to_d"
-                f" AND {_NOT_BASE}"
+                f" AND {_NOT_BASE} AND status != 'cancelled'"
                 f" GROUP BY status"
             ),
             {"user_id": user_id, "from_d": range_from, "to_d": range_to},
@@ -643,7 +664,7 @@ class TodoRepository(ITodoRepository):
             text(
                 f"SELECT unnest(tags) AS tag, COUNT(*)::int AS cnt FROM todos"
                 f" WHERE user_id=:user_id AND date_key BETWEEN :from_d AND :to_d"
-                f" AND cardinality(tags) > 0 AND {_NOT_BASE}"
+                f" AND cardinality(tags) > 0 AND {_NOT_BASE} AND status != 'cancelled'"
                 f" GROUP BY tag ORDER BY cnt DESC"
             ),
             {"user_id": user_id, "from_d": range_from, "to_d": range_to},
@@ -677,3 +698,23 @@ class TodoRepository(ITodoRepository):
             weekly_trend=weekly_trend,
             tag_distribution=tag_distribution,
         )
+
+    # ── 태그 자동완성 검색 ────────────────────────────────────────────────────────
+
+    async def search_tags(self, user_id: str, query: str, limit: int) -> list[str]:
+        tsquery = _prefix_tsquery(query)
+        if tsquery is None:
+            return []
+
+        result = await self._session.execute(
+            text(
+                "SELECT tag, COUNT(*)::int AS cnt FROM todos, unnest(tags) AS tag"
+                " WHERE user_id=:user_id"
+                "   AND to_tsvector('simple', tag) @@ to_tsquery('simple', :tsquery)"
+                " GROUP BY tag"
+                " ORDER BY cnt DESC, tag ASC"
+                " LIMIT :limit"
+            ),
+            {"user_id": user_id, "tsquery": tsquery, "limit": limit},
+        )
+        return [row.tag for row in result]
