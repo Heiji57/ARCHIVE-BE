@@ -5,7 +5,8 @@ from dataclasses import dataclass
 class CreateEntryCommand:
     user_id: str
     date_key: str
-    title: str
+    # None/공백이면 서버가 locale 기반 기본 제목을 채운다.
+    title: str | None
     content: str
     retro_type: str
 
@@ -15,6 +16,7 @@ class UpsertEntryCommand:
     entry_id: str
     user_id: str
     date_key: str
-    title: str
+    # 빈 문자열이면 서버가 locale 기반 기본 제목을 채운다.
+    title: str | None
     content: str
     retro_type: str

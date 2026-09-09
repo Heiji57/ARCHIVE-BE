@@ -7,6 +7,20 @@ class GetTopicsQuery:
 
 
 @dataclass(frozen=True)
+class GetTopicStatsQuery:
+    user_id: str
+    topic_id: str
+
+
+@dataclass(frozen=True)
+class GetTopicSourcesQuery:
+    user_id: str
+    topic_id: str
+    page: int = 1
+    size: int = 20
+
+
+@dataclass(frozen=True)
 class GetDigestQuery:
     user_id: str
     topic_id: str

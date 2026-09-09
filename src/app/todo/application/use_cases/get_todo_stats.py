@@ -19,6 +19,11 @@ from app.todo.presentation.responses.responses import (
 )
 
 
+# range=all 의 하한. 서비스 개시 이전을 넉넉히 덮으면서, 반복 Todo 가상 슬롯 생성이
+# 유계로 끝나도록(1일 간격이어도 1만 슬롯 미만) 잡은 값.
+_ALL_RANGE_FLOOR = date(2000, 1, 1)
+
+
 def _iso_week_bounds(today: date) -> tuple[date, date]:
     monday = monday_of_week(today)
     return monday, monday + timedelta(days=6)
@@ -29,6 +34,11 @@ def _range_bounds(today: date, range_: str) -> tuple[date, date]:
         return today, today
     if range_ == "week":
         return _iso_week_bounds(today)
+    if range_ == "all":
+        # 상한은 today — "이미 쌓인" 개수이므로 아직 오지 않은 반복 발생은 세지 않는다.
+        # 상한을 date.max 로 두면 종료일(until) 없는 반복 Todo 마다 가상 슬롯 생성 루프가
+        # 서기 9999년까지 수백만 번 돌아 요청이 사실상 멈춘다.
+        return _ALL_RANGE_FLOOR, today
     # month
     first = today.replace(day=1)
     if today.month == 12:

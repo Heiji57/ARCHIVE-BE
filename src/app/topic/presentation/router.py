@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from redis.asyncio import Redis
 from sse_starlette.sse import EventSourceResponse
 
@@ -10,24 +10,52 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.presentation.schemas.response import ApiResponse
+from app.todo.presentation.responses.responses import TagCountResponse
 from app.topic.application.dtos.commands import (
     CreateTopicCommand,
     DeleteTopicCommand,
     GenerateDigestCommand,
+    UpdateTopicCommand,
 )
-from app.topic.application.dtos.queries import GetDigestByIdQuery, GetDigestQuery, GetTopicsQuery
+from app.topic.application.dtos.queries import (
+    GetDigestByIdQuery,
+    GetDigestQuery,
+    GetTopicSourcesQuery,
+    GetTopicStatsQuery,
+    GetTopicsQuery,
+)
 from app.topic.application.use_cases.create_topic import CreateTopicUseCase
 from app.topic.application.use_cases.delete_topic import DeleteTopicUseCase
 from app.topic.application.use_cases.generate_digest import GenerateDigestUseCase
 from app.topic.application.use_cases.get_digest import GetDigestUseCase
+from app.topic.application.use_cases.get_topic_sources import GetTopicSourcesUseCase
+from app.topic.application.use_cases.get_topic_stats import GetTopicStatsUseCase
 from app.topic.application.use_cases.get_topics import GetTopicsUseCase
+from app.topic.application.use_cases.update_topic import UpdateTopicUseCase
 from app.topic.domain.models.value_objects import DigestStatus
-from app.topic.presentation.requests.requests import CreateTopicRequest
-from app.topic.presentation.responses.responses import TopicDigestResponse, TopicResponse
+from app.topic.presentation.requests.requests import CreateTopicRequest, UpdateTopicRequest
+from app.topic.presentation.responses.responses import (
+    EntryCountsResponse,
+    TodoCountsResponse,
+    TopicDigestResponse,
+    TopicResponse,
+    TopicSourcePageResponse,
+    TopicSourceResponse,
+    TopicStatsResponse,
+)
 
 router = APIRouter(prefix="/topics", tags=["topics"], route_class=DishkaRoute)
 
 _SSE_TIMEOUT = 120  # seconds
+_TERMINAL_STATUSES = {DigestStatus.COMPLETED.value, DigestStatus.FAILED.value}
+
+
+def _is_terminal(payload: str) -> bool:
+    """워커가 보낸 이벤트가 종료 상태인지. 파싱 실패 시 스트림을 닫아 매달리지 않게 한다."""
+    try:
+        return json.loads(payload).get("status") in _TERMINAL_STATUSES
+    except (json.JSONDecodeError, AttributeError):
+        return True
 
 
 def _to_topic_response(topic) -> TopicResponse:
@@ -38,6 +66,14 @@ def _to_topic_response(topic) -> TopicResponse:
         created_at=topic.created_at,
         updated_at=topic.updated_at,
     )
+
+
+def _to_topic_summary_response(summary) -> TopicResponse:
+    response = _to_topic_response(summary.topic)
+    response.entry_count = summary.entry_count
+    response.todo_count = summary.todo_count
+    response.digest_watermark_date_key = summary.digest_watermark_date_key
+    return response
 
 
 def _to_digest_response(digest) -> TopicDigestResponse:
@@ -73,8 +109,91 @@ async def get_topics(
     use_case: FromDishka[GetTopicsUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[list[TopicResponse]]:
-    topics = await use_case.execute(GetTopicsQuery(user_id=current_user.id))
-    return ApiResponse.ok([_to_topic_response(t) for t in topics])
+    summaries = await use_case.execute(GetTopicsQuery(user_id=current_user.id))
+    return ApiResponse.ok([_to_topic_summary_response(s) for s in summaries])
+
+
+@router.patch("/{topic_id}")
+async def update_topic(
+    topic_id: str,
+    body: UpdateTopicRequest,
+    use_case: FromDishka[UpdateTopicUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[TopicResponse]:
+    topic = await use_case.execute(
+        UpdateTopicCommand(
+            user_id=current_user.id,
+            topic_id=topic_id,
+            name=body.name,
+            description=body.description,
+        )
+    )
+    return ApiResponse.ok(_to_topic_response(topic))
+
+
+@router.get("/{topic_id}/stats")
+async def get_topic_stats(
+    topic_id: str,
+    use_case: FromDishka[GetTopicStatsUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[TopicStatsResponse]:
+    stats = await use_case.execute(
+        GetTopicStatsQuery(user_id=current_user.id, topic_id=topic_id)
+    )
+    return ApiResponse.ok(
+        TopicStatsResponse(
+            topic_id=stats.topic_id,
+            entry_counts=EntryCountsResponse(
+                daily=stats.entry_counts.daily,
+                weekly=stats.entry_counts.weekly,
+                monthly=stats.entry_counts.monthly,
+                yearly=stats.entry_counts.yearly,
+                total=stats.entry_counts.total,
+            ),
+            todo_counts=TodoCountsResponse(
+                total=stats.todo_counts.total,
+                completed=stats.todo_counts.completed,
+            ),
+            tag_counts=[TagCountResponse.from_domain(t) for t in stats.tag_counts],
+            tag_count_total=stats.tag_count_total,
+            period_start_date_key=stats.period_start_date_key,
+            period_end_date_key=stats.period_end_date_key,
+            unreflected_entry_count=stats.unreflected_entry_count,
+        )
+    )
+
+
+@router.get("/{topic_id}/sources")
+async def get_topic_sources(
+    topic_id: str,
+    use_case: FromDishka[GetTopicSourcesUseCase],
+    current_user: UserContext = Depends(get_current_user),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+) -> ApiResponse[TopicSourcePageResponse]:
+    result = await use_case.execute(
+        GetTopicSourcesQuery(
+            user_id=current_user.id, topic_id=topic_id, page=page, size=size
+        )
+    )
+    return ApiResponse.ok(
+        TopicSourcePageResponse(
+            items=[
+                TopicSourceResponse(
+                    kind=s.kind,
+                    id=s.id,
+                    title=s.title,
+                    date_key=s.date_key,
+                    retro_type=s.retro_type,
+                )
+                for s in result.items
+            ],
+            total=result.total,
+            page=result.page,
+            size=result.size,
+            digest_watermark_date_key=result.digest_watermark_date_key,
+        )
+    )
 
 
 @router.delete("/{topic_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -136,8 +255,11 @@ async def stream_digest(
         try:
             async with asyncio.timeout(_SSE_TIMEOUT):
                 async for message in pubsub.listen():
-                    if message["type"] == "message":
-                        yield {"data": message["data"]}
+                    if message["type"] != "message":
+                        continue
+                    yield {"data": message["data"]}
+                    # in_progress 진행률 이벤트는 계속 흘리고, terminal 상태에서만 닫는다.
+                    if _is_terminal(message["data"]):
                         break
         except asyncio.TimeoutError:
             yield {"data": json.dumps({"status": "timeout"})}

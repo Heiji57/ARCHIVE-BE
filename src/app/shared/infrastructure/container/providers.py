@@ -173,11 +173,15 @@ from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
 from app.shared.infrastructure.config.retrospective import RetrospectiveConfig
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
 from app.shared.infrastructure.config.topic import TopicConfig
+from app.topic.application.services.topic_matcher import TopicMatcher
 from app.topic.application.use_cases.create_topic import CreateTopicUseCase
 from app.topic.application.use_cases.delete_topic import DeleteTopicUseCase
 from app.topic.application.use_cases.generate_digest import GenerateDigestUseCase
 from app.topic.application.use_cases.get_digest import GetDigestUseCase
+from app.topic.application.use_cases.get_topic_sources import GetTopicSourcesUseCase
+from app.topic.application.use_cases.get_topic_stats import GetTopicStatsUseCase
 from app.topic.application.use_cases.get_topics import GetTopicsUseCase
+from app.topic.application.use_cases.update_topic import UpdateTopicUseCase
 from app.topic.domain.repositories.repository import (
     IEmbeddingQueueRepository,
     IEntryChunkRepository,
@@ -185,6 +189,8 @@ from app.topic.domain.repositories.repository import (
     ITopicRepository,
     ITodoEmbeddingRepository,
 )
+from app.topic.infrastructure.ai.embedding_service import EmbeddingService
+from app.topic.infrastructure.cache.topic_stats_cache import TopicStatsCache
 from app.topic.infrastructure.persistence.repositories.chunk_repo import (
     EmbeddingQueueRepository,
     EntryChunkRepository,
@@ -311,6 +317,15 @@ class AppProvider(Provider):
     @provide
     def topic_config(self, config: AppConfig) -> TopicConfig:
         return config.topic
+
+    @provide
+    def topic_stats_cache(self, config: AppConfig) -> TopicStatsCache:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return TopicStatsCache(redis, config.topic.topic_stats_cache_ttl_seconds)
+
+    @provide
+    def embedding_service(self, config: AppConfig) -> EmbeddingService:
+        return EmbeddingService(config.ai)
 
 
 class RequestProvider(Provider):
@@ -700,15 +715,19 @@ class RequestProvider(Provider):
 
     @provide
     def create_entry_use_case(
-        self, entry_repo: IJournalEntryRepository
+        self,
+        entry_repo: IJournalEntryRepository,
+        settings_repo: IUserSettingsRepository,
     ) -> CreateEntryUseCase:
-        return CreateEntryUseCase(entry_repo)
+        return CreateEntryUseCase(entry_repo, settings_repo)
 
     @provide
     def upsert_entry_use_case(
-        self, entry_repo: IJournalEntryRepository
+        self,
+        entry_repo: IJournalEntryRepository,
+        settings_repo: IUserSettingsRepository,
     ) -> UpsertEntryUseCase:
-        return UpsertEntryUseCase(entry_repo)
+        return UpsertEntryUseCase(entry_repo, settings_repo)
 
     @provide
     def get_entry_use_case(
@@ -1039,8 +1058,56 @@ class RequestProvider(Provider):
         return DeleteTopicUseCase(repo)
 
     @provide
-    def get_topics_use_case(self, repo: ITopicRepository) -> GetTopicsUseCase:
-        return GetTopicsUseCase(repo)
+    def update_topic_use_case(self, repo: ITopicRepository) -> UpdateTopicUseCase:
+        return UpdateTopicUseCase(repo)
+
+    @provide
+    def topic_matcher(
+        self,
+        embedding_service: EmbeddingService,
+        chunk_repo: IEntryChunkRepository,
+        todo_emb_repo: ITodoEmbeddingRepository,
+        entry_repo: IJournalEntryRepository,
+        todo_repo: ITodoRepository,
+        cache: TopicStatsCache,
+        config: TopicConfig,
+    ) -> TopicMatcher:
+        return TopicMatcher(
+            embedding_service,
+            chunk_repo,
+            todo_emb_repo,
+            entry_repo,
+            todo_repo,
+            cache,
+            config,
+        )
+
+    @provide
+    def get_topics_use_case(
+        self,
+        repo: ITopicRepository,
+        digest_repo: ITopicDigestRepository,
+        matcher: TopicMatcher,
+    ) -> GetTopicsUseCase:
+        return GetTopicsUseCase(repo, digest_repo, matcher)
+
+    @provide
+    def get_topic_stats_use_case(
+        self,
+        topic_repo: ITopicRepository,
+        digest_repo: ITopicDigestRepository,
+        matcher: TopicMatcher,
+    ) -> GetTopicStatsUseCase:
+        return GetTopicStatsUseCase(topic_repo, digest_repo, matcher)
+
+    @provide
+    def get_topic_sources_use_case(
+        self,
+        topic_repo: ITopicRepository,
+        digest_repo: ITopicDigestRepository,
+        matcher: TopicMatcher,
+    ) -> GetTopicSourcesUseCase:
+        return GetTopicSourcesUseCase(topic_repo, digest_repo, matcher)
 
     @provide
     def generate_digest_use_case(

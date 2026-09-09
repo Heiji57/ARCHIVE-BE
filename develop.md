@@ -1123,6 +1123,11 @@ auth:pwreset:cooldown:{email}               # TTL: PASSWORD_RESET_COOLDOWN_TTL_S
 auth:email:code:{email}                     # TTL: EMAIL_VERIFY_CODE_TTL_SECONDS
 auth:email:cooldown:{email}                 # TTL: EMAIL_COOLDOWN_TTL_SECONDS
 auth:email:verified:{email}                 # TTL: EMAIL_VERIFIED_TTL_SECONDS
+summary:usage:{user_id}:{summary_type}      # Sorted Set, AI 요약 sliding window 한도
+topic:match:{topic_id}:{fingerprint}        # TTL: TOPIC_STATS_CACHE_TTL_SECONDS (기본 300)
+                                            # fingerprint = sha1(name|description)[:12] —
+                                            # 주제 이름/설명이 바뀌면 키가 갈려 자동 무효화된다.
+                                            # GET /topics, /stats, /sources 가 공유한다.
 
 # DB 3 — 세션 (§18 Session 보안 정책 참조)
 auth:session:{sessionId}                    # TTL: REFRESH_TOKEN_EXPIRE_DAYS * 86400

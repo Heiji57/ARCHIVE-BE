@@ -3,8 +3,10 @@ from abc import ABC, abstractmethod
 from app.topic.domain.models.topic import (
     EmbeddingQueueItem,
     EntryChunk,
-    Topic,
+    SimilarChunk,
+    SimilarTodo,
     TodoEmbedding,
+    Topic,
     TopicDigest,
 )
 from app.topic.domain.models.value_objects import DigestStatus
@@ -67,7 +69,7 @@ class IEntryChunkRepository(ABC):
         since_date_key: str | None,
         threshold: float,
         limit: int,
-    ) -> list[EntryChunk]: ...
+    ) -> list[SimilarChunk]: ...
 
 
 class ITodoEmbeddingRepository(ABC):
@@ -85,7 +87,7 @@ class ITodoEmbeddingRepository(ABC):
         since_date_key: str | None,
         threshold: float,
         limit: int,
-    ) -> list[TodoEmbedding]: ...
+    ) -> list[SimilarTodo]: ...
 
 
 class IEmbeddingQueueRepository(ABC):

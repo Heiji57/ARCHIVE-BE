@@ -35,6 +35,11 @@ class ITodoRepository(ABC):
     async def find_by_id(self, id: str, user_id: str) -> Todo | None: ...
 
     @abstractmethod
+    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[Todo]:
+        """find_by_id 의 batch 버전 — 토픽 매칭 결과(todo_id 목록)를 1회 IN 조회로 실체화."""
+        ...
+
+    @abstractmethod
     async def find_by_date_key(self, user_id: str, date_key: str) -> list[Todo]: ...
 
     @abstractmethod

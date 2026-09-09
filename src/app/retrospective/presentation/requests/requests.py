@@ -9,7 +9,8 @@ _SUMMARY_EDIT_MAX_LEN = 50_000
 
 class EntryCreateRequest(BaseModel):
     date_key: str
-    title: str
+    # 생략/공백 시 서버가 "{date_key} {회고 종류}" 로 채운다 (사용자 locale 기준).
+    title: str | None = None
     content: str = ""
     retro_type: str = "daily"
 

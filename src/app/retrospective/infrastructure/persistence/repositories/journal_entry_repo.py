@@ -29,6 +29,17 @@ class JournalEntryRepository(IJournalEntryRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[JournalEntry]:
+        if not ids:
+            return []
+        result = await self._session.execute(
+            select(JournalEntryModel).where(
+                JournalEntryModel.user_id == user_id,
+                JournalEntryModel.id.in_(ids),
+            )
+        )
+        return [self._to_entity(m) for m in result.scalars().all()]
+
     async def id_exists(self, id: str) -> bool:
         result = await self._session.execute(
             select(JournalEntryModel.id).where(JournalEntryModel.id == id).limit(1)

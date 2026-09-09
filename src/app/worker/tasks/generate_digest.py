@@ -4,11 +4,13 @@
   1. mark in_progress
   2. 사용자의 embedding_queue 잔여 항목 사전 동기화
   3. 토픽 쿼리 벡터 생성
-  4. entry chunk / todo embedding 유사도 검색 (watermark 이후)
-  5. Gemini 로 마크다운 다이제스트 생성
-  6. mark completed + watermark 갱신 + Redis pub/sub 알림
+  4. entry chunk / todo embedding 유사도 검색 (주제 전체 — 최초/재생성 동일)
+  5. 프롬프트 조립 — 소스를 접어 넣으며 in_progress 진행률 pub/sub 발행
+  6. Gemini 로 마크다운 다이제스트 생성
+  7. mark completed + watermark 갱신 + Redis pub/sub 알림
 """
 import json
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 import httpx
@@ -50,10 +52,24 @@ Requirements:
 """
 
 
-def _build_prompt(topic_name: str, topic_description: str, chunks: list, todos: list) -> str:
+def _source_total(chunks: list, todos: list) -> int:
+    """진행률의 분모 — 회고는 청크가 아니라 엔트리 단위로 센다(FE 가 "회고 N개"로 표시)."""
+    return len({c.entry_id for c in chunks}) + len(todos)
+
+
+async def _build_prompt(
+    topic_name: str,
+    topic_description: str,
+    chunks: list,
+    todos: list,
+    on_source: Callable[[int], Awaitable[None]] | None = None,
+) -> str:
+    """프롬프트를 조립하며, 소스 하나를 접어 넣을 때마다 on_source(누적 처리 수)를 호출한다."""
     lines = [_SYSTEM_PROMPT, "", f"## Topic: {topic_name}"]
     if topic_description:
         lines.append(f"Description: {topic_description}")
+
+    processed = 0
 
     if chunks:
         lines += ["", "### Journal Entry Excerpts"]
@@ -63,12 +79,18 @@ def _build_prompt(topic_name: str, topic_description: str, chunks: list, todos: 
             if chunk.entry_id not in seen:
                 seen[chunk.entry_id] = chunk.date_key
                 lines.append(f"\n**{chunk.date_key}**")
+                processed += 1
+                if on_source is not None:
+                    await on_source(processed)
             lines.append(f"- {chunk.text}")
 
     if todos:
         lines += ["", "### Related Todos"]
         for todo in todos:
             lines.append(f"- [{todo.status}] ({todo.date_key}) {todo.text}")
+            processed += 1
+            if on_source is not None:
+                await on_source(processed)
 
     lines += ["", "---", "", "Generate a markdown digest for this topic based on the above content."]
     return "\n".join(lines)
@@ -98,7 +120,6 @@ async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> N
         if digest.status == DigestStatus.IN_PROGRESS:
             return  # 중복 실행 방어
         await digest_repo.update_status(digest_id, DigestStatus.IN_PROGRESS)
-        watermark = digest.watermark_date_key
 
     # 사전 동기화: 이 사용자의 embedding_queue 잔여 항목 처리
     try:
@@ -131,26 +152,49 @@ async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> N
             chunks = await chunk_repo.search_similar(
                 user_id=user_id,
                 query_embedding=query_embedding,
-                since_date_key=watermark,
+                # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
+                # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
+                since_date_key=None,
                 threshold=cfg.topic_similarity_threshold,
                 limit=cfg.topic_search_limit,
             )
             todos = await todo_emb_repo.search_similar(
                 user_id=user_id,
                 query_embedding=query_embedding,
-                since_date_key=watermark,
+                # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
+                # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
+                since_date_key=None,
                 threshold=cfg.topic_similarity_threshold,
                 limit=cfg.topic_search_limit,
             )
 
-        prompt = _build_prompt(topic.name, topic.description, chunks, todos)
+        # 진행률 이벤트 — 소스를 프롬프트에 접어 넣는 실제 진척을 배치 단위로 흘린다.
+        # (AI 생성 구간 자체는 단일 호출이라 더 잘게 쪼개지지 않는다)
+        total_sources = _source_total(chunks, todos)
+        progress_batch = cfg.topic_digest_progress_batch_size
+
+        async def publish_progress(processed: int) -> None:
+            if processed % progress_batch and processed != total_sources:
+                return
+            await redis.publish(
+                _REDIS_CHANNEL.format(digest_id=digest_id),
+                json.dumps(
+                    {"status": "in_progress", "processed": processed, "total": total_sources}
+                ),
+            )
+
+        await publish_progress(0)
+        prompt = await _build_prompt(
+            topic.name, topic.description, chunks, todos, on_source=publish_progress
+        )
 
         # AI 호출 — DB transaction 밖
         from app.topic.infrastructure.ai.gemini_client import TopicGeminiClient
         gemini = TopicGeminiClient(settings.ai)
         content = await gemini.generate(prompt)
 
-        # T2: complete + watermark
+        # T2: complete + watermark. watermark 는 이제 "어디까지 읽었나"(증분 커서)가 아니라
+        # "이 문서가 언제 기준인가"를 뜻한다 — FE 배너/미반영 개수 계산의 기준점.
         async with factory.begin() as session:
             digest_repo = TopicDigestRepository(session)
             await digest_repo.update_status(digest_id, DigestStatus.COMPLETED, content)

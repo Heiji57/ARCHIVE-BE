@@ -149,6 +149,17 @@ class TodoRepository(ITodoRepository):
         row = result.first()
         return self._row_to_entity(row) if row else None
 
+    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[Todo]:
+        if not ids:
+            return []
+        result = await self._session.execute(
+            select(TodoModel).where(
+                TodoModel.user_id == user_id,
+                TodoModel.id.in_(set(ids)),
+            )
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     async def find_by_google_event_ids(
         self, user_id: str, google_event_ids: list[str]
     ) -> list[Todo]:

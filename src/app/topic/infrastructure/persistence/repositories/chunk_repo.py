@@ -1,11 +1,20 @@
 from datetime import datetime, timezone
+from typing import Any
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import Select, delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.domain.utils.id import generate_id
-from app.topic.domain.models.topic import EntryChunk, EmbeddingQueueItem, TodoEmbedding
+from app.todo.domain.models.value_objects import TaskStatus
+from app.topic.domain.models.topic import (
+    EmbeddingQueueItem,
+    EntryChunk,
+    SimilarChunk,
+    SimilarTodo,
+    TodoEmbedding,
+)
 from app.topic.domain.repositories.repository import (
     IEmbeddingQueueRepository,
     IEntryChunkRepository,
@@ -16,6 +25,22 @@ from app.topic.infrastructure.persistence.models.chunk_model import (
     EntryChunkModel,
     TodoEmbeddingModel,
 )
+
+# 매칭 대상 할일 상태 — not-start 는 "아직 한 일이 없다"라 주제 집계에서 제외한다.
+_MATCHED_TODO_STATUSES = (TaskStatus.IN_PROGRESS.value, TaskStatus.DONE.value)
+
+
+async def _fetch_in_savepoint(session: AsyncSession, stmt: Select[Any]) -> list[Row[Any]]:
+    """벡터 검색을 SAVEPOINT 안에서 돌린다.
+
+    Postgres 는 트랜잭션 안에서 문장 하나가 깨지면 트랜잭션 전체를 폐기한다. 이 검색은
+    호출자가 실패를 삼키고 degrade 하도록 설계돼 있어서(`GetTopicsUseCase` 의 카운트),
+    가드가 없으면 예외를 삼킨 뒤 같은 세션에서 이어지는 조회가 전부
+    InFailedSQLTransaction 으로 죽는다 — 목록 API 가 500 이 된다. SAVEPOINT 로 감싸면
+    실패가 이 문장까지만 되감기고 바깥 트랜잭션은 살아남는다.
+    """
+    async with session.begin_nested():
+        return list((await session.execute(stmt)).all())
 
 
 class EntryChunkRepository(IEntryChunkRepository):
@@ -60,46 +85,41 @@ class EntryChunkRepository(IEntryChunkRepository):
         since_date_key: str | None,
         threshold: float,
         limit: int,
-    ) -> list[EntryChunk]:
-        emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+    ) -> list[SimilarChunk]:
+        # 코사인 유사도 >= threshold 는 코사인 거리 <= 1 - threshold 와 동치. 거리 쪽으로
+        # 세워야 <=> 연산자와 HNSW(vector_cosine_ops) 인덱스를 그대로 태울 수 있다.
+        distance = EntryChunkModel.embedding.cosine_distance(query_embedding)
+        conditions = [
+            EntryChunkModel.user_id == user_id,
+            EntryChunkModel.embedding.is_not(None),
+            distance <= 1 - threshold,
+        ]
         if since_date_key:
-            result = await self._session.execute(
-                text(
-                    "SELECT id, entry_id, user_id, chunk_index, text, date_key, embedding, created_at "
-                    "FROM topic_entry_chunks "
-                    "WHERE user_id = :user_id "
-                    "  AND date_key >= :since "
-                    "  AND embedding IS NOT NULL "
-                    "  AND 1 - (embedding <=> :emb::vector) >= :threshold "
-                    "ORDER BY embedding <=> :emb::vector "
-                    "LIMIT :limit"
-                ),
-                {"user_id": user_id, "since": since_date_key, "emb": emb_str, "threshold": threshold, "limit": limit},
+            conditions.append(EntryChunkModel.date_key >= since_date_key)
+
+        # embedding 은 일부러 SELECT 하지 않는다 — 호출자(매칭/프롬프트 조립)가 쓰지 않는데
+        # 행마다 768 float 을 실어오면 limit 만큼 그대로 낭비된다.
+        stmt = (
+            select(
+                EntryChunkModel.id,
+                EntryChunkModel.entry_id,
+                EntryChunkModel.chunk_index,
+                EntryChunkModel.text,
+                EntryChunkModel.date_key,
             )
-        else:
-            result = await self._session.execute(
-                text(
-                    "SELECT id, entry_id, user_id, chunk_index, text, date_key, embedding, created_at "
-                    "FROM topic_entry_chunks "
-                    "WHERE user_id = :user_id "
-                    "  AND embedding IS NOT NULL "
-                    "  AND 1 - (embedding <=> :emb::vector) >= :threshold "
-                    "ORDER BY embedding <=> :emb::vector "
-                    "LIMIT :limit"
-                ),
-                {"user_id": user_id, "emb": emb_str, "threshold": threshold, "limit": limit},
-            )
-        rows = result.fetchall()
+            .where(*conditions)
+            .order_by(distance)
+            .limit(limit)
+        )
+
+        rows = await _fetch_in_savepoint(self._session, stmt)
         return [
-            EntryChunk(
+            SimilarChunk(
                 id=row.id,
                 entry_id=row.entry_id,
-                user_id=row.user_id,
                 chunk_index=row.chunk_index,
                 text=row.text,
                 date_key=row.date_key,
-                embedding=list(row.embedding) if row.embedding is not None else None,
-                created_at=row.created_at,
             )
             for row in rows
         ]
@@ -144,48 +164,39 @@ class TodoEmbeddingRepository(ITodoEmbeddingRepository):
         since_date_key: str | None,
         threshold: float,
         limit: int,
-    ) -> list[TodoEmbedding]:
-        emb_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+    ) -> list[SimilarTodo]:
+        # 거리 부등식 변환·embedding 미조회·SAVEPOINT 이유는 EntryChunkRepository 쪽 주석 참고.
+        distance = TodoEmbeddingModel.embedding.cosine_distance(query_embedding)
+        conditions = [
+            TodoEmbeddingModel.user_id == user_id,
+            TodoEmbeddingModel.status.in_(_MATCHED_TODO_STATUSES),
+            TodoEmbeddingModel.embedding.is_not(None),
+            distance <= 1 - threshold,
+        ]
         if since_date_key:
-            result = await self._session.execute(
-                text(
-                    "SELECT id, todo_id, user_id, text, date_key, status, embedding, created_at "
-                    "FROM topic_todo_embeddings "
-                    "WHERE user_id = :user_id "
-                    "  AND date_key >= :since "
-                    "  AND status IN ('in_progress', 'done') "
-                    "  AND embedding IS NOT NULL "
-                    "  AND 1 - (embedding <=> :emb::vector) >= :threshold "
-                    "ORDER BY embedding <=> :emb::vector "
-                    "LIMIT :limit"
-                ),
-                {"user_id": user_id, "since": since_date_key, "emb": emb_str, "threshold": threshold, "limit": limit},
+            conditions.append(TodoEmbeddingModel.date_key >= since_date_key)
+
+        stmt = (
+            select(
+                TodoEmbeddingModel.id,
+                TodoEmbeddingModel.todo_id,
+                TodoEmbeddingModel.text,
+                TodoEmbeddingModel.date_key,
+                TodoEmbeddingModel.status,
             )
-        else:
-            result = await self._session.execute(
-                text(
-                    "SELECT id, todo_id, user_id, text, date_key, status, embedding, created_at "
-                    "FROM topic_todo_embeddings "
-                    "WHERE user_id = :user_id "
-                    "  AND status IN ('in_progress', 'done') "
-                    "  AND embedding IS NOT NULL "
-                    "  AND 1 - (embedding <=> :emb::vector) >= :threshold "
-                    "ORDER BY embedding <=> :emb::vector "
-                    "LIMIT :limit"
-                ),
-                {"user_id": user_id, "emb": emb_str, "threshold": threshold, "limit": limit},
-            )
-        rows = result.fetchall()
+            .where(*conditions)
+            .order_by(distance)
+            .limit(limit)
+        )
+
+        rows = await _fetch_in_savepoint(self._session, stmt)
         return [
-            TodoEmbedding(
+            SimilarTodo(
                 id=row.id,
                 todo_id=row.todo_id,
-                user_id=row.user_id,
                 text=row.text,
                 date_key=row.date_key,
                 status=row.status,
-                embedding=list(row.embedding) if row.embedding is not None else None,
-                created_at=row.created_at,
             )
             for row in rows
         ]

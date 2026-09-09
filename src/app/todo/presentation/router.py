@@ -97,7 +97,7 @@ async def get_todo_stats(
     use_case: FromDishka[GetTodoStatsUseCase],
     user_repo: FromDishka[IUserRepository],
     current_user: UserContext = Depends(get_current_user),
-    range: str = Query(default="today", pattern="^(today|week|month)$"),
+    range: str = Query(default="today", pattern="^(today|week|month|all)$"),
     tz: str | None = Query(default=None),
 ) -> ApiResponse[TodoStatsResponse]:
     if tz is None:
