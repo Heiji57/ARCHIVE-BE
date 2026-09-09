@@ -186,6 +186,7 @@ from app.topic.domain.repositories.repository import (
     IEmbeddingQueueRepository,
     IEntryChunkRepository,
     ITopicDigestRepository,
+    ITopicMatchTransaction,
     ITopicRepository,
     ITodoEmbeddingRepository,
 )
@@ -199,6 +200,9 @@ from app.topic.infrastructure.persistence.repositories.chunk_repo import (
 from app.topic.infrastructure.persistence.repositories.topic_repo import (
     TopicDigestRepository,
     TopicRepository,
+)
+from app.topic.infrastructure.persistence.transaction import (
+    SqlAlchemyTopicMatchTransaction,
 )
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
@@ -1062,6 +1066,12 @@ class RequestProvider(Provider):
         return UpdateTopicUseCase(repo)
 
     @provide
+    def topic_match_transaction(self, session: AsyncSession) -> ITopicMatchTransaction:
+        # entry_repo/todo_repo/chunk_repo 와 같은 요청 스코프 세션이어야 SAVEPOINT 가
+        # 그 리포지터리들이 실제로 쓰는 트랜잭션 위에서 열린다.
+        return SqlAlchemyTopicMatchTransaction(session)
+
+    @provide
     def topic_matcher(
         self,
         embedding_service: EmbeddingService,
@@ -1071,6 +1081,7 @@ class RequestProvider(Provider):
         todo_repo: ITodoRepository,
         cache: TopicStatsCache,
         config: TopicConfig,
+        transaction: ITopicMatchTransaction,
     ) -> TopicMatcher:
         return TopicMatcher(
             embedding_service,
@@ -1080,6 +1091,7 @@ class RequestProvider(Provider):
             todo_repo,
             cache,
             config,
+            transaction,
         )
 
     @provide

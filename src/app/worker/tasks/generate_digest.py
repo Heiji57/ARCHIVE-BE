@@ -11,13 +11,13 @@
 """
 import json
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
 
 import httpx
 import structlog
 from google.genai import errors as genai_errors
 from redis.asyncio import Redis
 
+from app.shared.domain.utils.period import today_in_tz
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.config.topic import TopicConfig
 from app.topic.domain.models.value_objects import DigestStatus
@@ -31,6 +31,8 @@ from app.topic.infrastructure.persistence.repositories.topic_repo import (
     TopicDigestRepository,
     TopicRepository,
 )
+from app.user.domain.models.user import User
+from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
 from app.worker.tasks.embed_stale import _process_batch
@@ -57,6 +59,17 @@ def _source_total(chunks: list, todos: list) -> int:
     return len({c.entry_id for c in chunks}) + len(todos)
 
 
+def _watermark_key_for_user(user: User | None) -> str:
+    """digest watermark 에 찍을 날짜 — 사용자의 로컬 "오늘".
+
+    watermark 는 `date_key`(회고 저장 시점의 사용자 로컬 날짜)와 같은 축으로 비교되는
+    값이다 (`get_topic_stats.py` 의 unreflected 계산). 서버 UTC 로 찍으면 UTC+ 사용자가
+    자정 근처에 정리를 생성할 때 방금 쓴 오늘자 회고가 즉시 "미반영"으로 잡힌다.
+    사용자를 찾지 못하면(탈퇴 등 예외적 상황) UTC 로 폴백한다.
+    """
+    return today_in_tz(user.timezone if user is not None else "UTC").isoformat()
+
+
 async def _build_prompt(
     topic_name: str,
     topic_description: str,
@@ -73,6 +86,16 @@ async def _build_prompt(
 
     if chunks:
         lines += ["", "### Journal Entry Excerpts"]
+        # chunks 는 유사도(코사인 거리) 순으로 온다 — entry_id 로 묶여 있지 않다.
+        # 정렬 없이 순서대로 훑으면, 이미 헤딩을 찍은 entry 의 뒤늦게 나온 청크가
+        # 방금 헤딩을 찍은 "다른" entry 밑에 잘못 붙는다. entry 등장 순서(최초로
+        # 나온 순 = 그 entry 의 가장 유사한 청크 기준)는 그대로 보존하고, 같은
+        # entry 안에서만 chunk_index 로 정렬해 재배치한다.
+        entry_order: dict[str, int] = {}
+        for chunk in chunks:
+            entry_order.setdefault(chunk.entry_id, len(entry_order))
+        chunks = sorted(chunks, key=lambda c: (entry_order[c.entry_id], c.chunk_index))
+
         # Group by entry_id to avoid repeating date_key
         seen: dict[str, str] = {}  # entry_id -> date_key
         for chunk in chunks:
@@ -109,8 +132,6 @@ async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> N
     factory = get_worker_session_factory()
     cfg: TopicConfig = settings.topic
 
-    today_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
     # T1: mark in_progress
     async with factory.begin() as session:
         digest_repo = TopicDigestRepository(session)
@@ -139,6 +160,9 @@ async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> N
             if topic is None:
                 await TopicDigestRepository(session).update_status(digest_id, DigestStatus.FAILED)
                 return
+
+            user = await UserRepository(session).find_by_id(user_id)
+            today_key = _watermark_key_for_user(user)
 
             emb_service = EmbeddingService(settings.ai)
             query_text = topic.name

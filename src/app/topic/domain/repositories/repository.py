@@ -1,4 +1,6 @@
 from abc import ABC, abstractmethod
+from contextlib import AbstractAsyncContextManager
+from typing import Any
 
 from app.topic.domain.models.topic import (
     EmbeddingQueueItem,
@@ -102,3 +104,20 @@ class IEmbeddingQueueRepository(ABC):
 
     @abstractmethod
     async def has_pending_for_user(self, user_id: str) -> bool: ...
+
+
+class ITopicMatchTransaction(ABC):
+    """TopicMatcher 가 여러 리포지터리 호출을 하나의 실패 경계로 묶기 위한 좁은 포트.
+
+    `TopicMatcher._resolve` 는 entry chunk/todo 벡터 검색과 그 결과의 엔티티 조회
+    (`find_by_ids`)를 같은 요청 세션에서 잇달아 부른다. Postgres 는 문장 하나가 깨지면
+    트랜잭션 전체를 폐기하므로, `GetTopicsUseCase` 처럼 매칭 실패를 삼키고 degrade 하는
+    호출자가 그 뒤에 같은 세션으로 여는 조회(예: digest watermark)까지 함께 죽는다.
+    응용 계층은 세션을 직접 들고 있지 않으므로, 이 블록만 SAVEPOINT 로 감쌀 수 있게
+    최소한의 트랜잭션 경계만 노출한다 — 구체적인 세션/SAVEPOINT 구현은 인프라에 둔다.
+    """
+
+    @abstractmethod
+    def nested(self) -> AbstractAsyncContextManager[Any]:
+        """실패 시 이 블록까지만 되감고, 성공 시 그대로 커밋 대상에 편입되는 경계."""
+        ...

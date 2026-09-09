@@ -15,6 +15,7 @@ from app.topic.domain.models.topic import Topic
 from app.topic.domain.repositories.repository import (
     IEntryChunkRepository,
     ITodoEmbeddingRepository,
+    ITopicMatchTransaction,
 )
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
 from app.topic.infrastructure.cache.topic_stats_cache import TopicStatsCache
@@ -64,6 +65,7 @@ class TopicMatcher:
         todo_repo: ITodoRepository,
         cache: TopicStatsCache,
         config: TopicConfig,
+        transaction: ITopicMatchTransaction,
     ) -> None:
         self._embedding_service = embedding_service
         self._chunk_repo = chunk_repo
@@ -72,6 +74,7 @@ class TopicMatcher:
         self._todo_repo = todo_repo
         self._cache = cache
         self._config = config
+        self._transaction = transaction
 
     async def match(self, user_id: str, topic: Topic) -> TopicMatch:
         result = await self.match_many(user_id, [topic])
@@ -95,7 +98,11 @@ class TopicMatcher:
             embeddings = await self._embedding_service.embed_batch(
                 [_query_text(t) for t in batch]
             )
-            for topic, embedding in zip(batch, embeddings):
+            # strict=True: 임베딩 API 가 입력보다 적은 벡터를 돌려주면(부분 실패 등) 뒤쪽
+            # 주제들이 matches 에서 조용히 빠지고, match() 의 result[topic.id] 가 원인을
+            # 알 수 없는 KeyError → 무코드 500 이 됐다(#3). 배치를 원자적으로 실패시켜
+            # 총 실패와 같은 경로(GetTopicsUseCase 의 degrade, 그 외엔 그대로 전파)를 타게 한다.
+            for topic, embedding in zip(batch, embeddings, strict=True):
                 match = await self._resolve(user_id, embedding)
                 await self._cache.set(
                     topic.id, topic.name, topic.description, _to_payload(match)
@@ -108,27 +115,32 @@ class TopicMatcher:
         limit = self._config.topic_stats_match_limit
         threshold = self._config.topic_similarity_threshold
 
-        chunks = await self._chunk_repo.search_similar(
-            user_id=user_id,
-            query_embedding=embedding,
-            since_date_key=None,
-            threshold=threshold,
-            limit=limit,
-        )
-        todo_embeddings = await self._todo_emb_repo.search_similar(
-            user_id=user_id,
-            query_embedding=embedding,
-            since_date_key=None,
-            threshold=threshold,
-            limit=limit,
-        )
+        # 벡터 검색 2회 + 그 결과의 엔티티 조회 2회를 하나의 SAVEPOINT 로 묶는다. 이 중
+        # 하나라도 실패하면 여기까지만 되감기고, GetTopicsUseCase 처럼 실패를 삼키고
+        # degrade 하는 호출자가 같은 세션으로 잇달아 여는 조회(예: digest watermark)가
+        # InFailedSQLTransaction 으로 죽지 않는다.
+        async with self._transaction.nested():
+            chunks = await self._chunk_repo.search_similar(
+                user_id=user_id,
+                query_embedding=embedding,
+                since_date_key=None,
+                threshold=threshold,
+                limit=limit,
+            )
+            todo_embeddings = await self._todo_emb_repo.search_similar(
+                user_id=user_id,
+                query_embedding=embedding,
+                since_date_key=None,
+                threshold=threshold,
+                limit=limit,
+            )
 
-        # 한 회고가 여러 청크로 쪼개져 매칭될 수 있다 — entry 단위로 접는다.
-        entry_ids = list(dict.fromkeys(c.entry_id for c in chunks))
-        entries = await self._entry_repo.find_by_ids(user_id, entry_ids)
-        todos = await self._todo_repo.find_by_ids(
-            user_id, [t.todo_id for t in todo_embeddings]
-        )
+            # 한 회고가 여러 청크로 쪼개져 매칭될 수 있다 — entry 단위로 접는다.
+            entry_ids = list(dict.fromkeys(c.entry_id for c in chunks))
+            entries = await self._entry_repo.find_by_ids(user_id, entry_ids)
+            todos = await self._todo_repo.find_by_ids(
+                user_id, [t.todo_id for t in todo_embeddings]
+            )
 
         return TopicMatch(
             entries=[
