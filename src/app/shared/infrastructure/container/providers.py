@@ -325,7 +325,12 @@ class AppProvider(Provider):
     @provide
     def topic_stats_cache(self, config: AppConfig) -> TopicStatsCache:
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
-        return TopicStatsCache(redis, config.topic.topic_stats_cache_ttl_seconds)
+        return TopicStatsCache(
+            redis,
+            config.topic.topic_stats_cache_ttl_seconds,
+            config.topic.topic_match_lock_ttl_seconds,
+            config.topic.topic_match_wait_poll_interval_seconds,
+        )
 
     @provide
     def embedding_service(self, config: AppConfig) -> EmbeddingService:

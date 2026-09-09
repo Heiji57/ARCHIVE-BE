@@ -19,3 +19,12 @@ class TopicConfig(BaseSettings):
     topic_stats_match_limit: int = 1000
     topic_stats_cache_ttl_seconds: int = 300
     topic_digest_progress_batch_size: int = 5
+    # 캐시 미스 시 stampede 방지용 락(SETNX, redis.lock) — 같은 topic 을 동시에 여러
+    # 요청(다른 탭/중복 새로고침 등)이 미스하면, 한 요청만 임베딩+DB 계산을 하고 나머지는
+    # 결과가 캐시에 쓰이길 기다렸다가 재사용한다. TTL 은 락 보유자가 죽었을 때(크래시,
+    # 타임아웃)의 안전장치 — 이 시간이 지나면 락이 자동 해제돼 다른 요청이 넘겨받는다.
+    topic_match_lock_ttl_seconds: float = 30.0
+    # 락을 못 얻은 요청이 보유자의 결과를 기다리는 상한. 넘기면 보유자가 비정상 종료한
+    # 것으로 보고 직접 계산한다(안전망 — 최악의 경우에도 무한 대기하지 않는다).
+    topic_match_wait_timeout_seconds: float = 5.0
+    topic_match_wait_poll_interval_seconds: float = 0.1

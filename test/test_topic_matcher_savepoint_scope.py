@@ -128,12 +128,28 @@ class _StubEmbeddingService:
         return [[0.1] * 4 for _ in texts]
 
 
+class _AlwaysAcquiredLock:
+    """cache stampede 락 대역 — 경합 없는 단일 요청 시나리오라 항상 즉시 획득된다."""
+
+    async def acquire(self, blocking: bool = True) -> bool:
+        return True
+
+    async def release(self) -> None:
+        pass
+
+
 class _NoOpCache:
     async def get(self, topic_id, name, description):
         return None
 
     async def set(self, topic_id, name, description, payload):
         pass
+
+    def lock(self, topic_id, name, description):
+        return _AlwaysAcquiredLock()
+
+    async def wait_for(self, topic_id, name, description, timeout):
+        return None
 
 
 def _matcher(session: _FakeSession) -> TopicMatcher:

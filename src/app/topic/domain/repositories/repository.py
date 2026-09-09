@@ -42,6 +42,13 @@ class ITopicDigestRepository(ABC):
     async def find_by_topic(self, topic_id: str, user_id: str) -> TopicDigest | None: ...
 
     @abstractmethod
+    async def find_by_topics(
+        self, topic_ids: list[str], user_id: str
+    ) -> dict[str, TopicDigest]:
+        """find_by_topic 의 batch 버전 — 목록 화면에서 topic 수만큼 왕복하는 N+1 방지."""
+        ...
+
+    @abstractmethod
     async def find_by_id(self, digest_id: str, user_id: str) -> TopicDigest | None: ...
 
     @abstractmethod

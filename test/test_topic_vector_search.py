@@ -176,16 +176,19 @@ class _SessionBackedDigestRepo:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
 
-    async def find_by_topic(self, topic_id: str, user_id: str) -> TopicDigest:
+    async def find_by_topics(self, topic_ids: list[str], user_id: str) -> dict[str, TopicDigest]:
         await self._session.execute(None)
-        return TopicDigest(
-            id="dig_1",
-            topic_id=topic_id,
-            user_id=user_id,
-            status=DigestStatus.COMPLETED,
-            watermark_date_key="2026-09-01",
-            created_at=_NOW,
-        )
+        return {
+            tid: TopicDigest(
+                id="dig_1",
+                topic_id=tid,
+                user_id=user_id,
+                status=DigestStatus.COMPLETED,
+                watermark_date_key="2026-09-01",
+                created_at=_NOW,
+            )
+            for tid in topic_ids
+        }
 
 
 async def test_topics_list_degrades_when_db_search_fails() -> None:

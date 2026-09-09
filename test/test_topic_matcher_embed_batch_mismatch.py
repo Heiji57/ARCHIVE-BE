@@ -50,9 +50,19 @@ class _NoOpTransaction:
         return _NoOpAsyncContext()
 
 
+class _AlwaysAcquiredLock:
+    """cache stampede 락 대역 — 경합 없는 단일 요청 시나리오라 항상 즉시 획득된다."""
+
+    async def acquire(self, blocking: bool = True) -> bool:
+        return True
+
+    async def release(self) -> None:
+        pass
+
+
 @dataclass
 class _NoOpCache:
-    """항상 미스 — embed_batch 경로를 매번 타게 한다."""
+    """항상 미스 — embed_batch 경로를 매번 타게 한다. 락은 항상 즉시 획득된다."""
 
     store: dict = field(default_factory=dict)
 
@@ -61,6 +71,12 @@ class _NoOpCache:
 
     async def set(self, topic_id, name, description, payload):
         self.store[topic_id] = payload
+
+    def lock(self, topic_id, name, description):
+        return _AlwaysAcquiredLock()
+
+    async def wait_for(self, topic_id, name, description, timeout):
+        return None
 
 
 class _ShortEmbeddingService:

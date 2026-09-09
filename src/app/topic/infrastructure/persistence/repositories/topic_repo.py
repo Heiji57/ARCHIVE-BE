@@ -109,6 +109,19 @@ class TopicDigestRepository(ITopicDigestRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def find_by_topics(
+        self, topic_ids: list[str], user_id: str
+    ) -> dict[str, TopicDigest]:
+        if not topic_ids:
+            return {}
+        result = await self._session.execute(
+            select(TopicDigestModel).where(
+                TopicDigestModel.topic_id.in_(topic_ids),
+                TopicDigestModel.user_id == user_id,
+            )
+        )
+        return {m.topic_id: self._to_entity(m) for m in result.scalars().all()}
+
     async def find_by_id(self, digest_id: str, user_id: str) -> TopicDigest | None:
         result = await self._session.execute(
             select(TopicDigestModel).where(

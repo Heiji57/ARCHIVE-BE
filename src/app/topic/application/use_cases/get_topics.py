@@ -47,10 +47,15 @@ class GetTopicsUseCase:
             _log.warning("get_topics.match_failed", user_id=query.user_id, exc_info=True)
             matches = {}
 
+        # 워터마크 배치 조회 — topic 수만큼 왕복하던 N+1 을 한 번으로 접는다.
+        digests = await self._digest_repo.find_by_topics(
+            [t.id for t in topics], query.user_id
+        )
+
         summaries = []
         for topic in topics:
             match = matches.get(topic.id)
-            digest = await self._digest_repo.find_by_topic(topic.id, query.user_id)
+            digest = digests.get(topic.id)
             summaries.append(
                 TopicSummary(
                     topic=topic,

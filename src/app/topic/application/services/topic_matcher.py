@@ -7,6 +7,9 @@ digest 생성 워커(`worker/tasks/generate_digest.py`)가 쓰는 것과 **같�
 """
 from typing import Any
 
+import structlog
+from redis.asyncio.lock import Lock
+
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
 from app.shared.infrastructure.config.topic import TopicConfig
 from app.todo.domain.repositories.repository import ITodoRepository
@@ -19,6 +22,8 @@ from app.topic.domain.repositories.repository import (
 )
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
 from app.topic.infrastructure.cache.topic_stats_cache import TopicStatsCache
+
+_log = structlog.get_logger(__name__)
 
 
 def _query_text(topic: Topic) -> str:
@@ -92,24 +97,88 @@ class TopicMatcher:
             else:
                 misses.append(topic)
 
-        batch_size = self._config.topic_embed_batch_size
-        for start in range(0, len(misses), batch_size):
-            batch = misses[start : start + batch_size]
-            embeddings = await self._embedding_service.embed_batch(
-                [_query_text(t) for t in batch]
-            )
-            # strict=True: 임베딩 API 가 입력보다 적은 벡터를 돌려주면(부분 실패 등) 뒤쪽
-            # 주제들이 matches 에서 조용히 빠지고, match() 의 result[topic.id] 가 원인을
-            # 알 수 없는 KeyError → 무코드 500 이 됐다(#3). 배치를 원자적으로 실패시켜
-            # 총 실패와 같은 경로(GetTopicsUseCase 의 degrade, 그 외엔 그대로 전파)를 타게 한다.
-            for topic, embedding in zip(batch, embeddings, strict=True):
-                match = await self._resolve(user_id, embedding)
-                await self._cache.set(
-                    topic.id, topic.name, topic.description, _to_payload(match)
+        if not misses:
+            return matches
+
+        # cache stampede 방지: 같은 topic 을 동시에 여러 요청(다른 탭, 중복 새로고침
+        # 등)이 미스하면 각자 임베딩 API + DB 를 중복 호출한다. miss 마다 락을 시도해
+        # 얻은 것만 이번 요청이 계산하고(locked), 못 얻은 것(waiting)은 보유자의 결과가
+        # 캐시에 쓰이길 기다렸다가 재사용한다 — 단일 요청 안에서 여러 topic 이 함께
+        # 미스하는 보통의 경우(첫 로딩 등)는 그대로 embed_batch 로 한 번에 처리된다.
+        locked: list[Topic] = []
+        locks: dict[str, Lock] = {}
+        waiting: list[Topic] = []
+        try:
+            for topic in misses:
+                lock = self._cache.lock(topic.id, topic.name, topic.description)
+                if await lock.acquire(blocking=False):
+                    locks[topic.id] = lock
+                    locked.append(topic)
+                else:
+                    waiting.append(topic)
+        except Exception:
+            # 획득 시도 자체가 중간에 실패하면(예: Redis 커넥션 오류) 이미 얻어 둔
+            # 락들이 release() 없이 새어나가 TTL 만료까지 다른 요청을 막는다.
+            await self._release_locks(locks)
+            raise
+
+        try:
+            batch_size = self._config.topic_embed_batch_size
+            for start in range(0, len(locked), batch_size):
+                batch = locked[start : start + batch_size]
+                embeddings = await self._embedding_service.embed_batch(
+                    [_query_text(t) for t in batch]
                 )
-                matches[topic.id] = match
+                # strict=True: 임베딩 API 가 입력보다 적은 벡터를 돌려주면(부분 실패 등)
+                # 뒤쪽 주제들이 matches 에서 조용히 빠지고, match() 의 result[topic.id]
+                # 가 원인을 알 수 없는 KeyError → 무코드 500 이 됐다(#3). 배치를 원자적
+                # 으로 실패시켜 총 실패와 같은 경로(GetTopicsUseCase 의 degrade, 그
+                # 외엔 그대로 전파)를 타게 한다.
+                for topic, embedding in zip(batch, embeddings, strict=True):
+                    match = await self._resolve(user_id, embedding)
+                    await self._cache.set(
+                        topic.id, topic.name, topic.description, _to_payload(match)
+                    )
+                    matches[topic.id] = match
+        finally:
+            await self._release_locks(locks)
+
+        for topic in waiting:
+            cached = await self._cache.wait_for(
+                topic.id,
+                topic.name,
+                topic.description,
+                timeout=self._config.topic_match_wait_timeout_seconds,
+            )
+            if cached is not None:
+                matches[topic.id] = _from_payload(cached)
+                continue
+            # 보유자가 타임아웃 안에 못 끝냈다(크래시 등) — 락 없이 직접 계산해
+            # 안전망 역할을 한다. 다시 락을 시도하지 않는다 — 원래 보유자가 아직도
+            # 갱신 중이라면 굳이 경합할 필요가 없다.
+            embedding = await self._embedding_service.embed_text(_query_text(topic))
+            match = await self._resolve(user_id, embedding)
+            await self._cache.set(topic.id, topic.name, topic.description, _to_payload(match))
+            matches[topic.id] = match
 
         return matches
+
+    @staticmethod
+    async def _release_locks(locks: dict[str, Lock]) -> None:
+        """락 해제 하나가 실패해도 나머지는 마저 해제하고, 이미 전파 중인 예외를
+        release 실패로 덮어써 원인을 가리지 않는다.
+
+        `_resolve` 가 `lock_ttl_seconds` 보다 오래 걸리면 redis-py 의 `Lock.release()`
+        가 `LockNotOwnedError` 를 던진다(이미 TTL 로 자동 해제된 상태) — 이 경우
+        결과적으로 원하던 상태(락 없음)이므로 경고만 남기고 계속한다.
+        """
+        for topic_id, lock in locks.items():
+            try:
+                await lock.release()
+            except Exception:
+                _log.warning(
+                    "topic_matcher.lock_release_failed", topic_id=topic_id, exc_info=True
+                )
 
     async def _resolve(self, user_id: str, embedding: list[float]) -> TopicMatch:
         limit = self._config.topic_stats_match_limit

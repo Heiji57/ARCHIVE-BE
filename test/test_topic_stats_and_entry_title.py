@@ -62,6 +62,9 @@ class _DigestRepo:
             created_at=_NOW,
         )
 
+    async def find_by_topics(self, topic_ids, user_id):
+        return {tid: d for tid in topic_ids if (d := await self.find_by_topic(tid, user_id))}
+
 
 class _Matcher:
     async def match(self, user_id, topic):
