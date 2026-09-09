@@ -78,7 +78,21 @@ class IEntryChunkRepository(ABC):
         since_date_key: str | None,
         threshold: float,
         limit: int,
-    ) -> list[SimilarChunk]: ...
+    ) -> list[SimilarChunk]:
+        """청크 본문까지 필요한 경로(digest 프롬프트 조립)용."""
+        ...
+
+    @abstractmethod
+    async def search_similar_entry_ids(
+        self,
+        user_id: str,
+        query_embedding: list[float],
+        since_date_key: str | None,
+        threshold: float,
+        limit: int,
+    ) -> list[str]:
+        """매칭 경로용 — 상위 `limit` 청크를 자른 뒤 중복 제거한 회고 id 만."""
+        ...
 
 
 class ITodoEmbeddingRepository(ABC):
@@ -96,7 +110,21 @@ class ITodoEmbeddingRepository(ABC):
         since_date_key: str | None,
         threshold: float,
         limit: int,
-    ) -> list[SimilarTodo]: ...
+    ) -> list[SimilarTodo]:
+        """할일 텍스트까지 필요한 경로(digest 프롬프트 조립)용."""
+        ...
+
+    @abstractmethod
+    async def search_similar_todo_ids(
+        self,
+        user_id: str,
+        query_embedding: list[float],
+        since_date_key: str | None,
+        threshold: float,
+        limit: int,
+    ) -> list[str]:
+        """매칭 경로용 — 할일 id 만."""
+        ...
 
 
 class IEmbeddingQueueRepository(ABC):
@@ -117,7 +145,7 @@ class ITopicMatchTransaction(ABC):
     """TopicMatcher 가 여러 리포지터리 호출을 하나의 실패 경계로 묶기 위한 좁은 포트.
 
     `TopicMatcher._resolve` 는 entry chunk/todo 벡터 검색과 그 결과의 엔티티 조회
-    (`find_by_ids`)를 같은 요청 세션에서 잇달아 부른다. Postgres 는 문장 하나가 깨지면
+    (`find_meta_by_ids`)를 같은 요청 세션에서 잇달아 부른다. Postgres 는 문장 하나가 깨지면
     트랜잭션 전체를 폐기하므로, `GetTopicsUseCase` 처럼 매칭 실패를 삼키고 degrade 하는
     호출자가 그 뒤에 같은 세션으로 여는 조회(예: digest watermark)까지 함께 죽는다.
     응용 계층은 세션을 직접 들고 있지 않으므로, 이 블록만 SAVEPOINT 로 감쌀 수 있게

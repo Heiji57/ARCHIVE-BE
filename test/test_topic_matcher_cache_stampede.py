@@ -1,6 +1,6 @@
 """TopicMatcher.match_many — cache miss 시 stampede 방지(single-flight) 동작.
 
-GitHub #5: GET /topics 캐시 미스가 topic 당 벡터 검색 2회 + find_by_ids 2회(최대 2000
+GitHub #5: GET /topics 캐시 미스가 topic 당 벡터 검색 2회 + 엔티티 조회 2회(최대 2000
 엔티티)를 태운다. 같은 topic 을 동시에 여러 요청(다른 탭, 중복 새로고침 등)이 미스하면
 이 비용이 그대로 중복된다. `TopicStatsCache.lock()`/`wait_for()` 로 한 요청만 계산하고
 (single-flight) 나머지는 그 결과를 기다렸다가 재사용하도록 했다.
@@ -22,12 +22,15 @@ _NOW = datetime.now(UTC)
 
 
 class _EmptyVectorRepo:
-    async def search_similar(self, **kwargs):
+    async def search_similar_entry_ids(self, **kwargs):
+        return []
+
+    async def search_similar_todo_ids(self, **kwargs):
         return []
 
 
 class _EmptyEntityRepo:
-    async def find_by_ids(self, user_id, ids):
+    async def find_meta_by_ids(self, user_id, ids):
         return []
 
 
@@ -185,7 +188,10 @@ async def test_lock_released_even_when_resolve_raises() -> None:
     """계산 중 실패해도 락이 새지 않아야 한다 — 안 그러면 TTL 만료까지 다른 요청이 막힌다."""
 
     class _FailingVectorRepo:
-        async def search_similar(self, **kwargs):
+        async def search_similar_entry_ids(self, **kwargs):
+            raise RuntimeError("db down")
+
+        async def search_similar_todo_ids(self, **kwargs):
             raise RuntimeError("db down")
 
     cache = _FakeCache(lock_results={"t1": True})
@@ -227,7 +233,10 @@ async def test_release_failure_for_one_lock_does_not_block_others_or_mask_origin
     원래 실패 원인(예: DB 오류)이 release 실패로 가려지면 안 된다."""
 
     class _FailingVectorRepo:
-        async def search_similar(self, **kwargs):
+        async def search_similar_entry_ids(self, **kwargs):
+            raise RuntimeError("db down")
+
+        async def search_similar_todo_ids(self, **kwargs):
             raise RuntimeError("db down")
 
     cache = _FakeCache(lock_results={"t1": True, "t2": True}, raise_on_release={"t1"})

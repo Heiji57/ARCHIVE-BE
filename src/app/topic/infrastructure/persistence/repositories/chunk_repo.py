@@ -78,6 +78,55 @@ class EntryChunkRepository(IEntryChunkRepository):
         )
         await self._session.flush()
 
+    @staticmethod
+    def _match_clause(
+        user_id: str,
+        query_embedding: list[float],
+        since_date_key: str | None,
+        threshold: float,
+    ) -> tuple[Any, list[Any]]:
+        """거리식과 WHERE 조건을 한곳에서 만든다 — 조회 종류마다 복붙하면 갈린다."""
+        # 코사인 유사도 >= threshold 는 코사인 거리 <= 1 - threshold 와 동치. 거리 쪽으로
+        # 세워야 <=> 연산자와 HNSW(vector_cosine_ops) 인덱스를 그대로 태울 수 있다.
+        distance = EntryChunkModel.embedding.cosine_distance(query_embedding)
+        conditions: list[Any] = [
+            EntryChunkModel.user_id == user_id,
+            EntryChunkModel.embedding.is_not(None),
+            distance <= 1 - threshold,
+        ]
+        if since_date_key:
+            conditions.append(EntryChunkModel.date_key >= since_date_key)
+        return distance, conditions
+
+    async def search_similar_entry_ids(
+        self,
+        user_id: str,
+        query_embedding: list[float],
+        since_date_key: str | None,
+        threshold: float,
+        limit: int,
+    ) -> list[str]:
+        """매칭 전용 — 청크 본문 없이 회고 id 만. 주제 매칭은 text 를 읽지 않는다.
+
+        `limit` 은 **청크** 상한이므로 상위 N 청크를 먼저 자른 뒤 DISTINCT 해야 한다.
+        DISTINCT 를 먼저 걸면 "회고 기준 상위 N" 이 되어 결과 집합이 넓어진다 —
+        `search_similar` 로 받아 파이썬에서 접던 기존 의미와 어긋난다.
+        """
+        distance, conditions = self._match_clause(
+            user_id, query_embedding, since_date_key, threshold
+        )
+        top_chunks = (
+            select(EntryChunkModel.entry_id)
+            .where(*conditions)
+            .order_by(distance)
+            .limit(limit)
+            .subquery()
+        )
+        rows = await _fetch_in_savepoint(
+            self._session, select(top_chunks.c.entry_id).distinct()
+        )
+        return [row.entry_id for row in rows]
+
     async def search_similar(
         self,
         user_id: str,
@@ -86,16 +135,9 @@ class EntryChunkRepository(IEntryChunkRepository):
         threshold: float,
         limit: int,
     ) -> list[SimilarChunk]:
-        # 코사인 유사도 >= threshold 는 코사인 거리 <= 1 - threshold 와 동치. 거리 쪽으로
-        # 세워야 <=> 연산자와 HNSW(vector_cosine_ops) 인덱스를 그대로 태울 수 있다.
-        distance = EntryChunkModel.embedding.cosine_distance(query_embedding)
-        conditions = [
-            EntryChunkModel.user_id == user_id,
-            EntryChunkModel.embedding.is_not(None),
-            distance <= 1 - threshold,
-        ]
-        if since_date_key:
-            conditions.append(EntryChunkModel.date_key >= since_date_key)
+        distance, conditions = self._match_clause(
+            user_id, query_embedding, since_date_key, threshold
+        )
 
         # embedding 은 일부러 SELECT 하지 않는다 — 호출자(매칭/프롬프트 조립)가 쓰지 않는데
         # 행마다 768 float 을 실어오면 limit 만큼 그대로 낭비된다.
@@ -157,6 +199,49 @@ class TodoEmbeddingRepository(ITodoEmbeddingRepository):
         )
         await self._session.flush()
 
+    @staticmethod
+    def _match_clause(
+        user_id: str,
+        query_embedding: list[float],
+        since_date_key: str | None,
+        threshold: float,
+    ) -> tuple[Any, list[Any]]:
+        # 거리 부등식 변환·embedding 미조회·SAVEPOINT 이유는 EntryChunkRepository 쪽 주석 참고.
+        distance = TodoEmbeddingModel.embedding.cosine_distance(query_embedding)
+        conditions: list[Any] = [
+            TodoEmbeddingModel.user_id == user_id,
+            TodoEmbeddingModel.status.in_(_MATCHED_TODO_STATUSES),
+            TodoEmbeddingModel.embedding.is_not(None),
+            distance <= 1 - threshold,
+        ]
+        if since_date_key:
+            conditions.append(TodoEmbeddingModel.date_key >= since_date_key)
+        return distance, conditions
+
+    async def search_similar_todo_ids(
+        self,
+        user_id: str,
+        query_embedding: list[float],
+        since_date_key: str | None,
+        threshold: float,
+        limit: int,
+    ) -> list[str]:
+        """매칭 전용 — 할일 id 만. 주제 매칭은 text 를 읽지 않는다.
+
+        todo_id 는 이 테이블에서 유니크라 회고 청크와 달리 중복 제거가 필요 없다.
+        """
+        distance, conditions = self._match_clause(
+            user_id, query_embedding, since_date_key, threshold
+        )
+        stmt = (
+            select(TodoEmbeddingModel.todo_id)
+            .where(*conditions)
+            .order_by(distance)
+            .limit(limit)
+        )
+        rows = await _fetch_in_savepoint(self._session, stmt)
+        return [row.todo_id for row in rows]
+
     async def search_similar(
         self,
         user_id: str,
@@ -165,16 +250,9 @@ class TodoEmbeddingRepository(ITodoEmbeddingRepository):
         threshold: float,
         limit: int,
     ) -> list[SimilarTodo]:
-        # 거리 부등식 변환·embedding 미조회·SAVEPOINT 이유는 EntryChunkRepository 쪽 주석 참고.
-        distance = TodoEmbeddingModel.embedding.cosine_distance(query_embedding)
-        conditions = [
-            TodoEmbeddingModel.user_id == user_id,
-            TodoEmbeddingModel.status.in_(_MATCHED_TODO_STATUSES),
-            TodoEmbeddingModel.embedding.is_not(None),
-            distance <= 1 - threshold,
-        ]
-        if since_date_key:
-            conditions.append(TodoEmbeddingModel.date_key >= since_date_key)
+        distance, conditions = self._match_clause(
+            user_id, query_embedding, since_date_key, threshold
+        )
 
         stmt = (
             select(

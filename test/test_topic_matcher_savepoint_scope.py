@@ -1,14 +1,14 @@
-"""TopicMatcher._resolve — SAVEPOINT 가 벡터 검색 + find_by_ids 전체를 덮는지.
+"""TopicMatcher._resolve — SAVEPOINT 가 벡터 검색 + 엔티티 조회 전체를 덮는지.
 
 GitHub #4: `chunk_repo.py` 의 `_fetch_in_savepoint` 는 벡터 검색 두 개만 감쌌다.
-`TopicMatcher._resolve` 가 그 직후 같은 세션에서 여는 `entry_repo.find_by_ids` /
-`todo_repo.find_by_ids` 는 SAVEPOINT 밖에 있어서, 거기서 실패하면
+`TopicMatcher._resolve` 가 그 직후 같은 세션에서 여는 엔티티 조회
+(`find_meta_by_ids`, 당시 이름은 `find_by_ids`)는 SAVEPOINT 밖에 있어서, 거기서 실패하면
 `GetTopicsUseCase` 가 예외를 삼킨 뒤 이어지는 조회(예: digest watermark)가
 InFailedSQLTransaction 으로 다시 죽는다 — SAVEPOINT 를 넣은 이유였던 바로 그 500.
 
-수정: `_resolve` 전체(벡터 검색 2회 + find_by_ids 2회)를 `ITopicMatchTransaction.nested()`
+수정: `_resolve` 전체(벡터 검색 2회 + 엔티티 조회 2회)를 `ITopicMatchTransaction.nested()`
 하나로 감싼다. 이 테스트는 Postgres 의 "SAVEPOINT 밖에서 깨지면 트랜잭션 전체 폐기"
-의미를 흉내 내는 페이크 세션 위에서, find_by_ids 실패가 세션 전체를 죽이지 않는지
+의미를 흉내 내는 페이크 세션 위에서, 엔티티 조회 실패가 세션 전체를 죽이지 않는지
 확인한다 — `test_topic_vector_search.py` 의 `_FakeSession` 과 같은 모델이지만, 벡터
 검색만이 아니라 `_resolve` 가 여는 모든 문장을 추적하도록 일반화했다.
 """
@@ -19,7 +19,7 @@ import pytest
 
 from app.shared.infrastructure.config.topic import TopicConfig
 from app.topic.application.services.topic_matcher import TopicMatcher
-from app.topic.domain.models.topic import SimilarChunk, SimilarTodo, Topic
+from app.topic.domain.models.topic import Topic
 
 _NOW = datetime.now(UTC)
 
@@ -89,19 +89,17 @@ class _ChunkRepo:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
 
-    async def search_similar(self, **kwargs) -> list[SimilarChunk]:
-        await self._session.run("chunk.search_similar")
-        return [
-            SimilarChunk(id="c1", entry_id="e1", chunk_index=0, text="t", date_key="2026-09-01")
-        ]
+    async def search_similar_entry_ids(self, **kwargs) -> list[str]:
+        await self._session.run("chunk.search_similar_entry_ids")
+        return ["e1"]
 
 
 class _TodoEmbRepo:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
 
-    async def search_similar(self, **kwargs) -> list[SimilarTodo]:
-        await self._session.run("todo_emb.search_similar")
+    async def search_similar_todo_ids(self, **kwargs) -> list[str]:
+        await self._session.run("todo_emb.search_similar_todo_ids")
         return []
 
 
@@ -109,8 +107,8 @@ class _EntryRepo:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
 
-    async def find_by_ids(self, user_id, ids):
-        await self._session.run("entry.find_by_ids")
+    async def find_meta_by_ids(self, user_id, ids):
+        await self._session.run("entry.find_meta_by_ids")
         return []
 
 
@@ -118,8 +116,8 @@ class _TodoRepo:
     def __init__(self, session: _FakeSession) -> None:
         self._session = session
 
-    async def find_by_ids(self, user_id, ids):
-        await self._session.run("todo.find_by_ids")
+    async def find_meta_by_ids(self, user_id, ids):
+        await self._session.run("todo.find_meta_by_ids")
         return []
 
 
@@ -168,22 +166,22 @@ def _matcher(session: _FakeSession) -> TopicMatcher:
 _TOPIC = Topic(id="tpc_1", user_id="u1", name="배포", description="", created_at=_NOW)
 
 
-async def test_find_by_ids_failure_does_not_abort_the_outer_session() -> None:
-    """이게 #4 의 핵심 — find_by_ids 가 SAVEPOINT 밖에 있었을 때는 실패했다."""
-    session = _FakeSession(fail_on={"entry.find_by_ids"})
+async def test_find_meta_by_ids_failure_does_not_abort_the_outer_session() -> None:
+    """이게 #4 의 핵심 — 엔티티 조회가 SAVEPOINT 밖에 있었을 때는 실패했다."""
+    session = _FakeSession(fail_on={"entry.find_meta_by_ids"})
     matcher = _matcher(session)
 
     with pytest.raises(_StatementError):
         await matcher.match("u1", _TOPIC)
 
-    assert not session.aborted, "find_by_ids 실패가 세션 전체를 죽였다 — SAVEPOINT 밖에 있다는 뜻"
+    assert not session.aborted, "엔티티 조회 실패가 세션 전체를 죽였다 — SAVEPOINT 밖에 있다는 뜻"
     # 세션이 살아 있다면 뒤이은 문장(예: GetTopicsUseCase 의 digest watermark 조회)이 통과해야 한다.
     await session.run("digest.find_by_topic")
 
 
 async def test_vector_search_failure_still_does_not_abort_the_outer_session() -> None:
     """기존에 지켜지던 것도 함께 — 회귀 방지."""
-    session = _FakeSession(fail_on={"chunk.search_similar"})
+    session = _FakeSession(fail_on={"chunk.search_similar_entry_ids"})
     matcher = _matcher(session)
 
     with pytest.raises(_StatementError):
@@ -200,9 +198,9 @@ async def test_successful_resolve_makes_all_four_calls_inside_one_savepoint() ->
     await matcher.match("u1", _TOPIC)
 
     assert session.calls == [
-        "chunk.search_similar",
-        "todo_emb.search_similar",
-        "entry.find_by_ids",
-        "todo.find_by_ids",
+        "chunk.search_similar_entry_ids",
+        "todo_emb.search_similar_todo_ids",
+        "entry.find_meta_by_ids",
+        "todo.find_meta_by_ids",
     ]
     assert session.depth == 0, "SAVEPOINT 가 닫히지 않았다"

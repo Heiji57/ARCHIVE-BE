@@ -6,7 +6,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.todo.domain.models.todo import RecurrenceRule, Todo
+from app.todo.domain.models.todo import RecurrenceRule, Todo, TodoMeta
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import (
     ITodoRepository,
@@ -149,16 +149,32 @@ class TodoRepository(ITodoRepository):
         row = result.first()
         return self._row_to_entity(row) if row else None
 
-    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[Todo]:
+    async def find_meta_by_ids(self, user_id: str, ids: list[str]) -> list[TodoMeta]:
         if not ids:
             return []
+        # 반복 규칙·캘린더 push 상태 등은 SELECT 하지 않는다 — 주제 매칭이 읽지 않는다.
         result = await self._session.execute(
-            select(TodoModel).where(
+            select(
+                TodoModel.id,
+                TodoModel.title,
+                TodoModel.date_key,
+                TodoModel.status,
+                TodoModel.tags,
+            ).where(
                 TodoModel.user_id == user_id,
                 TodoModel.id.in_(set(ids)),
             )
         )
-        return [self._to_entity(m) for m in result.scalars()]
+        return [
+            TodoMeta(
+                id=row.id,
+                title=row.title,
+                date_key=row.date_key,
+                status=TaskStatus(row.status),
+                tags=list(row.tags or []),
+            )
+            for row in result.all()
+        ]
 
     async def find_by_google_event_ids(
         self, user_id: str, google_event_ids: list[str]

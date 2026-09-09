@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import date
 
 from app.retrospective.domain.models.folder import Folder
-from app.retrospective.domain.models.journal_entry import JournalEntry
+from app.retrospective.domain.models.journal_entry import JournalEntry, JournalEntryMeta
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.retro_template import RetroTemplate
 from app.retrospective.domain.models.summary_template import UserSummaryTemplate
@@ -24,8 +24,12 @@ class IJournalEntryRepository(ABC):
         ...
 
     @abstractmethod
-    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[JournalEntry]:
-        """find_by_id 의 batch 버전 — 토픽 매칭 결과(entry_id 목록)를 1회 IN 조회로 실체화."""
+    async def find_meta_by_ids(self, user_id: str, ids: list[str]) -> list[JournalEntryMeta]:
+        """find_by_id 의 batch 버전 — 토픽 매칭 결과(entry_id 목록)를 1회 IN 조회로 실체화.
+
+        본문(`content`)과 전문검색 벡터(`content_tsv`)는 **싣지 않는다** — 호출자(주제
+        매칭)가 읽지 않는데 행마다 가장 큰 컬럼이 딸려온다.
+        """
         ...
 
     @abstractmethod

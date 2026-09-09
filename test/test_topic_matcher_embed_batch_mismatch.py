@@ -25,12 +25,15 @@ _NOW = datetime.now(UTC)
 class _EmptyVectorRepo:
     """chunk_repo / todo_emb_repo 대역 — 매칭 로직 자체는 이 테스트의 관심사가 아니다."""
 
-    async def search_similar(self, **kwargs):
+    async def search_similar_entry_ids(self, **kwargs):
+        return []
+
+    async def search_similar_todo_ids(self, **kwargs):
         return []
 
 
 class _EmptyEntityRepo:
-    async def find_by_ids(self, user_id, ids):
+    async def find_meta_by_ids(self, user_id, ids):
         return []
 
 

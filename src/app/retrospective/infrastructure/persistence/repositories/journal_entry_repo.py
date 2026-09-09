@@ -3,7 +3,7 @@ from datetime import date
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.retrospective.domain.models.journal_entry import JournalEntry
+from app.retrospective.domain.models.journal_entry import JournalEntry, JournalEntryMeta
 from app.retrospective.domain.models.value_objects import RetroType
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
 from app.retrospective.infrastructure.persistence.models.folder_model import FolderModel  # noqa: F401
@@ -29,16 +29,30 @@ class JournalEntryRepository(IJournalEntryRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
-    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[JournalEntry]:
+    async def find_meta_by_ids(self, user_id: str, ids: list[str]) -> list[JournalEntryMeta]:
         if not ids:
             return []
+        # content / content_tsv 를 제외한 컬럼만 SELECT — 주제 매칭은 본문을 읽지 않는다.
         result = await self._session.execute(
-            select(JournalEntryModel).where(
+            select(
+                JournalEntryModel.id,
+                JournalEntryModel.date_key,
+                JournalEntryModel.title,
+                JournalEntryModel.retro_type,
+            ).where(
                 JournalEntryModel.user_id == user_id,
                 JournalEntryModel.id.in_(ids),
             )
         )
-        return [self._to_entity(m) for m in result.scalars().all()]
+        return [
+            JournalEntryMeta(
+                id=row.id,
+                date_key=row.date_key,
+                title=row.title,
+                retro_type=RetroType(row.retro_type),
+            )
+            for row in result.all()
+        ]
 
     async def id_exists(self, id: str) -> bool:
         result = await self._session.execute(

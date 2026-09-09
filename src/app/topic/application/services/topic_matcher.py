@@ -189,14 +189,17 @@ class TopicMatcher:
         # degrade 하는 호출자가 같은 세션으로 잇달아 여는 조회(예: digest watermark)가
         # InFailedSQLTransaction 으로 죽지 않는다.
         async with self._transaction.nested():
-            chunks = await self._chunk_repo.search_similar(
+            # 매칭에 필요한 건 "어떤 회고·할일이 묶이는가" 뿐이다. 청크 본문(text)이나
+            # 회고 본문(content)·할일의 반복/캘린더 컬럼은 읽지 않으므로 싣지 않는다.
+            # 한 회고가 여러 청크로 쪼개지는 것도 DB 에서 접는다(상위 N 청크 → DISTINCT).
+            entry_ids = await self._chunk_repo.search_similar_entry_ids(
                 user_id=user_id,
                 query_embedding=embedding,
                 since_date_key=None,
                 threshold=threshold,
                 limit=limit,
             )
-            todo_embeddings = await self._todo_emb_repo.search_similar(
+            todo_ids = await self._todo_emb_repo.search_similar_todo_ids(
                 user_id=user_id,
                 query_embedding=embedding,
                 since_date_key=None,
@@ -204,12 +207,8 @@ class TopicMatcher:
                 limit=limit,
             )
 
-            # 한 회고가 여러 청크로 쪼개져 매칭될 수 있다 — entry 단위로 접는다.
-            entry_ids = list(dict.fromkeys(c.entry_id for c in chunks))
-            entries = await self._entry_repo.find_by_ids(user_id, entry_ids)
-            todos = await self._todo_repo.find_by_ids(
-                user_id, [t.todo_id for t in todo_embeddings]
-            )
+            entries = await self._entry_repo.find_meta_by_ids(user_id, entry_ids)
+            todos = await self._todo_repo.find_meta_by_ids(user_id, todo_ids)
 
         return TopicMatch(
             entries=[

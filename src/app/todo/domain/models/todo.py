@@ -75,3 +75,18 @@ class Todo(BaseEntity):
 
     def move_to(self, date_key: str) -> None:
         self.date_key = date_key
+
+
+@dataclass(frozen=True, kw_only=True)
+class TodoMeta:
+    """식별·표시에만 필요한 필드를 담는 읽기 모델 — JournalEntryMeta 와 같은 이유.
+
+    `Todo` 는 반복 규칙·캘린더 push 상태·시각 스냅샷까지 스물몇 개 컬럼을 가진다.
+    "이 주제에 어떤 할일이 묶이는가" 같은 경로는 그중 다섯 개만 읽는다.
+    """
+
+    id: str
+    title: str
+    date_key: str  # YYYY-MM-DD
+    status: TaskStatus
+    tags: list[str] = field(default_factory=list)

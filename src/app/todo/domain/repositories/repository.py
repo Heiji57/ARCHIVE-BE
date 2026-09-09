@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.todo.domain.models.todo import Todo
+from app.todo.domain.models.todo import Todo, TodoMeta
 
 
 @dataclass(frozen=True)
@@ -35,8 +35,11 @@ class ITodoRepository(ABC):
     async def find_by_id(self, id: str, user_id: str) -> Todo | None: ...
 
     @abstractmethod
-    async def find_by_ids(self, user_id: str, ids: list[str]) -> list[Todo]:
-        """find_by_id 의 batch 버전 — 토픽 매칭 결과(todo_id 목록)를 1회 IN 조회로 실체화."""
+    async def find_meta_by_ids(self, user_id: str, ids: list[str]) -> list[TodoMeta]:
+        """find_by_id 의 batch 버전 — 토픽 매칭 결과(todo_id 목록)를 1회 IN 조회로 실체화.
+
+        반복 규칙·캘린더 push 상태 등 호출자(주제 매칭)가 읽지 않는 컬럼은 싣지 않는다.
+        """
         ...
 
     @abstractmethod
