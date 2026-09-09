@@ -113,12 +113,14 @@ async def test_entry_id_search_does_not_load_chunk_text() -> None:
     assert "entry_id" in _select_list(sql)
 
 
-async def test_entry_id_search_limits_chunks_before_deduplicating() -> None:
-    """의미 보존이 핵심 — LIMIT 이 DISTINCT **안쪽** 서브쿼리에 있어야 한다.
+async def test_entry_id_search_limits_by_entry_not_by_chunk() -> None:
+    """상한 단위가 **회고**여야 한다 — 청크로 자르면 천장이 글 길이에 따라 달라진다 (#10).
 
-    `limit` 은 청크 상한이다. DISTINCT 를 먼저 걸고 LIMIT 을 밖에 두면 "회고 기준
-    상위 N" 이 되어 결과 집합이 넓어진다 — 상위 N 청크를 받아 파이썬에서 접던
-    기존 동작과 개수가 달라진다.
+    청크는 단락 길이에 따라 회고당 2~4개로 갈리는 내부 단위인데, 사용자에게 보이는
+    건 "회고 N건" 이다. 청크로 자르면 (a) 글을 길게 쓰는 사용자일수록 카운트 천장이
+    낮아지고, (b) 청크가 많은 긴 회고 하나가 슬롯을 여러 개 차지해 다른 회고를
+    밀어낸다. GROUP BY entry_id + ORDER BY min(거리) 로 회고마다 정확히 한 자리만
+    쓰게 한다.
     """
     sql = await _capture_one(
         lambda s: EntryChunkRepository(s).search_similar_entry_ids(
@@ -130,17 +132,18 @@ async def test_entry_id_search_limits_chunks_before_deduplicating() -> None:
         )
     )
 
-    assert "SELECT DISTINCT" in sql
-    assert "FROM (SELECT" in sql, (
-        f"서브쿼리가 없다 — LIMIT 과 DISTINCT 가 같은 층에 있다는 뜻: {sql}"
+    assert "GROUP BY topic_entry_chunks.entry_id" in sql, (
+        f"회고 단위로 접지 않으면 상한이 청크 기준이 된다: {sql}"
     )
-
-    # 괄호 안(= 자르는 쪽)에 LIMIT 과 ORDER BY 가 있고, DISTINCT 는 바깥에만 있어야 한다.
-    subquery = sql[sql.index("FROM (") + len("FROM (") : sql.rindex(") AS ")]
-    assert "LIMIT" in subquery, f"LIMIT 이 서브쿼리 밖이다 — 의미가 달라진다: {sql}"
-    assert "ORDER BY" in subquery, f"유사도 정렬이 자르기 전에 없다: {sql}"
-    assert subquery.index("ORDER BY") < subquery.index("LIMIT")
-    assert "DISTINCT" not in subquery, f"DISTINCT 가 자르기 전에 걸렸다: {sql}"
+    # min() 이 감싸는 대상까지 확인한다 — min(chunk_index) 나 min(created_at) 으로
+    # 순위를 매기는 구현도 "ORDER BY min(" 만 보면 통과해버린다.
+    assert "ORDER BY min(topic_entry_chunks.embedding <=>" in sql, (
+        f"회고 순위는 그 회고의 가장 가까운 청크의 코사인 거리여야 한다: {sql}"
+    )
+    # LIMIT 이 GROUP BY 뒤에 있어야 "회고 N개" 가 된다. 서브쿼리에서 청크를 먼저
+    # 자르는 옛 방식이면 이 순서가 뒤집힌다.
+    assert sql.index("GROUP BY") < sql.index("LIMIT")
+    assert "FROM (SELECT" not in sql, f"청크를 먼저 자르는 서브쿼리가 남아 있다: {sql}"
 
 
 async def test_todo_id_search_does_not_load_todo_text() -> None:

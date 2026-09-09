@@ -14,8 +14,11 @@ class TopicConfig(BaseSettings):
     # 이 값이 곧 "문서가 커버하는 범위"가 됐다 — 단위가 회고가 아니라 **청크**(한 회고가 여러
     # 청크로 쪼개짐)라 50 이면 회고 15~25건 수준이라 부족해 200 으로 올렸다.
     topic_search_limit: int = 200
-    # 통계/소스 목록용 매칭 상한. digest 프롬프트용(topic_search_limit)과 분리 —
-    # 프롬프트 길이 제약과 "이 주제에 묶인 전체 개수"는 서로 다른 요구이기 때문.
+    # 통계/소스 목록용 매칭 상한 — 단위는 **회고**(할일은 원래 1:1). digest
+    # 프롬프트용(topic_search_limit, 단위는 청크)과 분리한 이유는 프롬프트 길이
+    # 제약과 "이 주제에 묶인 전체 개수"가 서로 다른 요구이기 때문이고, 단위까지
+    # 다른 이유는 사용자에게 보이는 게 "회고 N건" 이라서다 — 청크로 자르면 단락을
+    # 길게 쓰는 사용자일수록 천장이 낮아지고 긴 회고가 다른 회고를 밀어낸다 (#10).
     topic_stats_match_limit: int = 1000
     topic_stats_cache_ttl_seconds: int = 300
     topic_digest_progress_batch_size: int = 5

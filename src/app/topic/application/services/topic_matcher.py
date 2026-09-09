@@ -2,8 +2,11 @@
 
 digest 생성 워커(`worker/tasks/generate_digest.py`)가 쓰는 것과 **같은 규칙**(토픽 이름·설명
 임베딩 → pgvector 코사인 유사도 검색)을 요청 경로(통계/소스/목록)에서 재사용한다.
-차이는 limit 뿐 — 워커는 프롬프트 길이 때문에 topic_search_limit(50)으로 자르지만,
-"이 주제에 몇 개가 묶여 있는가"는 topic_stats_match_limit 까지 센다.
+
+다른 것은 상한의 **값과 단위** 두 가지다. 워커는 프롬프트 길이 제약이라
+topic_search_limit 만큼의 **청크**를 자르고, 매칭은 사용자에게 "회고 N건" 으로 보이므로
+topic_stats_match_limit 만큼의 **회고**를 센다 — 청크로 자르면 단락을 길게 쓰는
+사용자일수록 천장이 낮아진다(#10).
 """
 from typing import Any
 
@@ -191,7 +194,8 @@ class TopicMatcher:
         async with self._transaction.nested():
             # 매칭에 필요한 건 "어떤 회고·할일이 묶이는가" 뿐이다. 청크 본문(text)이나
             # 회고 본문(content)·할일의 반복/캘린더 컬럼은 읽지 않으므로 싣지 않는다.
-            # 한 회고가 여러 청크로 쪼개지는 것도 DB 에서 접는다(상위 N 청크 → DISTINCT).
+            # 한 회고가 여러 청크로 쪼개지는 것도 DB 에서 접는다 — 회고마다 가장
+            # 가까운 청크 기준으로 상위 N 개 **회고**를 고른다(청크 N 개가 아니다).
             entry_ids = await self._chunk_repo.search_similar_entry_ids(
                 user_id=user_id,
                 query_embedding=embedding,

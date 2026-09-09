@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, delete, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -118,23 +118,29 @@ class EntryChunkRepository(IEntryChunkRepository):
     ) -> list[str]:
         """매칭 전용 — 청크 본문 없이 회고 id 만. 주제 매칭은 text 를 읽지 않는다.
 
-        `limit` 은 **청크** 상한이므로 상위 N 청크를 먼저 자른 뒤 DISTINCT 해야 한다.
-        DISTINCT 를 먼저 걸면 "회고 기준 상위 N" 이 되어 결과 집합이 넓어진다 —
-        `search_similar` 로 받아 파이썬에서 접던 기존 의미와 어긋난다.
+        `limit` 은 **회고** 상한이다 — 가장 가까운 청크 기준으로 상위 N 개 회고를
+        고른다. 청크 상한이 아닌 이유(#10): 청크는 단락 길이에 따라 회고당 2~4개로
+        갈리는 순수 내부 단위인데, 사용자에게 보이는 건 "회고 N건" 이다. 청크로 자르면
+        (a) 글을 길게 쓰는 사용자일수록 카운트 천장이 낮아지고(회고당 4청크면 250건,
+        2청크면 500건), (b) 청크가 많은 긴 회고 하나가 슬롯을 여러 개 차지해 다른
+        회고를 목록에서 밀어낸다. 회고 단위로 자르면 누구에게나 천장이 같고 회고
+        하나가 정확히 한 자리만 쓴다.
+
+        `search_similar`(digest 프롬프트용)의 `limit` 은 여전히 **청크** 상한이다 —
+        그쪽은 프롬프트 길이 제약이라 청크가 맞는 단위다.
         """
         distance, conditions = self._match_clause(
             user_id, query_embedding, since_date_key, threshold
         )
-        top_chunks = (
+        # 회고마다 가장 가까운 청크의 거리로 순위를 매긴다.
+        stmt = (
             select(EntryChunkModel.entry_id)
             .where(*conditions)
-            .order_by(distance)
+            .group_by(EntryChunkModel.entry_id)
+            .order_by(func.min(distance))
             .limit(limit)
-            .subquery()
         )
-        rows = await _fetch_in_savepoint(
-            self._session, select(top_chunks.c.entry_id).distinct()
-        )
+        rows = await _fetch_in_savepoint(self._session, stmt)
         return [row.entry_id for row in rows]
 
     async def search_similar(
