@@ -145,6 +145,11 @@ async def _process_batch(user_id_filter: str | None = None) -> int:
                         )
                         for idx in range(len(chunk_texts))
                     ]
+                    # 재임베딩 전에 기존 청크를 비운다. upsert 는 주어진 chunk_index 만
+                    # 갱신하므로, 회고를 편집해 단락이 줄면 초과 인덱스가 옛 본문·옛
+                    # 임베딩 그대로 남아 삭제한 내용이 계속 매칭되고 digest 프롬프트에도
+                    # 들어간다 (#9). 같은 트랜잭션이라 중간 상태는 노출되지 않는다.
+                    await chunk_repo.delete_by_entry(entry.id)
                     await chunk_repo.upsert_chunks(chunks)
                     await queue_repo.delete(item.id)
                     completed += 1
