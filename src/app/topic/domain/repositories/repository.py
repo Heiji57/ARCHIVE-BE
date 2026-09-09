@@ -140,6 +140,19 @@ class IEmbeddingQueueRepository(ABC):
     @abstractmethod
     async def has_pending_for_user(self, user_id: str) -> bool: ...
 
+    @abstractmethod
+    async def enqueue_entries_missing_chunks(self, limit: int) -> int:
+        """청크가 하나도 없는 회고를 큐에 다시 넣고, 넣은 개수를 반환한다.
+
+        큐는 회고 생성·수정 라우터에서만 채워지므로, 워커가 내려가 있었거나 큐 등록이
+        실패했거나 토픽 기능 도입 이전에 쓰인 회고는 임베딩이 영영 만들어지지 않는다 —
+        재시도 경로가 없어 주제 집계에서 영구 누락된다 (#8). 이 조회가 그 간극을 메운다.
+
+        본문이 공백뿐인 회고는 제외한다 — 임베딩할 내용이 없어 넣어봐야 청크가 생기지
+        않고, 매 주기 다시 잡혀 무한히 되돌아온다.
+        """
+        ...
+
 
 class ITopicMatchTransaction(ABC):
     """TopicMatcher 가 여러 리포지터리 호출을 하나의 실패 경계로 묶기 위한 좁은 포트.

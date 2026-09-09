@@ -6,6 +6,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.retrospective.infrastructure.persistence.models.journal_entry_model import (
+    JournalEntryModel,
+)
 from app.shared.domain.utils.id import generate_id
 from app.todo.domain.models.value_objects import TaskStatus
 from app.topic.domain.models.topic import (
@@ -28,6 +31,13 @@ from app.topic.infrastructure.persistence.models.chunk_model import (
 
 # 매칭 대상 할일 상태 — not-start 는 "아직 한 일이 없다"라 주제 집계에서 제외한다.
 _MATCHED_TODO_STATUSES = (TaskStatus.IN_PROGRESS.value, TaskStatus.DONE.value)
+
+# 파이썬 str.strip() 이 제거하는 문자(= str.isspace() 가 True)를 모두 제외한 클래스.
+# Postgres 의 [[:space:]] 만으로는 NBSP 등 유니코드 공백이 빠져 파이썬 쪽과 어긋난다.
+_NON_BLANK_PATTERN = (
+    r"[^[:space:]\u001C-\u001F\u0085\u00A0\u1680"
+    r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]"
+)
 
 
 async def _fetch_in_savepoint(session: AsyncSession, stmt: Select[Any]) -> list[Row[Any]]:
@@ -321,6 +331,48 @@ class EmbeddingQueueRepository(IEmbeddingQueueRepository):
             delete(EmbeddingQueueModel).where(EmbeddingQueueModel.id == item_id)
         )
         await self._session.flush()
+
+    async def enqueue_entries_missing_chunks(self, limit: int) -> int:
+        # 본문에 "파이썬이 공백으로 보지 않는" 글자가 하나라도 있으면 _split_chunks 의
+        # 폴백이 청크를 최소 하나 보장하므로, 여기 걸린 회고는 처리 후 다시 걸리지
+        # 않는다. 공백뿐인 회고를 제외하는 이유가 그것 — 넣어도 청크가 안 생겨 매
+        # 주기 되돌아오는 무한 churn 이 된다.
+        #
+        # `\S` 를 쓰지 않는 이유: Postgres 의 [[:space:]] 는 NBSP(U+00A0), FIGURE
+        # SPACE(U+2007) 같은 유니코드 공백을 공백으로 치지 않는데 파이썬 str.strip()
+        # 은 제거한다. 그 어긋남이 있으면 "DB 는 내용이 있다고 보는데 청킹은 아무것도
+        # 못 만드는" 회고가 생겨 영원히 되돌아온다. 아래 클래스는 str.isspace() 가
+        # True 인 문자 집합과 정확히 일치한다.
+        missing = select(
+            JournalEntryModel.id.label("entity_id"),
+            JournalEntryModel.user_id.label("user_id"),
+        ).where(
+            JournalEntryModel.content.regexp_match(_NON_BLANK_PATTERN),
+            ~select(EntryChunkModel.id)
+            .where(EntryChunkModel.entry_id == JournalEntryModel.id)
+            .exists(),
+        ).order_by(JournalEntryModel.created_at.desc()).limit(limit)
+
+        rows = (await self._session.execute(missing)).all()
+        if not rows:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        stmt = pg_insert(EmbeddingQueueModel).values(
+            [
+                {
+                    "id": generate_id("emb_q"),
+                    "entity_type": "entry",
+                    "entity_id": row.entity_id,
+                    "user_id": row.user_id,
+                    "created_at": now,
+                }
+                for row in rows
+            ]
+        ).on_conflict_do_nothing(constraint="uq_embedding_queue_entity")
+        await self._session.execute(stmt)
+        await self._session.flush()
+        return len(rows)
 
     async def has_pending_for_user(self, user_id: str) -> bool:
         result = await self._session.execute(
