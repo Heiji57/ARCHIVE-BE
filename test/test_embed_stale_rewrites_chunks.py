@@ -74,6 +74,23 @@ class _EmbeddingService:
         return [[0.1] * 4 for _ in texts]
 
 
+class _Savepoint:
+    """항목별 SAVEPOINT 대역 — 몇 겹까지 열렸는지 추적한다."""
+
+    def __init__(self, session: "_Session") -> None:
+        self._session = session
+
+    async def __aenter__(self) -> "_Savepoint":
+        self._session.depth += 1
+        self._session.max_depth = max(self._session.max_depth, self._session.depth)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        # 예외면 ROLLBACK TO SAVEPOINT — 삼키지 않고 그대로 올려보낸다.
+        self._session.depth -= 1
+        return False
+
+
 class _Session:
     def __init__(self, entry: JournalEntry, items: list[EmbeddingQueueItem]) -> None:
         self.entry = entry
@@ -82,6 +99,11 @@ class _Session:
         self.queue_deleted: list[str] = []
         self.dequeue_calls = 0
         self.attempts = 0
+        self.depth = 0
+        self.max_depth = 0
+
+    def begin_nested(self) -> _Savepoint:
+        return _Savepoint(self)
 
 
 class _Factory:
@@ -208,3 +230,88 @@ async def test_drain_terminates_when_an_item_can_never_succeed(monkeypatch) -> N
     )
     assert session.dequeue_calls == 1
     assert session.queue_deleted == [], "실패 항목은 재시도를 위해 큐에 남아야 한다"
+
+
+class _PoisoningChunkRepo:
+    """Postgres 의 "문장 하나가 깨지면 트랜잭션 전체 폐기" 의미를 흉내낸다.
+
+    SAVEPOINT 밖에서 깨지면 세션이 폐기돼 이후 모든 항목이 연쇄 실패하고,
+    안에서 깨지면 그 항목까지만 되감긴다.
+    """
+
+    def __init__(self, session) -> None:
+        self._session = session
+
+    async def delete_by_entry(self, entry_id: str) -> None:
+        if self._session.aborted:
+            raise RuntimeError("current transaction is aborted")
+        if entry_id in self._session.fail_entries:
+            if self._session.depth == 0:
+                self._session.aborted = True
+            raise RuntimeError(f"SQL error on {entry_id}")
+
+    async def upsert_chunks(self, chunks) -> None:
+        if self._session.aborted:
+            raise RuntimeError("current transaction is aborted")
+        self._session.chunk_calls.append(f"upsert:{chunks[0].entry_id}")
+
+
+class _MultiEntryRepo:
+    def __init__(self, session) -> None:
+        self._session = session
+
+    async def find_by_id(self, entry_id: str, user_id: str):
+        if self._session.aborted:
+            raise RuntimeError("current transaction is aborted")
+        return _entry_with_id(entry_id)
+
+
+def _entry_with_id(entry_id: str) -> JournalEntry:
+    return JournalEntry(
+        id=entry_id,
+        user_id="u1",
+        date_key="2026-09-09",
+        title="제목",
+        content="가" * 40,
+        retro_type=RetroType.DAILY,
+        created_at=_NOW,
+    )
+
+
+async def test_one_items_sql_failure_does_not_cascade_to_the_rest(monkeypatch) -> None:
+    """항목별 SAVEPOINT 가 없으면 첫 항목의 SQL 실패가 배치 전체를 죽인다 (#13).
+
+    배치는 트랜잭션 하나를 공유하므로, 가드가 없으면 첫 실패 이후 모든 항목이
+    InFailedSqlTransaction 으로 죽는다. 게다가 같은 except 가 그것도 삼켜서 로그에는
+    "항목마다 개별 실패"처럼 남아 원인 파악이 어렵다.
+    """
+    items = [
+        EmbeddingQueueItem(
+            id=f"emb_q_{i}",
+            entity_type="entry",
+            entity_id=f"ent_{i}",
+            user_id="u1",
+            created_at=_NOW,
+        )
+        for i in range(1, 4)
+    ]
+    session = _Session(entry=_entry_with_id("ent_1"), items=items)
+    session.aborted = False
+    session.fail_entries = {"ent_1"}  # 첫 항목만 SQL 로 깨진다
+    _install(monkeypatch, session)
+    monkeypatch.setattr(embed_stale, "EntryChunkRepository", _PoisoningChunkRepo)
+    monkeypatch.setattr(
+        "app.retrospective.infrastructure.persistence.repositories."
+        "journal_entry_repo.JournalEntryRepository",
+        _MultiEntryRepo,
+    )
+
+    completed = await embed_stale._process_batch()
+
+    assert not session.aborted, "실패가 SAVEPOINT 밖으로 새 트랜잭션을 폐기했다"
+    assert session.chunk_calls == ["upsert:ent_2", "upsert:ent_3"], (
+        f"첫 항목 실패가 뒤 항목들까지 죽였다: {session.chunk_calls}"
+    )
+    assert completed == 2, f"성공한 2건이 진척으로 세어져야 한다: {completed}"
+    assert session.queue_deleted == ["emb_q_2", "emb_q_3"]
+    assert session.max_depth == 1, "항목마다 SAVEPOINT 가 열려야 한다"

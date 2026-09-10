@@ -81,6 +81,77 @@ def _split_chunks(content: str, max_chars: int, min_chars: int) -> list[str]:
     return result
 
 
+async def _embed_entry_item(item, entry_repo, chunk_repo, queue_repo, emb_service, cfg) -> None:
+    """큐 항목 하나(회고)를 처리한다 — 성공하면 큐에서 지운다."""
+    entry = await entry_repo.find_by_id(item.entity_id, item.user_id)
+    if entry is None:
+        await queue_repo.delete(item.id)
+        return
+
+    chunk_texts = _split_chunks(
+        entry.content, cfg.topic_chunk_max_chars, cfg.topic_chunk_min_chars
+    )
+    if not chunk_texts:
+        await queue_repo.delete(item.id)
+        return
+
+    embeddings = await emb_service.embed_batch(chunk_texts)
+    now = datetime.now(timezone.utc)
+
+    from app.topic.domain.models.topic import EntryChunk
+    chunks = [
+        EntryChunk(
+            id=generate_id("chunk"),
+            entry_id=entry.id,
+            user_id=entry.user_id,
+            chunk_index=idx,
+            text=chunk_texts[idx],
+            date_key=entry.date_key,
+            embedding=embeddings[idx],
+            created_at=now,
+        )
+        for idx in range(len(chunk_texts))
+    ]
+    # 재임베딩 전에 기존 청크를 비운다. upsert 는 주어진 chunk_index 만 갱신하므로,
+    # 회고를 편집해 단락이 줄면 초과 인덱스가 옛 본문·옛 임베딩 그대로 남아 삭제한
+    # 내용이 계속 매칭되고 digest 프롬프트에도 들어간다 (#9).
+    await chunk_repo.delete_by_entry(entry.id)
+    await chunk_repo.upsert_chunks(chunks)
+    await queue_repo.delete(item.id)
+
+
+async def _embed_todo_item(item, todo_repo, todo_emb_repo, queue_repo, emb_service) -> None:
+    """큐 항목 하나(할일)를 처리한다 — 성공하면 큐에서 지운다."""
+    todo = await todo_repo.find_by_id(item.entity_id, item.user_id)
+    if todo is None:
+        await queue_repo.delete(item.id)
+        return
+
+    text_parts = [todo.title]
+    if todo.description:
+        text_parts.append(todo.description)
+    if todo.tags:
+        text_parts.append(" ".join(todo.tags))
+    todo_text = " ".join(text_parts)
+
+    embedding = await emb_service.embed_text(todo_text)
+    now = datetime.now(timezone.utc)
+
+    from app.topic.domain.models.topic import TodoEmbedding
+    todo_emb = TodoEmbedding(
+        id=generate_id("todo_emb"),
+        todo_id=todo.id,
+        user_id=todo.user_id,
+        text=todo_text,
+        date_key=todo.date_key,
+        status=todo.status.value,
+        embedding=embedding,
+        created_at=now,
+    )
+    await todo_emb_repo.upsert(todo_emb)
+    await queue_repo.delete(item.id)
+
+
 async def _process_batch(user_id_filter: str | None = None) -> int:
     """큐에서 한 배치를 처리하고 **큐에서 실제로 없어진** 항목 수를 반환한다.
 
@@ -89,6 +160,12 @@ async def _process_batch(user_id_filter: str | None = None) -> int:
     는 항상 가장 오래된 것부터 돌려주므로 영구히 실패하는 항목이 하나라도 있으면
     호출자의 `while count != 0` 루프가 그 항목을 무한히 다시 꺼내며 끝나지 않는다.
     진척을 반환하면 남은 게 실패 항목뿐일 때 0 이 되어 루프가 종료된다.
+
+    항목마다 SAVEPOINT 로 감싼다 (#13). 배치 전체가 트랜잭션 하나를 공유하는데,
+    Postgres 는 문장 하나가 깨지면 트랜잭션 전체를 폐기하므로 가드가 없으면 한 항목의
+    SQL 실패가 뒤따르는 모든 항목을 InFailedSqlTransaction 으로 연쇄 실패시킨다 —
+    게다가 그 예외도 같은 except 가 삼켜서 로그에는 "항목마다 개별 실패"처럼 남아
+    원인 파악이 어렵다.
     """
     settings = get_settings()
     factory = get_worker_session_factory()
@@ -116,42 +193,10 @@ async def _process_batch(user_id_filter: str | None = None) -> int:
 
             for item in entry_items:
                 try:
-                    entry = await entry_repo.find_by_id(item.entity_id, item.user_id)
-                    if entry is None:
-                        await queue_repo.delete(item.id)
-                        completed += 1
-                        continue
-
-                    chunk_texts = _split_chunks(entry.content, cfg.topic_chunk_max_chars, cfg.topic_chunk_min_chars)
-                    if not chunk_texts:
-                        await queue_repo.delete(item.id)
-                        completed += 1
-                        continue
-
-                    embeddings = await emb_service.embed_batch(chunk_texts)
-                    now = datetime.now(timezone.utc)
-
-                    from app.topic.domain.models.topic import EntryChunk
-                    chunks = [
-                        EntryChunk(
-                            id=generate_id("chunk"),
-                            entry_id=entry.id,
-                            user_id=entry.user_id,
-                            chunk_index=idx,
-                            text=chunk_texts[idx],
-                            date_key=entry.date_key,
-                            embedding=embeddings[idx],
-                            created_at=now,
+                    async with session.begin_nested():
+                        await _embed_entry_item(
+                            item, entry_repo, chunk_repo, queue_repo, emb_service, cfg
                         )
-                        for idx in range(len(chunk_texts))
-                    ]
-                    # 재임베딩 전에 기존 청크를 비운다. upsert 는 주어진 chunk_index 만
-                    # 갱신하므로, 회고를 편집해 단락이 줄면 초과 인덱스가 옛 본문·옛
-                    # 임베딩 그대로 남아 삭제한 내용이 계속 매칭되고 digest 프롬프트에도
-                    # 들어간다 (#9). 같은 트랜잭션이라 중간 상태는 노출되지 않는다.
-                    await chunk_repo.delete_by_entry(entry.id)
-                    await chunk_repo.upsert_chunks(chunks)
-                    await queue_repo.delete(item.id)
                     completed += 1
                 except Exception:
                     _log.exception("embed_stale.entry_failed", entity_id=item.entity_id)
@@ -164,34 +209,10 @@ async def _process_batch(user_id_filter: str | None = None) -> int:
 
             for item in todo_items:
                 try:
-                    todo = await todo_repo.find_by_id(item.entity_id, item.user_id)
-                    if todo is None:
-                        await queue_repo.delete(item.id)
-                        completed += 1
-                        continue
-                    text_parts = [todo.title]
-                    if todo.description:
-                        text_parts.append(todo.description)
-                    if todo.tags:
-                        text_parts.append(" ".join(todo.tags))
-                    todo_text = " ".join(text_parts)
-
-                    embedding = await emb_service.embed_text(todo_text)
-                    now = datetime.now(timezone.utc)
-
-                    from app.topic.domain.models.topic import TodoEmbedding
-                    todo_emb = TodoEmbedding(
-                        id=generate_id("todo_emb"),
-                        todo_id=todo.id,
-                        user_id=todo.user_id,
-                        text=todo_text,
-                        date_key=todo.date_key,
-                        status=todo.status.value,
-                        embedding=embedding,
-                        created_at=now,
-                    )
-                    await todo_emb_repo.upsert(todo_emb)
-                    await queue_repo.delete(item.id)
+                    async with session.begin_nested():
+                        await _embed_todo_item(
+                            item, todo_repo, todo_emb_repo, queue_repo, emb_service
+                        )
                     completed += 1
                 except Exception:
                     _log.exception("embed_stale.todo_failed", entity_id=item.entity_id)
