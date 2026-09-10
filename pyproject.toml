@@ -10,6 +10,23 @@ python_version = "3.12"
 strict = true
 mypy_path = "src"
 plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+# 검사 대상을 설정에 박아 인자 없이 `mypy` 만으로 돌게 한다. explicit_package_bases 가
+# 없으면 mypy 가 같은 파일을 app.x / src.app.x 두 모듈로 보고 검사 전에 멈춘다
+# ("Source file found twice under different module names") — 그동안 타입 검사가
+# 사실상 꺼져 있던 원인이다 (#12).
+packages = ["app"]
+explicit_package_bases = true
+
+# 스텁이 없는 서드파티 — 이쪽 에러는 우리 코드의 신호가 아니라 잡음이라 끈다.
+[[tool.mypy.overrides]]
+module = ["celery.*", "kombu.*", "pytz.*", "jose.*"]
+ignore_missing_imports = true
+
+# celery 의 @task 데코레이터가 untyped 라, 태스크 함수마다 untyped-decorator 가 뜬다.
+# 우리가 고칠 수 있는 문제가 아니므로 워커 모듈에서만 이 검사를 끈다.
+[[tool.mypy.overrides]]
+module = ["app.worker.*"]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -203,6 +203,12 @@ uvicorn app.main:app --reload
 # DB 마이그레이션
 alembic upgrade head
 
+# 테스트 / 린트 / 타입 검사 — 모두 저장소 루트에서 실행한다
+# (pytest 의 pythonpath, mypy 의 mypy_path 가 모두 상대 경로 "src" 라서)
+pytest -q
+ruff check .
+mypy            # 대상은 pyproject.toml 의 packages=["app"] 에 박혀 있어 인자 불필요
+
 # Celery worker 실행 (ai_tasks 큐 반드시 포함 — worker.generate_summary 가 이 큐로 라우팅됨)
 celery -A app.worker.celery_app worker -Q ai_tasks,default --concurrency=3 --loglevel=info
 
