@@ -53,11 +53,8 @@ class RequestSummaryUseCase:
             )
             saved = await self._summary_repo.save(summary)
 
-        from app.worker.tasks.generate_summary import generate_summary_task
-        generate_summary_task.apply_async(
-            args=[saved.id, cmd.user_id],
-            queue="ai_tasks",
-            priority=9,
-        )
-
+        # AI task enqueue 는 여기서 하지 않는다 — 라우터가 BackgroundTasks 로 예약해
+        # 커밋 시점에 더 가깝게 미룬다 (레이스 윈도우 축소). 워커가 커밋 전 row 를
+        # 못 찾는 경우의 실제 정합성 보장은 worker/tasks/generate_summary.py 의
+        # SummaryRowNotYetVisibleError 재시도가 담당한다.
         return saved

@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 from sse_starlette.sse import EventSourceResponse
 
 from app.github.domain.repositories.retrospective_push_repository import (
@@ -50,6 +50,7 @@ _SSE_TIMEOUT = 300  # 5분
 )
 async def generate_summary(
     use_case: FromDishka[RequestSummaryUseCase],
+    background_tasks: BackgroundTasks,
     current_user: UserContext = Depends(get_current_user),
     summary_type: str = Query(alias="type"),
     period_start: str | None = Query(default=None, alias="periodStart"),
@@ -68,6 +69,23 @@ async def generate_summary(
             force=force,
         )
     )
+
+    if summary.status == SummaryStatus.PENDING:
+        # BackgroundTasks 로 예약 — use case 안에서 바로 apply_async 하는 것보다
+        # 커밋 시점에 더 가깝게 미뤄 레이스 윈도우를 줄인다. 다만 이 스택(dishka
+        # ContainerMiddleware + Starlette)에서는 BackgroundTasks 도 요청 스코프
+        # 세션 커밋보다 먼저 실행되므로 순서를 완전히 보장하진 못한다 — 실제 정합성
+        # 보장은 워커 쪽 SummaryRowNotYetVisibleError 재시도가 담당한다
+        # (worker/tasks/generate_summary.py).
+        from app.worker.tasks.generate_summary import generate_summary_task
+
+        background_tasks.add_task(
+            generate_summary_task.apply_async,
+            args=[summary.id, current_user.id],
+            queue="ai_tasks",
+            priority=9,
+        )
+
     return ApiResponse.accepted(SummaryResponse.from_entity(summary))
 
 

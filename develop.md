@@ -622,57 +622,78 @@ FastAPI의 `Depends` 중첩 문제를 해결하기 위해 **dishka**를 사용�
 | `Scope.APP` | 앱 전체 (Singleton) | GitHub 클라이언트, Anthropic 클라이언트, Redis, 설정 |
 | `Scope.REQUEST` | 요청마다 생성/소멸 | DB 세션, Repository, Use Case |
 
-### Provider 정의
+### Provider 정의 — 도메인 모듈별로 분리
+
+Provider 는 **도메인 모듈마다 하나씩** 둔다: `{module}/infrastructure/container/providers.py`. 클래스 기본 `scope` 는 그 도메인에서 다수인 쪽으로 두고, 소수인 쪽만 `@provide(scope=Scope.APP)` 처럼 **메서드 단위로 오버라이드**한다(Dishka 공식 지원 기능 — 한 Provider 클래스 안에 APP/REQUEST scope 가 섞여도 된다).
 
 ```python
-# shared/infrastructure/container/providers.py
+# todo/infrastructure/container/providers.py
 from dishka import Provider, Scope, provide
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
-class AppProvider(Provider):
-    scope = Scope.APP
-
-    @provide
-    def github_client(self, config: AppConfig) -> GitHubApiClient:
-        return GitHubApiClient(token=config.github_token)
-
-    @provide
-    def anthropic_client(self, config: AppConfig) -> AnthropicApiClient:
-        return AnthropicApiClient(api_key=config.anthropic_api_key)
-
-    @provide
-    def redis_cache(self, config: AppConfig) -> RedisCache:
-        return RedisCache(url=config.redis_cache_url)
-
-
-class RequestProvider(Provider):
-    scope = Scope.REQUEST
-
-    @provide
-    async def db_session(
-        self, factory: async_sessionmaker
-    ) -> AsyncGenerator[AsyncSession, None]:
-        async with factory.begin() as session:   # begin() = 성공 시 자동 커밋, 예외 시 자동 롤백
-            yield session
+class TodoProvider(Provider):
+    scope = Scope.REQUEST   # 이 도메인은 REQUEST 가 다수
 
     @provide
     def todo_repo(self, session: AsyncSession) -> ITodoRepository:
         return TodoRepository(session)
 
     @provide
-    def notification_repo(self, session: AsyncSession) -> INotificationRepository:
-        return NotificationRepository(session)
-
-    @provide
     def create_todo_use_case(
         self,
         todo_repo: ITodoRepository,
-        notification_repo: INotificationRepository,
+        settings_repo: IUserSettingsRepository,
     ) -> CreateTodoUseCase:
-        return CreateTodoUseCase(todo_repo, notification_repo)
+        return CreateTodoUseCase(todo_repo, settings_repo)
+```
+
+```python
+# github/infrastructure/container/providers.py
+from dishka import Provider, Scope, provide
+
+class GitHubProvider(Provider):
+    scope = Scope.REQUEST
+
+    @provide(scope=Scope.APP)   # httpx.AsyncClient 를 멤버로 유지 — 앱 전체 싱글턴
+    def github_api_client(self) -> GitHubApiClient:
+        return GitHubApiClient()
+
+    @provide
+    def github_repository_repo(self, session: AsyncSession) -> IGitHubRepositoryRepository:
+        return GitHubRepositoryRepository(session)
+```
+
+`shared/infrastructure/container/providers.py`(`SharedProvider`)는 **특정 도메인에 속하지 않는 공용 인프라만** 담는다(`AppConfig`, DB 세션 팩토리) — 도메인 리포지터리/유스케이스를 여기 등록하지 않는다.
+
+```python
+# shared/infrastructure/container/providers.py
+from collections.abc import AsyncGenerator
+from dishka import Provider, Scope, provide
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+class SharedProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    def settings(self) -> AppConfig:
+        return get_settings()
+
+    @provide
+    def session_factory(self, config: AppConfig) -> async_sessionmaker[AsyncSession]:
+        engine = create_async_engine(config.db.url, ...)
+        return async_sessionmaker(engine, expire_on_commit=False)
+
+    @provide(scope=Scope.REQUEST)   # 세션 자체는 요청마다 생성/소멸
+    async def db_session(
+        self, factory: async_sessionmaker[AsyncSession]
+    ) -> AsyncGenerator[AsyncSession, None]:
+        async with factory.begin() as session:   # begin() = 성공 시 자동 커밋, 예외 시 자동 롤백
+            yield session
 ```
 
 ### 앱 초기화
+
+`main.py` 에서 모든 도메인 Provider 를 모아 하나의 컨테이너로 합친다.
 
 ```python
 # main.py
@@ -680,15 +701,29 @@ from dishka import make_async_container
 from dishka.integrations.fastapi import setup_dishka
 from contextlib import asynccontextmanager
 
+from app.shared.infrastructure.container.providers import SharedProvider
+from app.todo.infrastructure.container.providers import TodoProvider
+from app.github.infrastructure.container.providers import GitHubProvider
+# ... 나머지 도메인 Provider
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    container = make_async_container(AppProvider(), RequestProvider())
-    setup_dishka(container, app=app)
     yield
-    await container.close()   # Redis 커넥션 풀 등 리소스 정리
+    await app.state.dishka_container.close()   # Redis 커넥션 풀 등 리소스 정리
 
-app = FastAPI(lifespan=lifespan)
+def create_app() -> FastAPI:
+    app = FastAPI(lifespan=lifespan)
+    container = make_async_container(
+        SharedProvider(),
+        TodoProvider(),
+        GitHubProvider(),
+        # ... 나머지 도메인 Provider
+    )
+    setup_dishka(container, app=app)
+    return app
 ```
+
+> **신규 도메인 모듈을 추가했다면 그 모듈의 Provider 를 `make_async_container()` 호출부에 반드시 추가한다** — 빠뜨리면 그 모듈의 리포지터리/유스케이스가 미해결(unresolved dependency)로 서버 기동 시점에 에러가 난다(Dishka 가 컨테이너 생성 시 의존성 그래프를 정적으로 검증하므로 즉시 드러난다).
 
 ### Celery 전용 컨테이너
 
@@ -731,16 +766,16 @@ def generate_summary_task(self, user_id: str, retro_id: str) -> dict:
 
 ```python
 container = make_async_container(
-    AppProvider(),
-    RequestProvider(),
-    MockAnthropicProvider(),   # 실제 API 호출 없이 Mock으로 교체
+    SharedProvider(),
+    TodoProvider(),
+    MockGitHubProvider(),   # 실제 API 호출 없이 Mock으로 교체
 )
 ```
 
 ### 새 Use Case 등록 절차
 
 1. `application/use_cases/`에 Use Case 클래스 작성 (파일 1개 = 클래스 1개)
-2. `shared/infrastructure/container/providers.py`의 `RequestProvider`에 `@provide` 메서드 추가
+2. 그 클래스가 속한 도메인 모듈의 `{module}/infrastructure/container/providers.py`에 `@provide` 메서드 추가 — 신규 도메인 모듈이면 Provider 클래스를 새로 만들고 `main.py`의 `make_async_container()` 호출부에 추가한다
 3. 라우터에서 `FromDishka[NewUseCase]`로 주입
 
 ---
@@ -1558,6 +1593,34 @@ def generate_summary_task(self, user_id: str, retro_id: str) -> dict:
 - `max_retries`, `default_retry_delay`를 항상 명시합니다.
 - 태스크는 진입점 역할만 합니다. 비즈니스 로직은 Use Case에 위임합니다.
 
+### `async def` 태스크의 재시도 — `autoretry_for` 금지, `self.retry()` 직접 호출
+
+이 프로젝트의 실제 워커 풀은 `celery_aio_pool.pool.AsyncIOPool`(`app/worker/celery_app.py`)이고, 실제 운영 태스크(예: `app/worker/tasks/generate_summary.py`)는 위 예시처럼 `asyncio.run()`으로 감싼 sync 진입점이 아니라 **`async def` 함수를 그대로 Celery task 로 등록**한다. 이 조합에서는 `@celery_app.task(autoretry_for=(...))` 가 **실제로 작동하지 않는다** — task body 안에서 예외를 던져도 재시도가 걸리지 않고 그냥 태스크가 실패로 끝난다.
+
+**원인**: Celery 의 `add_autoretry_behaviour`(`celery/app/autoretry.py`)는 `task.run` 을 `try: return task._orig_run(*a, **kw) except autoretry_for as exc: task.retry(...)` 형태의 **동기** 래퍼로 감싼다. `task._orig_run` 이 `async def` 함수면, 이걸 "호출"하는 건 코루틴 객체만 만들 뿐 본문을 실행하지 않으므로 이 `try/except` 는 절대 본문의 예외를 못 잡는다. `AsyncIOPool.run()`(`celery_aio_pool/pool.py`)은 그 결과(미실행 코루틴)를 받아 **재귀 호출로 별도 실행**하는데, 실제 예외는 그 재귀 프레임에서 발생해 원래의 `try/except` 를 완전히 비껴간다.
+
+**올바른 패턴**: task 를 `bind=True` 로 선언하고, 재시도가 필요한 지점에서 **코루틴 본문 안에서 직접** `raise self.retry(exc=..., countdown=...)` 를 호출한다. `Task.retry()` 는 `Retry` 를 던지기 전에 `S.apply_async()` 로 재큐잉을 동기적으로 먼저 수행하므로 위 우회 문제와 무관하게 항상 실제로 재시도된다. 지수 백오프가 필요하면 `celery.utils.time.get_exponential_backoff_interval(factor=1, retries=self.request.retries, maximum=..., full_jitter=True)` 로 `countdown` 을 직접 계산한다(데코레이터의 `retry_backoff=True` 와 동일 공식).
+
+**흔한 함정 — `raise self.retry(...)` 는 반드시 그 예외를 잡으려는 `except` 절과 "같은 try 문의 body" 안에 있어야 한다.** `except (SomeError,) as exc: raise self.retry(exc=exc, ...)` 처럼 **형제 except 절 안**에서 호출하면, `max_retries` 소진 시 `Task.retry()` 가 `Retry` 가 아니라 원본 `exc` 를 그대로 재발생시키는데(`raise_with_context`), 이 재발생은 "이미 어느 except 블록 안"에서 일어난 것이라 Python 은 같은 try 문의 다른 형제 except 절(예: 실패 마킹을 하는 `except Exception:`)로 다시 매칭해주지 않는다 — 예외가 그 try/except 전체를 그냥 빠져나가 실패 처리가 통째로 스킵된다. 직접 재현하면:
+
+```python
+class A(Exception): pass
+class B(Exception): pass
+def f():
+    try:
+        raise A()
+    except A:
+        raise B()          # 여기서 재발생
+    except B:
+        print("안 찍힘")    # 형제 except 는 매칭 안 됨
+try:
+    f()
+except B:
+    print("이게 찍힘")       # try/except 밖에서 잡힘
+```
+
+해결: 재시도 대상 호출을 **바깥 try 의 body 안에 중첩된 try/except** 로 감싼다. 그러면 소진 시 재발생한 예외가 중첩 구조를 완전히 빠져나온 뒤 바깥 try 의 except 절들로 새로 매칭된다. 실제 사례는 `app/worker/tasks/generate_summary.py` 의 Gemini 호출부(`try: gemini = ...; content = await gemini.generate(prompt) except (ServerError, TimeoutException) as exc: raise self.retry(...)` 가 바깥 T1/T2 try 의 body 안에 중첩돼 있고, 바깥엔 `except Retry: raise` / `except Exception: ...FAILED 마킹...` 만 있다) 참고.
+
 ### Beat 스케줄 — 사용자 tz 기반 자동 요약
 
 Celery beat은 매시간 정각 단일 dispatcher 태스크만 발사합니다. dispatcher가 각 사용자의 `users.timezone` 기준 "현지 1am" 도달 여부를 판단해 fan-out합니다.
@@ -1682,7 +1745,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 @pytest.fixture
 def client(db_session: AsyncSession) -> TestClient:
-    test_container = make_async_container(AppProvider(), TestRequestProvider(db_session))
+    test_container = make_async_container(SharedProvider(), TestTodoProvider(db_session))
     setup_dishka(test_container, app=app)
     with TestClient(app) as c:
         yield c
