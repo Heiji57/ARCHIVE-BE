@@ -1,0 +1,8 @@
+# GitHub 모듈 컨벤션
+
+이 디렉토리(`src/app/github/`)에서 작업할 때 적용되는 컨벤션. 루트 `CLAUDE.md`의 Key Conventions에서 이관됨.
+
+- **GitHub commit 조회 (`GET /github/commits`)**: scope = `user:email,public_repo`. **public repo only** (private repo 는 404 → `failedRepositories`). **모든 branch 조회** — repo 마다 `list_branches` 로 branch 목록 fetch 후 branch 별 `list_commits(sha=branch)` 병렬 호출 → SHA dedup. default branch 외 feature/topic branch 의 commit 도 포함. 응답은 `{ commits, failedRepositories }`. Fatal 에러(`AUTH_TOKEN_INVALID`/`RATE_LIMITED`/`API_UNAVAILABLE`) 는 전체 raise. 사용자 GitHub `login` 과 **verified emails** 는 `oauth_connections.provider_login` / `provider_verified_emails` 에 캐시(lazy backfill — 첫 commit 조회 시 `/user`, `/user/emails` 호출 후 저장).
+- **GitHub commit 본인 매칭 정책**: GitHub `?author=` 필터는 사용 안 함. 모든 commit 을 받은 뒤 서버사이드 OR 필터 — `author.login == login` OR `committer.login == login` OR `commit.author.email ∈ verified_emails` OR `commit.committer.email ∈ verified_emails`. gitbash 등 로컬 `git config user.email` 이 GitHub 계정에 verified 등록돼 있으면 본인 commit 으로 잡힘. 정책 본체: `get_commits_by_date.py:_is_user_commit`. `GET /github/connection` 응답의 `hasVerifiedEmails: false` 면 FE 가 재연결 유도.
+- **GitHubApiClient**: APP scope 단일 인스턴스 — `httpx.AsyncClient` 멤버 재사용으로 커넥션 풀링. lifespan 종료 시 `close()` 호출 (main.py 의 lifespan 에서 처리).
+- **회고록 GitHub push 상태**: `POST /github/retrospectives/push` 성공 시 `retrospective_pushes` 테이블에 `(user_id, period_type, period_key)` 단위로 upsert. `GET /entries`, `GET /entries/{id}`, `GET /summaries`, `GET /summaries/{id}` 응답의 `githubPush` 필드로 노출. 매핑 헬퍼는 `app.github.domain.utils.period_mapping` — `entry_to_period(entry)` / `summary_to_period(summary)`. `RetroType.YEARLY` 는 push API 의 `annual` 로 정규화.
