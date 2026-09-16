@@ -34,6 +34,15 @@ _TODO_RETURNING = (
 # (recurrence_rule IS NOT NULL AND series_id IS NULL) → base row
 _NOT_BASE_FILTER = "NOT (recurrence_rule IS NOT NULL AND series_id IS NULL)"
 
+# "순수" 일반 todo만 남기는 필터 — base row(series_id IS NULL, recurrence_rule NOT NULL)와
+# exception row(series_id IS NOT NULL, 반복 인스턴스 실체화분. CANCELLED 포함) 를 모두 제외한다.
+# get_todos_by_range/get_todos_by_date 의 "1. 일반 todo" 조회에서 사용: 반복 시리즈의
+# base/exception 은 "2. 반복 확장" 단계(find_masters_overlapping + find_exceptions_batch)가
+# exc_map 으로 전담한다. 여기서 exception row 를 함께 내보내면 2단계에서 같은 row 가
+# 다시 추가돼 응답에 중복 출현하고, CANCELLED exception 은 (api.yaml 에 없는 내부 전용
+# 상태값인데도) 그대로 노출된다 — 두 문제 모두 이 필터로 원천 차단한다.
+_PLAIN_TODO_FILTER = "series_id IS NULL AND recurrence_rule IS NULL"
+
 
 def _rule_to_dict(rule: RecurrenceRule | None) -> dict | None:
     if rule is None:
@@ -87,8 +96,10 @@ class TodoRepository(ITodoRepository):
                 TodoModel.user_id == user_id,
                 TodoModel.date_key >= from_date,
                 TodoModel.date_key <= to_date,
-                # base event 는 반복 확장 로직에서 별도 처리 — 직접 노출 안 함
-                text(_NOT_BASE_FILTER),
+                # base/exception row 는 반복 확장 로직(find_masters_overlapping +
+                # find_exceptions_batch)이 전담 — 여기서 같이 내보내면 중복 노출되고,
+                # CANCELLED exception(취소된 슬롯)도 그대로 새 나간다.
+                text(_PLAIN_TODO_FILTER),
             )
             .order_by(TodoModel.date_key, TodoModel.created_at)
         )
@@ -100,7 +111,8 @@ class TodoRepository(ITodoRepository):
             .where(
                 TodoModel.user_id == user_id,
                 TodoModel.date_key == date_key,
-                text(_NOT_BASE_FILTER),
+                # find_by_date_range 와 동일 정책 — base/exception(CANCELLED 포함) 제외.
+                text(_PLAIN_TODO_FILTER),
             )
             .order_by(TodoModel.created_at)
         )
