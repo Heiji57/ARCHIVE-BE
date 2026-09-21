@@ -1,0 +1,16 @@
+# Per-workspace overrides layered on docker-compose.yml (see .superset/ports.py).
+# Host ports come from .superset/.generated/ports.env so parallel workspaces don't collide.
+# restart is disabled so Docker doesn't resurrect every workspace's stack after a reboot.
+services:
+  api:
+    ports: !override
+      - "${API_PORT}:8000"
+    restart: "no"
+  postgres:
+    ports: !override
+      - "${POSTGRES_PORT}:5432"
+    restart: "no"
+  redis:
+    ports: !override
+      - "${REDIS_PORT}:6379"
+    restart: "no"
