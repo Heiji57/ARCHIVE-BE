@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.shared.domain.models.base import BaseEntity
 from app.todo.domain.exceptions.exceptions import (
@@ -74,7 +75,56 @@ class Todo(BaseEntity):
         self.completed_at = None
 
     def move_to(self, date_key: str) -> None:
+        """날짜 이동 — 시간이 있는 todo 는 start/end 도 새 날짜로 평행이동한다.
+
+        Google Calendar push 는 시간 이벤트를 start_time/end_time 으로만 만들고
+        date_key 는 보지 않는다. date_key 만 바꾸면 캘린더 이벤트가 옛 날짜에 남는다.
+        기준은 기존 date_key 가 아니라 start(없으면 end)의 로컬 날짜 — 이미 어긋난
+        row 도 이동 시 date_key 와 다시 일치한다. 로컬 벽시계 시각과 start~end 일수
+        차이는 유지한다(DST 무관). 같은 요청에 start/end 가 명시되면 호출자가 이후
+        덮어쓴다.
+        """
+        local_date = self._time_local_date()
+        if local_date is not None:
+            tz = self._zone()
+            delta = date.fromisoformat(date_key) - local_date
+            self.start_time = _shift_local_days(self.start_time, tz, delta)
+            self.end_time = _shift_local_days(self.end_time, tz, delta)
         self.date_key = date_key
+
+    def align_date_to_time(self) -> None:
+        """시간 변경의 반대 방향 — date_key 를 start(없으면 end)의 로컬 날짜로 맞춘다.
+
+        시간만 바꾸다 자정을 넘기면(예: 23:00 → 다음날 01:00) start_time 은 다음 날인데
+        date_key 는 그대로 남아 move_to 와 같은 모순이 생긴다. 시간 없는 todo 는 무변경.
+        """
+        local_date = self._time_local_date()
+        if local_date is not None:
+            self.date_key = local_date.isoformat()
+
+    def _time_local_date(self) -> date | None:
+        """start(없으면 end)의 로컬 날짜 — date_key 와 일치해야 하는 기준."""
+        anchor = self.start_time or self.end_time
+        if anchor is None:
+            return None
+        return _as_utc(anchor).astimezone(self._zone()).date()
+
+    def _zone(self) -> ZoneInfo:
+        try:
+            return ZoneInfo(self.timezone or "UTC")
+        except (ZoneInfoNotFoundError, ValueError):
+            return ZoneInfo("UTC")
+
+
+def _as_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _shift_local_days(dt: datetime | None, tz: ZoneInfo, delta: timedelta) -> datetime | None:
+    """로컬 벽시계 기준으로 delta 일 이동 후 UTC 로 반환."""
+    if dt is None:
+        return None
+    return (_as_utc(dt).astimezone(tz) + delta).astimezone(timezone.utc)
 
 
 @dataclass(frozen=True, kw_only=True)
