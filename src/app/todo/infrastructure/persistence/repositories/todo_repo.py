@@ -312,6 +312,17 @@ class TodoRepository(ITodoRepository):
     async def claim_single_pending_push(
         self, todo_id: str, user_id: str, attempt_id: str
     ) -> Todo | None:
+        # 즉시 push task 는 요청 트랜잭션 커밋 전에 enqueue 된다. 그 사이 도착하면 행이
+        # 요청 txn 에 잠겨 있고 스냅샷상 아직 'pending' 이 아니라, 아래 claim 만으로는
+        # (SKIP LOCKED 든 FOR UPDATE 든 상태 필터에서 먼저 탈락) no-op 이 돼 배치 주기까지
+        # 반영이 밀린다. 그래서 id 로만 먼저 잠금을 대기해 요청 커밋/롤백을 기다린 뒤,
+        # 새 스냅샷을 쓰는 별도 statement 로 claim 한다. 요청이 롤백됐거나 배치가 먼저
+        # 가져갔으면(syncing) claim 은 0행. lock_timeout 초과 시 예외 → 배치가 처리.
+        await self._session.execute(text("SET LOCAL lock_timeout = '5s'"))
+        await self._session.execute(
+            text("SELECT 1 FROM todos WHERE id = :id AND user_id = :user_id FOR UPDATE"),
+            {"id": todo_id, "user_id": user_id},
+        )
         result = await self._session.execute(
             text(
                 "WITH candidates AS ("
