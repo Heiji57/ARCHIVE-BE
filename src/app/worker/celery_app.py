@@ -33,7 +33,8 @@ _TASK_ROUTES = {
 
 def create_celery_app() -> Celery:
     settings = get_settings()
-    app = Celery("archive")
+    # AsyncContextTask — celery_aio_pool 루프 스레드에서 self.request(retry·retries)를 복원한다.
+    app = Celery("archive", task_cls="app.worker.task_base:AsyncContextTask")
     app.conf.update(
         broker_url=settings.redis.broker_url,
         result_backend=settings.redis.result_backend_url,

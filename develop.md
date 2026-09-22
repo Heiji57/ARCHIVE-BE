@@ -1601,6 +1601,8 @@ def generate_summary_task(self, user_id: str, retro_id: str) -> dict:
 
 **올바른 패턴**: task 를 `bind=True` 로 선언하고, 재시도가 필요한 지점에서 **코루틴 본문 안에서 직접** `raise self.retry(exc=..., countdown=...)` 를 호출한다. `Task.retry()` 는 `Retry` 를 던지기 전에 `S.apply_async()` 로 재큐잉을 동기적으로 먼저 수행하므로 위 우회 문제와 무관하게 항상 실제로 재시도된다. 지수 백오프가 필요하면 `celery.utils.time.get_exponential_backoff_interval(factor=1, retries=self.request.retries, maximum=..., full_jitter=True)` 로 `countdown` 을 직접 계산한다(데코레이터의 `retry_backoff=True` 와 동일 공식).
 
+**전제 — `self.request` 복원 (`app/worker/task_base.py` `AsyncContextTask`)**: celery_aio_pool 은 호출 스레드에서 `push_request()` 후 코루틴 **본문을 별도 루프 스레드**에서 실행하는데, Celery request 스택은 스레드 로컬이라 기본 Task 로는 본문의 `self.request` 가 빈 Context(`id=None`, `retries=0`, `called_directly=True`)다(실측). 그러면 `self.retry()` 는 called_directly 분기로 빠져 **재큐잉 없이 원본 예외만 재발생**한다 — 이 클래스 도입 전에는 모든 async 태스크 재시도가 실제로 일어나지 않았다. `celery_app` 의 `task_cls` 로 지정돼 있으며, `run` 을 감싸 호출 스레드에서 request 를 캡처하고 루프 스레드 코루틴 안에서 ContextVar 로 복원한다(태스크별 로그 컨텍스트 `task_id`/`task_name` 도 여기서 바인딩). 회귀 테스트는 실제 풀을 태우는 `test/test_worker_async_task_request.py` — `retry` 를 목으로 바꾸는 테스트만으로는 이 문제가 안 잡힌다.
+
 **흔한 함정 — `raise self.retry(...)` 는 반드시 그 예외를 잡으려는 `except` 절과 "같은 try 문의 body" 안에 있어야 한다.** `except (SomeError,) as exc: raise self.retry(exc=exc, ...)` 처럼 **형제 except 절 안**에서 호출하면, `max_retries` 소진 시 `Task.retry()` 가 `Retry` 가 아니라 원본 `exc` 를 그대로 재발생시키는데(`raise_with_context`), 이 재발생은 "이미 어느 except 블록 안"에서 일어난 것이라 Python 은 같은 try 문의 다른 형제 except 절(예: 실패 마킹을 하는 `except Exception:`)로 다시 매칭해주지 않는다 — 예외가 그 try/except 전체를 그냥 빠져나가 실패 처리가 통째로 스킵된다. 직접 재현하면:
 
 ```python
