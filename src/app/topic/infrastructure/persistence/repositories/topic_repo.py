@@ -3,10 +3,23 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.shared.infrastructure.database.errors import translate_unique_violations
+from app.topic.domain.exceptions.exceptions import (
+    DigestAlreadyInProgressException,
+    TopicNameDuplicatedException,
+)
 from app.topic.domain.models.topic import Topic, TopicDigest
 from app.topic.domain.models.value_objects import DigestStatus
 from app.topic.domain.repositories.repository import ITopicDigestRepository, ITopicRepository
 from app.topic.infrastructure.persistence.models.topic_model import TopicDigestModel, TopicModel
+
+# 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
+_TOPIC_UNIQUE_VIOLATIONS = {
+    "uq_topics_user_name": TopicNameDuplicatedException,
+}
+_DIGEST_UNIQUE_VIOLATIONS = {
+    "uq_topic_digests_topic_user": DigestAlreadyInProgressException,
+}
 
 
 class TopicRepository(ITopicRepository):
@@ -15,8 +28,9 @@ class TopicRepository(ITopicRepository):
 
     async def save(self, topic: Topic) -> Topic:
         model = self._to_model(topic)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_TOPIC_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def find_by_id(self, topic_id: str, user_id: str) -> Topic | None:
@@ -95,8 +109,9 @@ class TopicDigestRepository(ITopicDigestRepository):
 
     async def save(self, digest: TopicDigest) -> TopicDigest:
         model = self._to_model(digest)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_DIGEST_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def find_by_topic(self, topic_id: str, user_id: str) -> TopicDigest | None:
