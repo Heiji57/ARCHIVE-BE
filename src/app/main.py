@@ -22,6 +22,7 @@ from app.retrospective.presentation.router import router as entry_router
 from app.retrospective.presentation.summary_router import router as summary_router
 from app.retrospective.presentation.template_router import (
     active_router as summary_active_router,
+    active_router_v2 as summary_active_router_v2,
 )
 from app.retrospective.presentation.template_router import (
     template_router as summary_template_router,
@@ -146,8 +147,12 @@ def create_app() -> FastAPI:
     app.include_router(calendar_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(topic_router, prefix="/api/v1")
-    # v2 — 에러 코드가 세분화된 일부 엔드포인트만 (나머지는 v1 유지)
+    # v2 — 에러 코드·검증이 v1 과 달라지는 엔드포인트만 (나머지는 v1 유지). GitHub/Calendar 는
+    # 핸들러가 같고 코드 선택만 경로 prefix 로 갈린다(errors/handler.py _V1_LEGACY_CODES).
     app.include_router(auth_router_v2, prefix="/api/v2")
+    app.include_router(github_router, prefix="/api/v2")
+    app.include_router(calendar_router, prefix="/api/v2")
+    app.include_router(summary_active_router_v2, prefix="/api/v2")
     return app
 
 

@@ -85,6 +85,8 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 | Auth | `GET /auth/oauth/{provider}/authorize`, `/callback`, `POST /auth/oauth/{provider}/link/init`, `POST /auth/oauth/onboarding` |
 | Auth | `GET /auth/sessions`, `DELETE /auth/sessions`, `DELETE /auth/sessions/{sessionId}` (활성 세션 관리) |
 | Auth **v2** | `POST /api/v2/auth/email/verify/send`, `/confirm`, `GET /api/v2/auth/oauth/{provider}/authorize`, `POST /api/v2/auth/oauth/{provider}/link/init` (에러 코드 세분화 — `auth/presentation/router_v2.py`) |
+| GitHub·Calendar **v2** | `/api/v2/github/*`, `/api/v2/calendar/*` — v1 과 같은 핸들러, 세분화 코드(`GITHUB_PERMISSION_DENIED` 등)만 v2 에서 노출 |
+| Summary **v2** | `PUT /api/v2/settings/auto-summary/active` (알 수 없는 키 422) |
 | Todo | `GET/POST /todos`, `PATCH/DELETE /todos/{id}` |
 | Entry | `GET/POST /entries`, `GET /entries/paginated`, `GET/PUT/DELETE /entries/{id}`, `PATCH /entries/{id}/folder` |
 | Folder | `POST /folders`, `GET /folders/contents`, `PATCH/DELETE /folders/{id}` (중첩 폴더로 회고록 정리) |

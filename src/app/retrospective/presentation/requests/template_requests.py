@@ -45,3 +45,13 @@ class SetActiveSummaryTemplatesRequest(BaseModel):
         if "annual" in sent:
             result["annual"] = self.annual
         return result
+
+
+class StrictSetActiveSummaryTemplatesRequest(SetActiveSummaryTemplatesRequest):
+    """[v2] 알 수 없는 키를 422 로 거절한다.
+
+    v1 은 pydantic 기본값(extra="ignore")이라 오타·잘못된 키(예: 회고 타입명 "yearly" —
+    요약 타입은 "annual")가 조용히 버려지고 200 이 나가, 아무것도 안 바뀐 걸 FE 가 모른다.
+    """
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}

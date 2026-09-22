@@ -26,6 +26,18 @@ info:
     (영숫자·`.`·`_`·`-`, 최대 64자)를 보내면 그 값을 그대로 쓰고, 없거나 형식이 다르면 서버가 생성한다.
     서버 로그의 `request_id` 와 같으므로 문의·버그 리포트에 함께 전달하면 추적할 수 있다.
 
+    ### v2 (`/api/v2`) — 에러 코드·검증이 v1 과 다른 엔드포인트만
+    v1 은 하위호환을 위해 기존 코드를 그대로 유지한다. 요청/응답 본문은 v1 과 동일.
+    - **auth**: 아래 `/v2/auth/*` 경로 참고.
+    - **GitHub / Calendar**: `/github/*`, `/calendar/*` 의 **모든 엔드포인트가 `/api/v2` 에도 동일하게 존재**한다
+      (경로 목록·스키마는 v1 항목과 같다 — 중복 기재하지 않음). v2 에서만 다음 코드가 그대로 나간다(괄호 안은 v1 코드):
+      - `403 GITHUB_PERMISSION_DENIED` — scope 부족·조직 SSO·저장소 권한 없음 (v1: `503 GITHUB_API_UNAVAILABLE`)
+      - `502 GITHUB_RESPONSE_INVALID` — GitHub 응답 형식 이상 (v1: `500 INTERNAL_ERROR`)
+      - `429 GOOGLE_CALENDAR_RATE_LIMITED` — Google 속도 제한 (v1: `503 GOOGLE_CALENDAR_API_UNAVAILABLE`)
+      - `502 GOOGLE_CALENDAR_RESPONSE_INVALID` — Google 응답 형식 이상 (v1: `503 GOOGLE_CALENDAR_API_UNAVAILABLE`)
+      - 캘린더 연결 callback(`/calendar/callback`)은 Google 에 등록된 redirect_uri 라 v1 경로·v1 코드로 고정.
+    - **자동 요약 활성 템플릿**: `/v2/settings/auto-summary/active` — 알 수 없는 키를 422 로 거절.
+
     ### AI 요약 비동기 처리
     `POST /summaries/generate`는 `202 Accepted`만 반환한다.
     실제 결과는 Celery worker가 처리하며, 클라이언트는 `GET /summaries/{id}/stream` SSE로 완료 신호를 받는다.
@@ -1689,6 +1701,38 @@ paths:
       x-error-codes:
         - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
 
+  /v2/settings/auto-summary/active:
+    servers: *v2Servers
+    put:
+      tags: [summary-templates]
+      summary: "[v2] summary_type 별 활성 템플릿 설정 (알 수 없는 키 거절)"
+      description: |
+        v1 `PUT /settings/auto-summary/active` 와 동일하되, 본문에 `weekly`/`monthly`/`annual` 외의 키가 있으면
+        `422 VALIDATION_ERROR` (`details[].field` 에 키 이름). v1 은 알 수 없는 키를 조용히 무시하고 200 을 반환한다
+        (예: 회고 타입명 `yearly` — 요약 타입은 `annual`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SetActiveSummaryTemplatesRequest"
+              additionalProperties: false
+      responses:
+        "200":
+          description: ok — 갱신된 SettingsResponse
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSettings" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
+        - VALIDATION_ERROR
+
   /summaries/readiness:
     get:
       tags: [summaries]
@@ -3192,6 +3236,7 @@ components:
       description: |
         권한 없음. 가능한 코드:
         - `DEVELOPER_ACCOUNT_REQUIRED` — GitHub 기능은 developer 계정 전용. `PATCH /auth/me`로 계정 유형 변경 필요.
+        - `GITHUB_PERMISSION_DENIED` — [v2] GitHub 권한 부족 (scope·조직 SSO·저장소 접근). GitHub 재연결/권한 확인 유도
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -3271,6 +3316,7 @@ components:
         - `AUTH_LOGIN_RATE_LIMITED` — 로그인 실패 누적으로 일시 차단(brute-force 방어, email+IP 고정 윈도우). 잠시 후 재시도.
         - `AUTH_EMAIL_SEND_COOLDOWN` — [v2] 이메일 인증 코드 재발송 쿨다운
         - `AUTH_EMAIL_CODE_ATTEMPTS_EXCEEDED` — [v2] 인증 코드 오입력 한도 초과(코드 폐기, 새 코드 요청 필요)
+        - `GOOGLE_CALENDAR_RATE_LIMITED` — [v2] Google Calendar 속도 제한. 잠시 후 재시도
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -3289,6 +3335,8 @@ components:
         FE는 사용자에게 "다시 시도" 안내. 자동 retry는 금지(중복 commit 위험).
         그 외 가능한 코드:
         - `AUTH_OAUTH_PROVIDER_RESPONSE_INVALID` — [v2, OAuth callback] provider 응답 형식 이상·요청 거부
+        - `GITHUB_RESPONSE_INVALID` — [v2] GitHub 응답 형식 이상
+        - `GOOGLE_CALENDAR_RESPONSE_INVALID` — [v2] Google Calendar 응답 형식 이상
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
