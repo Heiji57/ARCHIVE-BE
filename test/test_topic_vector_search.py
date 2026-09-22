@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.topic.application.dtos.queries import GetTopicsQuery
 from app.topic.application.use_cases.get_topics import GetTopicsUseCase
@@ -40,8 +41,11 @@ class _TransactionAbortedError(RuntimeError):
     """asyncpg 의 InFailedSQLTransactionError 대역."""
 
 
-class _StatementError(RuntimeError):
-    """문장 하나가 DB 에서 거절된 상황 (구문 오류, 타임아웃 등) 대역."""
+class _StatementError(SQLAlchemyError):
+    """문장 하나가 DB 에서 거절된 상황 (구문 오류, 타임아웃 등) 대역.
+
+    실제 드라이버 오류는 SQLAlchemy 가 SQLAlchemyError 계열(DBAPIError)로 감싸 올린다 —
+    목록 유스케이스는 이 계열만 degrade 하고 코드 버그는 전파하므로 같은 계열이어야 한다."""
 
 
 class _Savepoint:

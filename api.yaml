@@ -19,6 +19,25 @@ info:
     ```
     에러 응답은 `data: null`이며 `details[]`가 추가된다.
 
+    처리되지 않은 서버 오류도 같은 봉투로 `500` + `code: INTERNAL_ERROR` 를 반환한다.
+
+    ### 요청 추적 (`X-Request-ID`)
+    모든 응답에 `X-Request-ID` 헤더가 포함된다 (CORS 로 노출). 요청에 `X-Request-ID`
+    (영숫자·`.`·`_`·`-`, 최대 64자)를 보내면 그 값을 그대로 쓰고, 없거나 형식이 다르면 서버가 생성한다.
+    서버 로그의 `request_id` 와 같으므로 문의·버그 리포트에 함께 전달하면 추적할 수 있다.
+
+    ### v2 (`/api/v2`) — 에러 코드·검증이 v1 과 다른 엔드포인트만
+    v1 은 하위호환을 위해 기존 코드를 그대로 유지한다. 요청/응답 본문은 v1 과 동일.
+    - **auth**: 아래 `/v2/auth/*` 경로 참고.
+    - **GitHub / Calendar**: `/github/*`, `/calendar/*` 의 **모든 엔드포인트가 `/api/v2` 에도 동일하게 존재**한다
+      (경로 목록·스키마는 v1 항목과 같다 — 중복 기재하지 않음). v2 에서만 다음 코드가 그대로 나간다(괄호 안은 v1 코드):
+      - `403 GITHUB_PERMISSION_DENIED` — scope 부족·조직 SSO·저장소 권한 없음 (v1: `503 GITHUB_API_UNAVAILABLE`)
+      - `502 GITHUB_RESPONSE_INVALID` — GitHub 응답 형식 이상 (v1: `500 INTERNAL_ERROR`)
+      - `429 GOOGLE_CALENDAR_RATE_LIMITED` — Google 속도 제한 (v1: `503 GOOGLE_CALENDAR_API_UNAVAILABLE`)
+      - `502 GOOGLE_CALENDAR_RESPONSE_INVALID` — Google 응답 형식 이상 (v1: `503 GOOGLE_CALENDAR_API_UNAVAILABLE`)
+      - 캘린더 연결 callback(`/calendar/callback`)은 Google 에 등록된 redirect_uri 라 v1 경로·v1 코드로 고정.
+    - **자동 요약 활성 템플릿**: `/v2/settings/auto-summary/active` — 알 수 없는 키를 422 로 거절.
+
     ### AI 요약 비동기 처리
     `POST /summaries/generate`는 `202 Accepted`만 반환한다.
     실제 결과는 Celery worker가 처리하며, 클라이언트는 `GET /summaries/{id}/stream` SSE로 완료 신호를 받는다.
@@ -545,6 +564,120 @@ paths:
         - AUTH_OAUTH_STATE_INVALID
         - AUTH_OAUTH_ACCOUNT_ALREADY_LINKED
         - AUTH_OAUTH_PROVIDER_ALREADY_LINKED
+
+  # ── v2 (auth 에러 코드 세분화) ──────────────────────────────────────────────
+  # 요청/응답 본문은 v1 과 동일, 에러 코드만 다르다. v1 은 하위호환을 위해 기존 코드를 유지한다
+  # (BE `errors/handler.py` 의 `_V1_LEGACY_CODES`). 전역 servers 가 /api/v1 기준이라 path 단위로
+  # servers 를 /api 로 재정의한다 → 실제 경로는 /api/v2/auth/...
+  /v2/auth/email/verify/send:
+    servers: &v2Servers
+      - url: http://localhost:8000/api
+        description: 로컬 개발 서버
+      - url: https://api.archive.example.com/api
+        description: 운영 서버 (placeholder)
+    post:
+      tags: [auth]
+      summary: "[v2] 이메일 인증 코드 발송"
+      description: |
+        v1 `POST /auth/email/verify/send` 와 동일. 실패 코드만 세분화:
+        - 재발송 쿨다운 → `429 AUTH_EMAIL_SEND_COOLDOWN` (v1: `401 AUTH_TOKEN_INVALID`)
+        - 메일 서버 발송 실패 → `503 EMAIL_DELIVERY_FAILED` (v1: `500 INTERNAL_ERROR`)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendVerificationRequest" }
+      responses:
+        "200":
+          description: 코드 발송 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+        "429": { $ref: "#/components/responses/RateLimited_429" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable_503" }
+      x-error-codes:
+        - AUTH_EMAIL_SEND_COOLDOWN
+        - EMAIL_DELIVERY_FAILED
+        - CACHE_UNAVAILABLE
+
+  /v2/auth/email/verify/confirm:
+    servers: *v2Servers
+    post:
+      tags: [auth]
+      summary: "[v2] 이메일 인증 코드 확인"
+      description: |
+        v1 `POST /auth/email/verify/confirm` 와 동일. v1 에서 전부 `401 AUTH_TOKEN_INVALID` 이던 실패를 구분:
+        - 코드 불일치 → `400 AUTH_EMAIL_CODE_INVALID` (남은 시도 안에서 재입력)
+        - 코드 만료/미발급 → `400 AUTH_EMAIL_CODE_EXPIRED` (새 코드 요청)
+        - 오입력 한도 초과 → `429 AUTH_EMAIL_CODE_ATTEMPTS_EXCEEDED` (코드 폐기, 새 코드 요청)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyCodeRequest" }
+      responses:
+        "200":
+          description: 인증 성공
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "400": { $ref: "#/components/responses/BadRequest_400" }
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+        "429": { $ref: "#/components/responses/RateLimited_429" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable_503" }
+      x-error-codes:
+        - AUTH_EMAIL_CODE_INVALID
+        - AUTH_EMAIL_CODE_EXPIRED
+        - AUTH_EMAIL_CODE_ATTEMPTS_EXCEEDED
+        - CACHE_UNAVAILABLE
+
+  /v2/auth/oauth/{provider}/authorize:
+    servers: *v2Servers
+    get:
+      tags: [auth]
+      summary: "[v2] OAuth 인증 시작 (로그인용 리다이렉트)"
+      description: |
+        v1 `GET /auth/oauth/{provider}/authorize` 와 동일한 302 Redirect.
+        callback URL 은 provider 에 등록된 redirect_uri 라 **v1 경로(`/api/v1/auth/oauth/{provider}/callback`) 그대로**다.
+        v2 로 시작한 흐름은 state 에 버전이 기록되어, callback 의 `oauth_error.error` 가 아래 세분화된 코드로 온다
+        (v1 흐름에서는 괄호 안 기존 코드):
+        - `AUTH_OAUTH_CODE_INVALID` — 인가 코드 만료·재사용 (v1: `AUTH_OAUTH_STATE_INVALID`)
+        - `AUTH_OAUTH_EMAIL_NOT_VERIFIED` — provider 계정에 인증된 이메일 없음 (v1: `AUTH_OAUTH_STATE_INVALID`)
+        - `AUTH_OAUTH_PROVIDER_UNAVAILABLE` — provider 네트워크 오류·타임아웃·5xx, 잠시 후 재시도 (v1: `INTERNAL_ERROR`)
+        - `AUTH_OAUTH_PROVIDER_RESPONSE_INVALID` — provider 응답 형식 이상·요청 거부 (v1: `INTERNAL_ERROR`)
+        - 그 외 기존 코드(`AUTH_OAUTH_STATE_INVALID`, `AUTH_OAUTH_*_ALREADY_LINKED`, `INTERNAL_ERROR`)는 동일.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/OAuthProviderPath"
+      responses:
+        "302":
+          description: OAuth provider로 리다이렉트
+          headers:
+            Location:
+              description: provider의 authorize URL
+              schema: { type: string, format: uri }
+
+  /v2/auth/oauth/{provider}/link/init:
+    servers: *v2Servers
+    post:
+      tags: [auth]
+      summary: "[v2] OAuth 계정 연결 시작 (Bearer 인증 필수)"
+      description: |
+        v1 `POST /auth/oauth/{provider}/link/init` 와 동일. 반환된 authorizeUrl 로 시작한 흐름의
+        callback 에러 코드는 `[v2] OAuth 인증 시작` 과 같은 세분화 규칙을 따른다.
+      parameters:
+        - $ref: "#/components/parameters/OAuthProviderPath"
+      responses:
+        "200":
+          description: authorize URL 반환
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseOAuthLinkInit" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /auth/oauth/onboarding:
     post:
@@ -1567,6 +1700,38 @@ paths:
           $ref: "#/components/responses/NotFound_404"
       x-error-codes:
         - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
+
+  /v2/settings/auto-summary/active:
+    servers: *v2Servers
+    put:
+      tags: [summary-templates]
+      summary: "[v2] summary_type 별 활성 템플릿 설정 (알 수 없는 키 거절)"
+      description: |
+        v1 `PUT /settings/auto-summary/active` 와 동일하되, 본문에 `weekly`/`monthly`/`annual` 외의 키가 있으면
+        `422 VALIDATION_ERROR` (`details[].field` 에 키 이름). v1 은 알 수 없는 키를 조용히 무시하고 200 을 반환한다
+        (예: 회고 타입명 `yearly` — 요약 타입은 `annual`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/SetActiveSummaryTemplatesRequest"
+              additionalProperties: false
+      responses:
+        "200":
+          description: ok — 갱신된 SettingsResponse
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseSettings" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
+        "404":
+          $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+      x-error-codes:
+        - RETRO_SUMMARY_TEMPLATE_NOT_FOUND
+        - VALIDATION_ERROR
 
   /summaries/readiness:
     get:
@@ -3032,6 +3197,10 @@ components:
         - `AUTH_PASSWORD_RESET_NOT_ALLOWED` — OAuth 전용 계정은 비밀번호 재설정 불가
         - `GOOGLE_CALENDAR_NOT_CONNECTED` — Google Calendar 미연결
         - `GOOGLE_CALENDAR_STATE_INVALID` — 캘린더 연결 OAuth state 검증 실패
+        - `AUTH_EMAIL_CODE_INVALID` — [v2] 이메일 인증 코드 불일치
+        - `AUTH_EMAIL_CODE_EXPIRED` — [v2] 이메일 인증 코드 만료/미발급
+        - `AUTH_OAUTH_CODE_INVALID` — [v2, OAuth callback] 인가 코드 만료·재사용
+        - `AUTH_OAUTH_EMAIL_NOT_VERIFIED` — [v2, OAuth callback] provider 계정에 인증된 이메일 없음
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -3067,6 +3236,7 @@ components:
       description: |
         권한 없음. 가능한 코드:
         - `DEVELOPER_ACCOUNT_REQUIRED` — GitHub 기능은 developer 계정 전용. `PATCH /auth/me`로 계정 유형 변경 필요.
+        - `GITHUB_PERMISSION_DENIED` — [v2] GitHub 권한 부족 (scope·조직 SSO·저장소 접근). GitHub 재연결/권한 확인 유도
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -3144,6 +3314,9 @@ components:
         - `RETRO_SUMMARY_RATE_LIMIT_EXCEEDED` — 사용자별 AI 요약 생성 한도(7일 sliding window) 초과.
           `details[0]` 에 `{ summaryType, limit, windowSeconds, retryAfterSeconds }` 포함.
         - `AUTH_LOGIN_RATE_LIMITED` — 로그인 실패 누적으로 일시 차단(brute-force 방어, email+IP 고정 윈도우). 잠시 후 재시도.
+        - `AUTH_EMAIL_SEND_COOLDOWN` — [v2] 이메일 인증 코드 재발송 쿨다운
+        - `AUTH_EMAIL_CODE_ATTEMPTS_EXCEEDED` — [v2] 인증 코드 오입력 한도 초과(코드 폐기, 새 코드 요청 필요)
+        - `GOOGLE_CALENDAR_RATE_LIMITED` — [v2] Google Calendar 속도 제한. 잠시 후 재시도
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -3160,6 +3333,10 @@ components:
       description: |
         외부 서비스(GitHub) push 실패. sha 충돌 / 권한 / 네트워크 오류 등.
         FE는 사용자에게 "다시 시도" 안내. 자동 retry는 금지(중복 commit 위험).
+        그 외 가능한 코드:
+        - `AUTH_OAUTH_PROVIDER_RESPONSE_INVALID` — [v2, OAuth callback] provider 응답 형식 이상·요청 거부
+        - `GITHUB_RESPONSE_INVALID` — [v2] GitHub 응답 형식 이상
+        - `GOOGLE_CALENDAR_RESPONSE_INVALID` — [v2] Google Calendar 응답 형식 이상
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -3173,6 +3350,9 @@ components:
         외부 서비스 일시적 장애. 가능한 코드:
         - `GITHUB_API_UNAVAILABLE` — GitHub API 장애
         - `GOOGLE_CALENDAR_API_UNAVAILABLE` — Google Calendar API 장애
+        - `AUTH_OAUTH_PROVIDER_UNAVAILABLE` — [v2, OAuth callback] OAuth provider 일시 장애
+        - `EMAIL_DELIVERY_FAILED` — [v2] 메일 서버 발송 실패 (v1: `500 INTERNAL_ERROR`)
+        - `CACHE_UNAVAILABLE` — [v2] 캐시(Redis) 장애. 로그인 제한 등 보안 기능은 fail-closed (v1: `500 INTERNAL_ERROR`)
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }

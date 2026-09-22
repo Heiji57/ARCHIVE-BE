@@ -1,10 +1,17 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.shared.infrastructure.database.errors import translate_unique_violations
+from app.user.domain.exceptions.exceptions import UserEmailDuplicatedException
 from app.user.domain.models.user import User
 from app.user.domain.models.value_objects import Email
 from app.user.domain.repositories.repository import IUserRepository
 from app.user.infrastructure.persistence.models.user_model import UserModel
+
+# 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
+_UNIQUE_VIOLATIONS = {
+    "users_email_key": UserEmailDuplicatedException,
+}
 
 
 class UserRepository(IUserRepository):
@@ -13,8 +20,9 @@ class UserRepository(IUserRepository):
 
     async def save(self, user: User) -> User:
         model = self._to_model(user)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def find_by_id(self, id: str) -> User | None:

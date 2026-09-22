@@ -1,7 +1,10 @@
 from dataclasses import dataclass
 
 import structlog
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.shared.domain.exceptions.external import AIServiceException
 from app.topic.application.dtos.queries import GetTopicsQuery
 from app.topic.application.services.topic_matcher import TopicMatcher
 from app.topic.domain.models.topic import Topic
@@ -40,10 +43,12 @@ class GetTopicsUseCase:
         if not topics:
             return []
 
-        # 카운트는 부가 정보다 — 임베딩 API 장애/쿼터 초과로 목록 자체가 죽으면 안 된다.
+        # 카운트는 부가 정보다 — 임베딩 API 장애/쿼터 초과, 매칭 캐시·락(Redis) 장애, 벡터
+        # 검색 DB 오류(매처가 SAVEPOINT 로 격리)로 목록 자체가 죽으면 안 된다.
+        # 그 외(코드 버그)는 degrade 로 가리지 않고 전파한다.
         try:
             matches = await self._matcher.match_many(query.user_id, topics)
-        except Exception:
+        except (AIServiceException, RedisError, SQLAlchemyError):
             _log.warning("get_topics.match_failed", user_id=query.user_id, exc_info=True)
             matches = {}
 

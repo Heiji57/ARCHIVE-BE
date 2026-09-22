@@ -19,6 +19,10 @@ class InitiateOAuthLinkUseCase:
         self._registry = registry
         self._state_cache = state_cache
 
-    async def execute(self, provider: OAuthProvider, user_id: str) -> str:
-        state = await self._state_cache.create_link_state(provider.value, user_id)
+    async def execute(
+        self, provider: OAuthProvider, user_id: str, api_version: str = "v1"
+    ) -> str:
+        state = await self._state_cache.create_link_state(
+            provider.value, user_id, api_version=api_version
+        )
         return self._registry.get(provider).get_authorization_url(state)

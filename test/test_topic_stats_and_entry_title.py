@@ -153,9 +153,11 @@ async def test_topics_list_degrades_when_embedding_fails() -> None:
         async def find_all_by_user(self, user_id):
             return [_TOPIC]
 
+    from app.shared.domain.exceptions.external import AIQuotaExceededException
+
     class _BrokenMatcher:
         async def match_many(self, user_id, topics):
-            raise RuntimeError("embedding quota exhausted")
+            raise AIQuotaExceededException("embedding quota exhausted")
 
     summaries = await GetTopicsUseCase(_ListRepo(), _DigestRepo("2026-09-01"), _BrokenMatcher()).execute(
         GetTopicsQuery(user_id="u1")
@@ -164,6 +166,28 @@ async def test_topics_list_degrades_when_embedding_fails() -> None:
     _check("counts nulled on failure", (summaries[0].entry_count, summaries[0].todo_count), (None, None))
     # 워터마크는 DB 조회라 임베딩 장애와 무관하게 유지된다.
     _check("watermark preserved", summaries[0].digest_watermark_date_key, "2026-09-01")
+
+
+async def test_topics_list_does_not_hide_code_bugs_as_degradation() -> None:
+    """degrade 는 외부 의존(AI·Redis·DB) 장애 한정 — 코드 버그까지 "카운트 없음" 으로 가리면
+    원인을 영영 못 찾는다."""
+    import pytest
+
+    from app.topic.application.dtos.queries import GetTopicsQuery
+    from app.topic.application.use_cases.get_topics import GetTopicsUseCase
+
+    class _ListRepo:
+        async def find_all_by_user(self, user_id):
+            return [_TOPIC]
+
+    class _BuggyMatcher:
+        async def match_many(self, user_id, topics):
+            raise KeyError("oops")
+
+    with pytest.raises(KeyError):
+        await GetTopicsUseCase(_ListRepo(), _DigestRepo("2026-09-01"), _BuggyMatcher()).execute(
+            GetTopicsQuery(user_id="u1")
+        )
 
 
 async def test_topics_list_counts() -> None:

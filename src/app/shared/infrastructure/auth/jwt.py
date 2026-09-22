@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import structlog
 from fastapi import Cookie, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -44,16 +45,20 @@ def _decode(token: str, expected_type: TokenType) -> UserContext:
     settings = get_settings()
     try:
         payload = jwt.decode(token, settings.auth.secret_key, algorithms=[_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise AuthTokenExpiredException()
-    except JWTError:
-        raise AuthTokenInvalidException()
+    except jwt.ExpiredSignatureError as e:
+        raise AuthTokenExpiredException() from e
+    except JWTError as e:
+        raise AuthTokenInvalidException() from e
 
     if payload.get("type") != expected_type:
         raise AuthTokenInvalidException()
+    # 서명이 유효해도 sub 가 없으면 사용자를 특정할 수 없다 — KeyError(500) 대신 401.
+    user_id = payload.get("sub")
+    if not isinstance(user_id, str) or not user_id:
+        raise AuthTokenInvalidException()
 
     return UserContext(
-        id=payload["sub"],
+        id=user_id,
         email=payload.get("email", ""),
         account_type=payload.get("account_type", "user"),
     )
@@ -64,7 +69,10 @@ async def get_current_user(
 ) -> UserContext:
     if not credentials:
         raise AuthTokenInvalidException()
-    return _decode(credentials.credentials, TokenType.ACCESS)
+    user = _decode(credentials.credentials, TokenType.ACCESS)
+    # 이후 이 요청의 모든 로그 줄에 user_id 가 붙는다 (request_context 미들웨어가 요청마다 초기화).
+    structlog.contextvars.bind_contextvars(user_id=user.id)
+    return user
 
 
 def extract_refresh_token(refresh_token: str | None = Cookie(default=None, alias="refresh_token")) -> str:

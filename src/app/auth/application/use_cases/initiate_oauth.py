@@ -12,6 +12,6 @@ class InitiateOAuthUseCase:
         self._registry = registry
         self._state_cache = state_cache
 
-    async def execute(self, provider: OAuthProvider) -> str:
-        state = await self._state_cache.create_state(provider.value)
+    async def execute(self, provider: OAuthProvider, api_version: str = "v1") -> str:
+        state = await self._state_cache.create_state(provider.value, api_version=api_version)
         return self._registry.get(provider).get_authorization_url(state)

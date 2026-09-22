@@ -1,3 +1,4 @@
+import structlog
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -9,10 +10,18 @@ from app.auth.domain.exceptions.exceptions import (
     AuthTokenInvalidException,
     CountryInvalidException,
     CountryTimezoneRequiredException,
+    EmailCodeAttemptsExceededException,
+    EmailCodeExpiredException,
+    EmailCodeInvalidException,
     EmailNotVerifiedException,
+    EmailSendCooldownException,
     LoginRateLimitExceededException,
     OAuthAccountAlreadyLinkedException,
+    OAuthCodeInvalidException,
+    OAuthEmailNotVerifiedException,
     OAuthProviderAlreadyLinkedException,
+    OAuthProviderResponseInvalidException,
+    OAuthProviderUnavailableException,
     OAuthStateInvalidException,
     OnboardingTokenExpiredException,
     OnboardingTokenInvalidException,
@@ -29,18 +38,22 @@ from app.github.domain.exceptions.exceptions import (
     DeveloperAccountRequiredException,
     GitHubApiUnavailableException,
     GitHubConnectionNotFoundException,
+    GitHubPermissionDeniedException,
     GitHubPushFailedException,
     GitHubPushTargetNotSetException,
     GitHubRateLimitedException,
     GitHubRepositoryAlreadyLinkedException,
     GitHubRepositoryNotFoundException,
     GitHubRepositoryNotLinkedException,
+    GitHubResponseInvalidException,
     GitHubTokenInvalidException,
 )
 from app.google_calendar.domain.exceptions.exceptions import (
     CalendarApiUnavailableException,
     CalendarNotConnectedException,
+    CalendarRateLimitedException,
     CalendarReauthRequiredException,
+    CalendarResponseInvalidException,
     CalendarStateInvalidException,
 )
 from app.notification.domain.exceptions.exceptions import NotificationNotFoundException
@@ -65,6 +78,15 @@ from app.retrospective.domain.exceptions.exceptions import (
     SummaryTemplateNotFoundException,
 )
 from app.shared.domain.exceptions.base import BaseAppException
+from app.shared.domain.exceptions.external import (
+    AIEmptyResponseException,
+    AIQuotaExceededException,
+    AIRequestRejectedException,
+    AIServiceException,
+    AIServiceUnavailableException,
+    CacheUnavailableException,
+    EmailDeliveryFailedException,
+)
 from app.topic.domain.exceptions.exceptions import (
     DigestAlreadyInProgressException,
     DigestNotFoundException,
@@ -162,16 +184,106 @@ _STATUS_MAP: dict[str, int] = {
     # 503
     GitHubApiUnavailableException.code: 503,
     CalendarApiUnavailableException.code: 503,
+    # ── Auth 세분화 (v2) ─────────────────────────────────────────────────────
+    EmailCodeInvalidException.code: 400,
+    EmailCodeExpiredException.code: 400,
+    EmailCodeAttemptsExceededException.code: 429,
+    EmailSendCooldownException.code: 429,
+    OAuthCodeInvalidException.code: 400,
+    OAuthEmailNotVerifiedException.code: 400,
+    OAuthProviderUnavailableException.code: 503,
+    OAuthProviderResponseInvalidException.code: 502,
+    # ── GitHub 세분화 ────────────────────────────────────────────────────────
+    GitHubPermissionDeniedException.code: 403,
+    GitHubResponseInvalidException.code: 502,
+    # ── Google Calendar 세분화 ───────────────────────────────────────────────
+    CalendarRateLimitedException.code: 429,
+    CalendarResponseInvalidException.code: 502,
+    # ── 외부 연동 공통 (shared/domain/exceptions/external.py) ────────────────
+    EmailDeliveryFailedException.code: 503,
+    CacheUnavailableException.code: 503,
+    # AI 예외는 주로 워커에서만 발생 — HTTP 로 새는 경로(토픽 매칭 등)는 degrade 처리하므로
+    # api.yaml 엔드포인트 계약에는 없다. 새어 나가더라도 올바른 상태로 응답하도록 등록만 한다.
+    AIServiceException.code: 502,
+    AIServiceUnavailableException.code: 503,
+    AIQuotaExceededException.code: 503,  # 우리 쪽 쿼터 소진 — 클라이언트 rate limit(429) 아님
+    AIRequestRejectedException.code: 502,
+    AIEmptyResponseException.code: 502,
+}
+
+# v1 하위호환 — 세분화 이전에 같은 상황에서 내보내던 코드. v1 경로(와 v1 으로 시작한 OAuth
+# 흐름)에서는 새 코드를 이 값으로 되돌린다. 이전에 KeyError 등으로 500 이 나던 상황은
+# INTERNAL_ERROR. 새 예외를 추가할 때 v1 계약이 바뀌면 여기에 등록한다.
+_V1_LEGACY_CODES: dict[str, str] = {
+    EmailCodeInvalidException.code: AuthTokenInvalidException.code,
+    EmailCodeExpiredException.code: AuthTokenInvalidException.code,
+    EmailCodeAttemptsExceededException.code: AuthTokenInvalidException.code,
+    EmailSendCooldownException.code: AuthTokenInvalidException.code,
+    OAuthCodeInvalidException.code: OAuthStateInvalidException.code,
+    OAuthEmailNotVerifiedException.code: OAuthStateInvalidException.code,
+    OAuthProviderUnavailableException.code: BaseAppException.code,
+    OAuthProviderResponseInvalidException.code: BaseAppException.code,
+    EmailDeliveryFailedException.code: BaseAppException.code,
+    CacheUnavailableException.code: BaseAppException.code,
+    GitHubPermissionDeniedException.code: GitHubApiUnavailableException.code,
+    GitHubResponseInvalidException.code: BaseAppException.code,
+    # Calendar 두 예외는 CalendarApiUnavailable 하위 — v1 에선 그 코드로 보였다.
+    CalendarRateLimitedException.code: CalendarApiUnavailableException.code,
+    CalendarResponseInvalidException.code: CalendarApiUnavailableException.code,
+    AIServiceException.code: BaseAppException.code,
+    AIServiceUnavailableException.code: BaseAppException.code,
+    AIQuotaExceededException.code: BaseAppException.code,
+    AIRequestRejectedException.code: BaseAppException.code,
+    AIEmptyResponseException.code: BaseAppException.code,
 }
 
 
-def to_http_response(exc: BaseAppException) -> JSONResponse:
-    status_code = _STATUS_MAP.get(exc.code, 500)
+def api_version_of(path: str) -> str:
+    """요청 경로의 API 버전. v2 는 일부 엔드포인트에만 존재하므로 그 외는 전부 v1."""
+    return "v2" if path.startswith("/api/v2/") else "v1"
+
+
+def resolve_code(code: str, api_version: str) -> str:
+    if api_version == "v1":
+        return _V1_LEGACY_CODES.get(code, code)
+    return code
+
+
+_log = structlog.get_logger(__name__)
+# 인증·권한·속도 제한 거절은 공격(무차별 대입·토큰 위조·스캐닝) 신호일 수 있어 보안 채널로 남긴다.
+_SECURITY_STATUSES = frozenset({401, 403, 429})
+
+
+def log_error_response(exc: BaseAppException, status_code: int) -> None:
+    """에러 응답 로깅 정책 — info 는 남기지 않고 서버 문제와 보안 신호에 집중한다.
+
+    - 5xx: error + 원인(__cause__ 체인 포함 traceback). exc.message 에 외부 API 상태코드·응답
+      요약이 들어 있다 — 예전엔 응답 본문에도 로그에도 남지 않고 버려졌다.
+    - 401/403/429: security 채널 warning.
+    - 그 외 4xx: 정상적인 클라이언트 오류라 남기지 않는다 (요청 로그는 uvicorn access log).
+    """
+    if status_code >= 500:
+        _log.error(
+            "http.error_response",
+            status=status_code,
+            code=exc.code,
+            error=exc.message,
+            exc_info=exc,
+        )
+    elif status_code in _SECURITY_STATUSES:
+        structlog.get_logger("security").warning(
+            "http.request_rejected", status=status_code, code=exc.code, error=exc.message
+        )
+
+
+def to_http_response(exc: BaseAppException, api_version: str = "v1") -> JSONResponse:
+    code = resolve_code(exc.code, api_version)
+    status_code = _STATUS_MAP.get(code, 500)
     return JSONResponse(
         status_code=status_code,
         content={
             "status": "error",
-            "code": exc.code,
+            "code": code,
             "data": None,
             "details": exc.details,
         },

@@ -3,8 +3,9 @@ import structlog
 from google import genai
 from google.genai import types
 
+from app.shared.domain.exceptions.external import AIEmptyResponseException
+from app.shared.infrastructure.ai import errors as ai_errors
 from app.shared.infrastructure.config.ai import AIConfig
-from app.topic.domain.exceptions.exceptions import DigestNotFoundException
 
 _log = structlog.get_logger(__name__)
 
@@ -23,15 +24,18 @@ class TopicGeminiClient:
             response_mime_type="text/plain",
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=config,
+        response = await ai_errors.call(
+            "gemini.digest.generate",
+            self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=config,
+            ),
         )
         text = response.text
         if text is None:
-            # safety filter / blocked — cannot generate digest
-            raise DigestNotFoundException(
+            # safety filter / blocked — 재시도해도 같은 결과
+            raise AIEmptyResponseException(
                 "Gemini blocked the response (safety filter or empty candidates)."
             )
         return text.strip()

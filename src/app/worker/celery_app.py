@@ -1,11 +1,12 @@
 import os
 from datetime import timedelta
 
-from celery import Celery
+from celery import Celery, signals
 from celery.schedules import crontab
 from kombu import Exchange, Queue
 
 from app.shared.infrastructure.config.settings import get_settings
+from app.shared.infrastructure.logger.setup import configure_logging
 
 # Google Calendar 백그라운드 동기화 주기(분). 기본 5분.
 _CALENDAR_SYNC_INTERVAL_MINUTES = int(os.getenv("CALENDAR_SYNC_INTERVAL_MINUTES", "5"))
@@ -31,9 +32,17 @@ _TASK_ROUTES = {
 }
 
 
+@signals.setup_logging.connect
+def _configure_worker_logging(**_: object) -> None:
+    # 이 시그널에 수신자가 있으면 Celery 는 루트 로거를 가로채지 않는다 — API 와 같은 JSON
+    # 포맷으로 남고, 태스크 로그에는 AsyncContextTask 가 바인딩한 task_id/task_name 이 붙는다.
+    configure_logging()
+
+
 def create_celery_app() -> Celery:
     settings = get_settings()
-    app = Celery("archive")
+    # AsyncContextTask — celery_aio_pool 루프 스레드에서 self.request(retry·retries)를 복원한다.
+    app = Celery("archive", task_cls="app.worker.task_base:AsyncContextTask")
     app.conf.update(
         broker_url=settings.redis.broker_url,
         result_backend=settings.redis.result_backend_url,

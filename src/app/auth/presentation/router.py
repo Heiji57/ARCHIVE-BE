@@ -1,5 +1,6 @@
 import json
 
+import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import (
     APIRouter,
@@ -27,6 +28,7 @@ from app.auth.application.use_cases.complete_onboarding import CompleteOnboardin
 from app.auth.application.use_cases.initiate_oauth_link import InitiateOAuthLinkUseCase
 from app.auth.application.use_cases.list_sessions import ListSessionsUseCase
 from app.auth.application.use_cases.request_password_reset import RequestPasswordResetUseCase
+from app.shared.domain.exceptions.external import EmailDeliveryFailedException
 from app.shared.infrastructure.email.smtp import send_email
 from app.auth.application.use_cases.reset_password import ResetPasswordUseCase
 from app.auth.application.use_cases.revoke_session import (
@@ -43,7 +45,12 @@ from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
-from app.auth.domain.exceptions.exceptions import OnboardingTokenInvalidException
+from app.auth.domain.exceptions.exceptions import (
+    OAuthProviderResponseInvalidException,
+    OAuthProviderUnavailableException,
+    OnboardingTokenInvalidException,
+)
+from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.shared.infrastructure.auth.jwt import create_access_token
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.presentation.requests.requests import (
@@ -71,9 +78,17 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
 from app.shared.infrastructure.config.settings import get_settings
+from app.shared.infrastructure.errors.handler import resolve_code
+from app.shared.infrastructure.logger.security import get_security_logger
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
+_log = structlog.get_logger(__name__)
+# provider 쪽 장애 — 보안 신호가 아니라 서버가 조치할 문제라 error 로 남긴다.
+_OAUTH_PROVIDER_FAILURES = (
+    OAuthProviderUnavailableException,
+    OAuthProviderResponseInvalidException,
+)
 
 _REFRESH_COOKIE = "refresh_token"
 _ONBOARDING_COOKIE = "onboarding_token"
@@ -85,6 +100,17 @@ def _refresh_cookie_max_age() -> int:
 
 def _onboarding_cookie_max_age() -> int:
     return get_settings().auth.onboarding_token_ttl_seconds
+
+
+async def _send_password_reset_email(
+    to: str, subject: str, body: str, html_body: str | None = None
+) -> None:
+    """응답 이후 실행 — 실패를 호출자에게 알릴 수 없고(계정 열거 방지로 항상 200), 여기서
+    놓치면 ASGI 까지 올라가 요청과 무관한 traceback 만 남는다."""
+    try:
+        await send_email(to=to, subject=subject, body=body, html_body=html_body)
+    except EmailDeliveryFailedException as e:
+        _log.error("auth.password_reset.email_failed", error=e.message)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -334,6 +360,7 @@ async def oauth_callback(
     provider: OAuthProvider,
     request: Request,
     use_case: FromDishka[HandleOAuthCallbackUseCase],
+    state_cache: FromDishka[OAuthStateCache],
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
@@ -342,6 +369,10 @@ async def oauth_callback(
 
     if error or not code or not state:
         return HTMLResponse(content=_oauth_error_html(error or "missing_params", frontend_origin))
+
+    # callback 은 v1 경로 고정 — 흐름을 시작한 authorize/link-init 의 버전으로 에러 코드를
+    # 고른다. use_case 가 state 를 소비하기 전에 조회해야 한다.
+    api_version = await state_cache.peek_api_version(state)
 
     try:
         result = await use_case.execute(
@@ -352,9 +383,30 @@ async def oauth_callback(
             ip=_client_ip(request),
         )
     except BaseAppException as e:
-        return HTMLResponse(content=_oauth_error_html(e.code, frontend_origin))
+        # HTML 로 응답하므로 전역 핸들러를 거치지 않는다 — 여기서 직접 남긴다.
+        # state 위조·code 재사용은 보안 신호, provider 장애는 서버 쪽 문제.
+        if isinstance(e, _OAUTH_PROVIDER_FAILURES):
+            _log.error(
+                "auth.oauth.provider_failed",
+                provider=provider.value,
+                code=e.code,
+                error=e.message,
+                exc_info=e,
+            )
+        else:
+            get_security_logger().warning(
+                "auth.oauth.callback_rejected", provider=provider.value, code=e.code
+            )
+        return HTMLResponse(
+            content=_oauth_error_html(resolve_code(e.code, api_version), frontend_origin)
+        )
     except Exception:
-        return HTMLResponse(content=_oauth_error_html("INTERNAL_ERROR", frontend_origin))
+        # 팝업 HTML 경계 — 여기서 놓치면 사용자는 빈 팝업을 본다. 도메인 예외로 번역되지
+        # 않은 것은 코드 버그로 본다.
+        _log.exception("auth.oauth.callback_unexpected", provider=provider.value)
+        return HTMLResponse(
+            content=_oauth_error_html(BaseAppException.code, frontend_origin)
+        )
 
     if result.kind == "onboarding":
         # 신규 사용자 — onboarding cookie 발급 + FE 온보딩 페이지로 안내
@@ -430,7 +482,7 @@ async def request_password_reset(
     email_job = await use_case.execute(RequestPasswordResetCommand(email=body.email))
     if email_job is not None:
         background_tasks.add_task(
-            send_email,
+            _send_password_reset_email,
             to=email_job.to,
             subject=email_job.subject,
             body=email_job.body,

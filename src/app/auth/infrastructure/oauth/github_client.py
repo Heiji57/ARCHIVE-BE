@@ -2,8 +2,12 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.auth.domain.exceptions.exceptions import OAuthStateInvalidException
+from app.auth.domain.exceptions.exceptions import (
+    OAuthEmailNotVerifiedException,
+    OAuthProviderResponseInvalidException,
+)
 from app.auth.domain.models.value_objects import OAuthProvider
+from app.auth.infrastructure.oauth import http
 from app.auth.infrastructure.oauth.client import IOAuthClient, OAuthUserInfo
 from app.shared.infrastructure.config.oauth import GitHubOAuthConfig
 
@@ -14,8 +18,13 @@ class GitHubOAuthClient(IOAuthClient):
     _USER_URL = "https://api.github.com/user"
     _EMAILS_URL = "https://api.github.com/user/emails"
 
-    def __init__(self, config: GitHubOAuthConfig) -> None:
+    def __init__(
+        self,
+        config: GitHubOAuthConfig,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._config = config
+        self._transport = transport  # 테스트용 주입 지점 (기본: 실제 네트워크)
 
     @property
     def provider(self) -> OAuthProvider:
@@ -33,39 +42,53 @@ class GitHubOAuthClient(IOAuthClient):
         return f"{self._AUTH_URL}?{params}"
 
     async def exchange_code(self, code: str) -> str:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._TOKEN_URL,
-                headers={"Accept": "application/json"},
-                json={
-                    "client_id": self._config.client_id,
-                    "client_secret": self._config.client_secret,
-                    "code": code,
-                    "redirect_uri": self._config.redirect_uri,
-                },
-            )
-        data = response.json()
-        if "error" in data:
-            raise OAuthStateInvalidException()
-        return data["access_token"]
+        response = await http.send(
+            "github",
+            "POST",
+            self._TOKEN_URL,
+            transport=self._transport,
+            headers={"Accept": "application/json"},
+            json={
+                "client_id": self._config.client_id,
+                "client_secret": self._config.client_secret,
+                "code": code,
+                "redirect_uri": self._config.redirect_uri,
+            },
+        )
+        return http.token_from_exchange("github", response)
 
     async def get_user_info(self, access_token: str) -> OAuthUserInfo:
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Accept": "application/vnd.github+json",
         }
-        async with httpx.AsyncClient() as client:
-            user_resp = await client.get(self._USER_URL, headers=headers)
-            emails_resp = await client.get(self._EMAILS_URL, headers=headers)
+        user_resp = await http.send(
+            "github", "GET", self._USER_URL, transport=self._transport, headers=headers
+        )
+        http.ensure_ok("github", user_resp)
+        emails_resp = await http.send(
+            "github", "GET", self._EMAILS_URL, transport=self._transport, headers=headers
+        )
+        http.ensure_ok("github", emails_resp)
+
+        user_data = http.parse_json("github", user_resp)
+        emails = http.parse_json("github", emails_resp)
+        if not isinstance(user_data, dict) or not isinstance(emails, list):
+            raise OAuthProviderResponseInvalidException("github user/emails: unexpected shape")
+        if user_data.get("id") is None:
+            raise OAuthProviderResponseInvalidException("github user: missing id")
 
         primary_email = next(
-            (e["email"] for e in emails_resp.json() if e["primary"] and e["verified"]),
+            (
+                e.get("email")
+                for e in emails
+                if isinstance(e, dict) and e.get("primary") and e.get("verified")
+            ),
             None,
         )
         if not primary_email:
-            raise OAuthStateInvalidException()
+            raise OAuthEmailNotVerifiedException()
 
-        user_data = user_resp.json()
         return OAuthUserInfo(
             provider_user_id=str(user_data["id"]),
             email=primary_email,

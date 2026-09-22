@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 import structlog
 from redis.asyncio import Redis
 
+from app.google_calendar.domain.exceptions.exceptions import CalendarApiUnavailableException
 from app.google_calendar.application.use_cases.sync_calendar_events import (
     SyncCalendarEventsUseCase,
 )
@@ -102,8 +103,12 @@ async def sync_user_calendar_task(user_id: str) -> None:
         # 2) ARCHIVE → Google push (pending/failed/stuck 배치 처리). pull-sync 뒤 실행 —
         #    같은 calendar 큐 워커에서 배치 처리해 시간에 민감한 요약/AI 큐와 격리.
         await run_batch_push(factory, api_client, settings.google_calendar, user_id, redis)
+    except CalendarApiUnavailableException as e:
+        # Google 일시 장애·속도 제한 — 다음 주기에 다시 돈다.
+        _log.warning("calendar.sync_user.api_unavailable", user_id=user_id, code=e.code)
     except Exception:
-        _log.warning("calendar.sync_user.failed", user_id=user_id, exc_info=True)
+        # 사용자 단위 태스크 최상위 경계 — 분류되지 않은 실패는 코드/데이터 문제.
+        _log.error("calendar.sync_user.failed", user_id=user_id, exc_info=True)
     finally:
         await api_client.close()
         await redis.aclose()

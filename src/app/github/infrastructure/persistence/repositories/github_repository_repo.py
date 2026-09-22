@@ -1,9 +1,17 @@
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.github.domain.exceptions.exceptions import GitHubRepositoryAlreadyLinkedException
 from app.github.domain.models.github_repository import GitHubRepository
 from app.github.domain.repositories.repository import IGitHubRepositoryRepository
 from app.github.infrastructure.persistence.models.github_repository_model import GitHubRepositoryModel
+from app.shared.infrastructure.database.errors import translate_unique_violations
+
+
+# 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
+_UNIQUE_VIOLATIONS = {
+    "uq_github_repositories_user_repo": GitHubRepositoryAlreadyLinkedException,
+}
 
 
 class GitHubRepositoryRepository(IGitHubRepositoryRepository):
@@ -12,8 +20,9 @@ class GitHubRepositoryRepository(IGitHubRepositoryRepository):
 
     async def save(self, repo: GitHubRepository) -> GitHubRepository:
         model = self._to_model(repo)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def save_many(self, repos: list[GitHubRepository]) -> list[GitHubRepository]:

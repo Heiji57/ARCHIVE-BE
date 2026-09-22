@@ -33,6 +33,7 @@ from app.retrospective.domain.models.value_objects import SummaryType
 from app.retrospective.presentation.requests.template_requests import (
     CreateSummaryTemplateRequest,
     SetActiveSummaryTemplatesRequest,
+    StrictSetActiveSummaryTemplatesRequest,
     UpdateSummaryTemplateRequest,
 )
 from app.retrospective.presentation.responses.template_responses import (
@@ -183,3 +184,22 @@ async def set_active_templates(
         )
     )
     return ApiResponse.ok(SettingsResponse.from_entity(settings))
+
+
+# v2 — 본문 스키마만 엄격(알 수 없는 키 → 422 VALIDATION_ERROR). 처리는 v1 과 동일.
+active_router_v2 = APIRouter(
+    prefix="/settings/auto-summary", tags=["summary-templates"], route_class=DishkaRoute
+)
+
+
+@active_router_v2.put(
+    "/active",
+    status_code=status.HTTP_200_OK,
+    response_model=ApiResponse[SettingsResponse],
+)
+async def set_active_templates_v2(
+    body: StrictSetActiveSummaryTemplatesRequest,
+    use_case: FromDishka[SetActiveSummaryTemplateUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[SettingsResponse]:
+    return await set_active_templates(body, use_case, current_user)

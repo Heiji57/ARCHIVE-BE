@@ -1,5 +1,5 @@
 from app.auth.application.dtos.commands import SendEmailVerificationCommand
-from app.auth.domain.exceptions.exceptions import AuthTokenInvalidException
+from app.auth.domain.exceptions.exceptions import EmailSendCooldownException
 from app.auth.infrastructure.cache.email_verification import EmailVerificationCache
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.email.smtp import send_email
@@ -12,7 +12,7 @@ class SendEmailVerificationUseCase:
 
     async def execute(self, cmd: SendEmailVerificationCommand) -> None:
         if await self._cache.is_on_cooldown(cmd.email):
-            raise AuthTokenInvalidException("Please wait before requesting another code.")
+            raise EmailSendCooldownException("Please wait before requesting another code.")
 
         code = await self._cache.create_code(cmd.email)
         settings = get_settings()

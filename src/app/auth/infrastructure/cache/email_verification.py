@@ -4,7 +4,11 @@ import string
 
 from redis.asyncio import Redis
 
-from app.auth.domain.exceptions.exceptions import AuthTokenInvalidException
+from app.auth.domain.exceptions.exceptions import (
+    EmailCodeAttemptsExceededException,
+    EmailCodeExpiredException,
+    EmailCodeInvalidException,
+)
 from app.shared.infrastructure.config.auth import AuthConfig
 
 _CODE_ALPHABET = string.ascii_uppercase + string.digits  # A-Z + 0-9
@@ -41,12 +45,14 @@ class EmailVerificationCache:
     async def verify_code(self, email: str, code: str) -> None:
         raw = await self._redis.get(self._key_code(email))
         if not raw:
-            raise AuthTokenInvalidException("Verification code expired or not found.")
+            raise EmailCodeExpiredException("Verification code expired or not found.")
 
         data = json.loads(raw)
         if data["attempts"] >= self._max_attempts:
             await self._redis.delete(self._key_code(email))
-            raise AuthTokenInvalidException("Too many attempts. Please request a new code.")
+            raise EmailCodeAttemptsExceededException(
+                "Too many attempts. Please request a new code."
+            )
 
         if data["code"] != code:
             data["attempts"] += 1
@@ -55,7 +61,7 @@ class EmailVerificationCache:
                 self._verify_ttl,
                 json.dumps(data),
             )
-            raise AuthTokenInvalidException("Invalid verification code.")
+            raise EmailCodeInvalidException("Invalid verification code.")
 
         await self._redis.delete(self._key_code(email))
         await self._redis.setex(self._key_verified(email), self._verified_ttl, "1")

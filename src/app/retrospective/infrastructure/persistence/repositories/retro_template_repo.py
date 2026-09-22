@@ -1,10 +1,19 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.retrospective.domain.exceptions.exceptions import RetroTemplateNameDuplicatedException
 from app.retrospective.domain.models.retro_template import RetroTemplate
 from app.retrospective.domain.models.value_objects import RetroType
 from app.retrospective.domain.repositories.repository import IRetroTemplateRepository
-from app.retrospective.infrastructure.persistence.models.retro_template_model import RetroTemplateModel
+from app.retrospective.infrastructure.persistence.models.retro_template_model import (
+    RetroTemplateModel,
+)
+from app.shared.infrastructure.database.errors import translate_unique_violations
+
+# 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
+_UNIQUE_VIOLATIONS = {
+    "uq_retro_templates_user_type_name": RetroTemplateNameDuplicatedException,
+}
 
 
 class RetroTemplateRepository(IRetroTemplateRepository):
@@ -13,8 +22,9 @@ class RetroTemplateRepository(IRetroTemplateRepository):
 
     async def save(self, template: RetroTemplate) -> RetroTemplate:
         model = self._to_model(template)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def find_by_id(self, id: str, user_id: str) -> RetroTemplate | None:

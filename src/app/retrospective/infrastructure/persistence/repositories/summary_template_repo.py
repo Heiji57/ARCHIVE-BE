@@ -1,6 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.retrospective.domain.exceptions.exceptions import SummaryTemplateNameDuplicatedException
 from app.retrospective.domain.models.summary_template import UserSummaryTemplate
 from app.retrospective.domain.models.value_objects import SummaryType
 from app.retrospective.domain.repositories.repository import (
@@ -9,6 +10,12 @@ from app.retrospective.domain.repositories.repository import (
 from app.retrospective.infrastructure.persistence.models.summary_template_model import (
     UserSummaryTemplateModel,
 )
+from app.shared.infrastructure.database.errors import translate_unique_violations
+
+# 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
+_UNIQUE_VIOLATIONS = {
+    "uq_user_summary_templates_user_type_name": SummaryTemplateNameDuplicatedException,
+}
 
 
 class UserSummaryTemplateRepository(IUserSummaryTemplateRepository):
@@ -17,8 +24,9 @@ class UserSummaryTemplateRepository(IUserSummaryTemplateRepository):
 
     async def save(self, template: UserSummaryTemplate) -> UserSummaryTemplate:
         model = self._to_model(template)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def find_by_id(self, id: str, user_id: str) -> UserSummaryTemplate | None:

@@ -3,11 +3,19 @@ from datetime import date
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.retrospective.domain.exceptions.exceptions import SummaryAlreadyInProgressException
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import SummaryContent, SummaryStatus, SummaryType
 from app.retrospective.domain.repositories.repository import IRetroSummaryRepository
 from app.retrospective.infrastructure.persistence.models.folder_model import FolderModel  # noqa: F401
 from app.retrospective.infrastructure.persistence.models.retro_summary_model import RetroSummaryModel
+from app.shared.infrastructure.database.errors import translate_unique_violations
+
+
+# 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
+_UNIQUE_VIOLATIONS = {
+    "uq_retro_summaries_user_type_period": SummaryAlreadyInProgressException,
+}
 
 
 class RetroSummaryRepository(IRetroSummaryRepository):
@@ -16,8 +24,9 @@ class RetroSummaryRepository(IRetroSummaryRepository):
 
     async def save(self, summary: RetroSummary) -> RetroSummary:
         model = self._to_model(summary)
-        merged = await self._session.merge(model)
-        await self._session.flush()
+        async with translate_unique_violations(_UNIQUE_VIOLATIONS):
+            merged = await self._session.merge(model)
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def find_by_id(self, id: str, user_id: str) -> RetroSummary | None:

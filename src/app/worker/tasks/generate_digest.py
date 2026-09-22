@@ -12,11 +12,18 @@
 import json
 from collections.abc import Awaitable, Callable
 
-import httpx
 import structlog
-from google.genai import errors as genai_errors
+from celery import Task
+from celery.exceptions import Retry
+from celery.utils.time import get_exponential_backoff_interval
 from redis.asyncio import Redis
+from sqlalchemy.exc import SQLAlchemyError
 
+from app.shared.domain.exceptions.external import (
+    AIQuotaExceededException,
+    AIServiceException,
+    AIServiceUnavailableException,
+)
 from app.shared.domain.utils.period import today_in_tz
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.config.topic import TopicConfig
@@ -40,6 +47,10 @@ from app.worker.tasks.embed_stale import _process_batch
 _log = structlog.get_logger(__name__)
 
 _REDIS_CHANNEL = "topic:digest:{digest_id}"
+
+_AI_RETRY_BACKOFF_FACTOR = 2
+_AI_QUOTA_BACKOFF_FACTOR = 30  # 429 쿼터는 분 단위 윈도우 — generate_summary 와 동일 정책
+_AI_RETRY_BACKOFF_MAX_SECONDS = 300
 
 _SYSTEM_PROMPT = """You are a concise personal productivity assistant.
 Given a user's topic and relevant excerpts from their journal entries and todos,
@@ -121,13 +132,13 @@ async def _build_prompt(
 
 @celery_app.task(
     name="worker.generate_digest",
-    autoretry_for=(genai_errors.ServerError, httpx.TimeoutException),
-    retry_backoff=True,
-    retry_backoff_max=300,
-    retry_jitter=True,
+    bind=True,
+    # AI 일시 장애는 본문에서 self.retry() 로 재시도한다. `autoretry_for` 는
+    # celery_aio_pool 의 async task 에 작동하지 않는다 (generate_summary 의
+    # SummaryRowNotYetVisibleError docstring 참고) — 예전 설정은 재시도를 한 번도 못 했다.
     max_retries=3,
 )
-async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> None:
+async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_id: str) -> None:
     settings = get_settings()
     factory = get_worker_session_factory()
     cfg: TopicConfig = settings.topic
@@ -138,8 +149,10 @@ async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> N
         digest = await digest_repo.find_by_id(digest_id, user_id)
         if digest is None:
             return
-        if digest.status == DigestStatus.IN_PROGRESS:
-            return  # 중복 실행 방어
+        # 중복 실행 방어. 단 self.retry() 로 다시 온 실행은 직전 시도가 IN_PROGRESS 로
+        # 남겨 둔 자기 자신이므로 통과시켜야 한다 — 막으면 재시도가 즉시 끝나 영구 IN_PROGRESS.
+        if digest.status == DigestStatus.IN_PROGRESS and self.request.retries == 0:
+            return
         await digest_repo.update_status(digest_id, DigestStatus.IN_PROGRESS)
 
     # 사전 동기화: 이 사용자의 embedding_queue 잔여 항목 처리
@@ -148,94 +161,118 @@ async def generate_digest_task(digest_id: str, topic_id: str, user_id: str) -> N
             count = await _process_batch(user_id)
             if count == 0:
                 break
-    except Exception:
-        _log.warning("generate_digest.pre_sync_failed", digest_id=digest_id)
+    except (AIServiceException, SQLAlchemyError):
+        # best-effort — 실패해도 이미 임베딩된 소스로 생성을 계속한다.
+        _log.warning("generate_digest.pre_sync_failed", digest_id=digest_id, exc_info=True)
 
     redis = Redis.from_url(settings.redis.cache_url, decode_responses=True)
 
     try:
-        async with factory.begin() as session:
-            topic_repo = TopicRepository(session)
-            topic = await topic_repo.find_by_id(topic_id, user_id)
-            if topic is None:
-                await TopicDigestRepository(session).update_status(digest_id, DigestStatus.FAILED)
-                return
+        # 중첩 try — self.retry() 가 재시도 소진 시 원본 exc 를 재발생시킬 때, 바깥 try 의
+        # except 절들이 그 예외를 새로 매칭하도록 AI 재시도 분기를 본문 안에 둔다
+        # (형제 except 로 두면 FAILED 마킹을 건너뛴다 — generate_summary 에서 재현된 회귀).
+        try:
+            async with factory.begin() as session:
+                topic_repo = TopicRepository(session)
+                topic = await topic_repo.find_by_id(topic_id, user_id)
+                if topic is None:
+                    await TopicDigestRepository(session).update_status(
+                        digest_id, DigestStatus.FAILED
+                    )
+                    return
 
-            user = await UserRepository(session).find_by_id(user_id)
-            today_key = _watermark_key_for_user(user)
+                user = await UserRepository(session).find_by_id(user_id)
+                today_key = _watermark_key_for_user(user)
 
-            emb_service = EmbeddingService(settings.ai)
-            query_text = topic.name
-            if topic.description:
-                query_text += ": " + topic.description
-            query_embedding = await emb_service.embed_text(query_text)
+                emb_service = EmbeddingService(settings.ai)
+                query_text = topic.name
+                if topic.description:
+                    query_text += ": " + topic.description
+                query_embedding = await emb_service.embed_text(query_text)
 
-            chunk_repo = EntryChunkRepository(session)
-            todo_emb_repo = TodoEmbeddingRepository(session)
+                chunk_repo = EntryChunkRepository(session)
+                todo_emb_repo = TodoEmbeddingRepository(session)
 
-            chunks = await chunk_repo.search_similar(
-                user_id=user_id,
-                query_embedding=query_embedding,
-                # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
-                # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
-                since_date_key=None,
-                threshold=cfg.topic_similarity_threshold,
-                limit=cfg.topic_search_limit,
+                chunks = await chunk_repo.search_similar(
+                    user_id=user_id,
+                    query_embedding=query_embedding,
+                    # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
+                    # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
+                    since_date_key=None,
+                    threshold=cfg.topic_similarity_threshold,
+                    limit=cfg.topic_search_limit,
+                )
+                todos = await todo_emb_repo.search_similar(
+                    user_id=user_id,
+                    query_embedding=query_embedding,
+                    # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
+                    # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
+                    since_date_key=None,
+                    threshold=cfg.topic_similarity_threshold,
+                    limit=cfg.topic_search_limit,
+                )
+
+            # 진행률 이벤트 — 소스를 프롬프트에 접어 넣는 실제 진척을 배치 단위로 흘린다.
+            # (AI 생성 구간 자체는 단일 호출이라 더 잘게 쪼개지지 않는다)
+            total_sources = _source_total(chunks, todos)
+            progress_batch = cfg.topic_digest_progress_batch_size
+
+            async def publish_progress(processed: int) -> None:
+                if processed % progress_batch and processed != total_sources:
+                    return
+                await redis.publish(
+                    _REDIS_CHANNEL.format(digest_id=digest_id),
+                    json.dumps(
+                        {"status": "in_progress", "processed": processed, "total": total_sources}
+                    ),
+                )
+
+            await publish_progress(0)
+            prompt = await _build_prompt(
+                topic.name, topic.description, chunks, todos, on_source=publish_progress
             )
-            todos = await todo_emb_repo.search_similar(
-                user_id=user_id,
-                query_embedding=query_embedding,
-                # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
-                # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
-                since_date_key=None,
-                threshold=cfg.topic_similarity_threshold,
-                limit=cfg.topic_search_limit,
-            )
 
-        # 진행률 이벤트 — 소스를 프롬프트에 접어 넣는 실제 진척을 배치 단위로 흘린다.
-        # (AI 생성 구간 자체는 단일 호출이라 더 잘게 쪼개지지 않는다)
-        total_sources = _source_total(chunks, todos)
-        progress_batch = cfg.topic_digest_progress_batch_size
+            # AI 호출 — DB transaction 밖
+            from app.topic.infrastructure.ai.gemini_client import TopicGeminiClient
+            gemini = TopicGeminiClient(settings.ai)
+            content = await gemini.generate(prompt)
 
-        async def publish_progress(processed: int) -> None:
-            if processed % progress_batch and processed != total_sources:
-                return
-            await redis.publish(
-                _REDIS_CHANNEL.format(digest_id=digest_id),
-                json.dumps(
-                    {"status": "in_progress", "processed": processed, "total": total_sources}
+            # T2: complete + watermark. watermark 는 이제 "어디까지 읽었나"(증분 커서)가 아니라
+            # "이 문서가 언제 기준인가"를 뜻한다 — FE 배너/미반영 개수 계산의 기준점.
+            async with factory.begin() as session:
+                digest_repo = TopicDigestRepository(session)
+                await digest_repo.update_status(digest_id, DigestStatus.COMPLETED, content)
+                await digest_repo.update_watermark(digest_id, today_key)
+
+        except AIServiceUnavailableException as exc:
+            countdown = get_exponential_backoff_interval(
+                factor=(
+                    _AI_QUOTA_BACKOFF_FACTOR
+                    if isinstance(exc, AIQuotaExceededException)
+                    else _AI_RETRY_BACKOFF_FACTOR
                 ),
+                retries=self.request.retries,
+                maximum=_AI_RETRY_BACKOFF_MAX_SECONDS,
+                full_jitter=True,
             )
-
-        await publish_progress(0)
-        prompt = await _build_prompt(
-            topic.name, topic.description, chunks, todos, on_source=publish_progress
-        )
-
-        # AI 호출 — DB transaction 밖
-        from app.topic.infrastructure.ai.gemini_client import TopicGeminiClient
-        gemini = TopicGeminiClient(settings.ai)
-        content = await gemini.generate(prompt)
-
-        # T2: complete + watermark. watermark 는 이제 "어디까지 읽었나"(증분 커서)가 아니라
-        # "이 문서가 언제 기준인가"를 뜻한다 — FE 배너/미반영 개수 계산의 기준점.
-        async with factory.begin() as session:
-            digest_repo = TopicDigestRepository(session)
-            await digest_repo.update_status(digest_id, DigestStatus.COMPLETED, content)
-            await digest_repo.update_watermark(digest_id, today_key)
+            raise self.retry(exc=exc, countdown=countdown) from exc
 
         await redis.publish(
             _REDIS_CHANNEL.format(digest_id=digest_id),
             json.dumps({"status": "completed"}),
         )
 
+    except Retry:
+        # 재시도 예약됨 — FAILED 마킹·failed publish 를 하면 재시도 성공 전에 FE 가 실패로 본다.
+        raise
     except Exception as exc:
+        # 태스크 최상위 경계 — 어떤 실패든 FAILED 로 확정해야 영구 IN_PROGRESS 를 막는다.
         _log.exception("generate_digest.failed", digest_id=digest_id)
         try:
             async with factory.begin() as session:
                 await TopicDigestRepository(session).update_status(digest_id, DigestStatus.FAILED)
-        except Exception:
-            pass
+        except SQLAlchemyError:
+            _log.exception("generate_digest.mark_failed_failed", digest_id=digest_id)
         await redis.publish(
             _REDIS_CHANNEL.format(digest_id=digest_id),
             json.dumps({"status": "failed"}),

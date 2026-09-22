@@ -16,8 +16,11 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import structlog
+from celery import Task
+from celery.utils.time import get_exponential_backoff_interval
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from redis.exceptions import RedisError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.google_calendar.application.services.calendar_push_service import (
     CalendarPushService,
@@ -28,6 +31,7 @@ from app.google_calendar.application.services.token_manager import (
 )
 from app.google_calendar.domain.exceptions.exceptions import (
     CalendarApiUnavailableException,
+    CalendarRateLimitedException,
     CalendarReauthRequiredException,
 )
 from app.google_calendar.infrastructure.api.google_calendar_client import (
@@ -45,6 +49,9 @@ from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
 
 _log = structlog.get_logger(__name__)
+
+_DELETE_RETRY_BACKOFF_FACTOR = 2
+_DELETE_RETRY_BACKOFF_MAX_SECONDS = 300
 
 
 async def _publish_todo_sync_event(
@@ -77,7 +84,8 @@ async def _publish_todo_sync_event(
     }
     try:
         await redis.publish(f"notifications:{user_id}", json.dumps(payload))
-    except Exception:
+    except RedisError:
+        # best-effort 부가 알림 — push 자체는 이미 확정됐다. FE 는 다음 조회에서 상태를 본다.
         _log.warning(
             "calendar.push.sse_publish_failed",
             user_id=user_id,
@@ -142,7 +150,8 @@ async def _finalize(
     ):
         try:
             await api_client.delete_event(access_token, outcome.result_gid)
-        except Exception:
+        except (CalendarApiUnavailableException, CalendarReauthRequiredException):
+            # best-effort 정리 — 실패하면 Google 에 orphan 이벤트가 남는다(수용).
             _log.warning(
                 "calendar.push.orphan_cleanup_failed",
                 user_id=user_id,
@@ -168,12 +177,15 @@ async def _finalize_failure(
     user_id: str,
     todo: Todo,
     attempt_id: str,
+    *,
+    count_attempt: bool = True,
 ) -> None:
+    # count_attempt=False — 속도 제한처럼 todo 자체 문제가 아닌 실패. max_retries 를 소진시켜
+    # push 를 영구 포기하게 만들지 않도록 재시도 횟수를 올리지 않는다(다음 주기에 재claim).
+    retry_count = todo.push_retry_count + 1 if count_attempt else todo.push_retry_count
     async with factory.begin() as session:
         repo = TodoRepository(session)
-        affected = await repo.finalize_push_failure(
-            todo.id, user_id, attempt_id, todo.push_retry_count + 1
-        )
+        affected = await repo.finalize_push_failure(todo.id, user_id, attempt_id, retry_count)
     if affected:
         await _publish_todo_sync_event(
             redis, user_id, todo.id, calendar_linked=False,
@@ -207,11 +219,24 @@ async def _process_claimed(
             outcome = await push_service.push_one(access_token, todo)
         except CalendarReauthRequiredException:
             raise  # 사이클 중단 — 남은 항목은 이후 재claim
-        except CalendarApiUnavailableException:
+        except CalendarRateLimitedException:
+            _log.warning("calendar.push.rate_limited", user_id=user_id, todo_id=todo.id)
+            await _finalize_failure(
+                factory, redis, user_id, todo, attempt_id, count_attempt=False
+            )
+            continue
+        except CalendarApiUnavailableException as e:
+            # ResponseInvalid 포함 — Google 쪽 문제. 재시도 횟수 안에서 다음 주기에 재시도.
+            _log.warning(
+                "calendar.push.api_failed", user_id=user_id, todo_id=todo.id, code=e.code,
+                error=e.message,
+            )
             await _finalize_failure(factory, redis, user_id, todo, attempt_id)
             continue
         except Exception:
-            _log.warning(
+            # 배치 항목 격리 경계 — 위에서 분류되지 않은 건 코드 버그.
+            # 한 todo 가 사이클을 죽이지 않게.
+            _log.error(
                 "calendar.push.unexpected",
                 user_id=user_id,
                 todo_id=todo.id,
@@ -286,8 +311,18 @@ async def push_calendar_event_task(user_id: str, todo_id: str) -> None:
             await _process_claimed(factory, api_client, redis, user_id, [claimed], access_token)
         except CalendarReauthRequiredException:
             await _mark_needs_reauth(factory, user_id)
-    except Exception:
+    except CalendarApiUnavailableException as e:
+        # 토큰 갱신 중 Google 장애 — todo 는 pending 으로 남아 배치 주기가 다시 처리한다.
         _log.warning(
+            "calendar.push_immediate.api_unavailable",
+            user_id=user_id,
+            todo_id=todo_id,
+            code=e.code,
+            error=e.message,
+        )
+    except Exception:
+        # 태스크 최상위 경계 — fire-and-forget 태스크라 여기서 삼키되 버그로 기록한다.
+        _log.error(
             "calendar.push_immediate.failed",
             user_id=user_id,
             todo_id=todo_id,
@@ -300,25 +335,27 @@ async def push_calendar_event_task(user_id: str, todo_id: str) -> None:
 
 @celery_app.task(
     name="worker.delete_calendar_event",
-    autoretry_for=(CalendarApiUnavailableException,),
-    retry_backoff=True,
+    bind=True,
+    # 일시 장애는 본문에서 self.retry(). `autoretry_for` 는 celery_aio_pool 의 async task 에
+    # 작동하지 않는다 (generate_summary 의 SummaryRowNotYetVisibleError docstring 참고).
     max_retries=5,
 )
-async def delete_calendar_event_task(user_id: str, google_event_id: str) -> None:
+async def delete_calendar_event_task(self: Task, user_id: str, google_event_id: str) -> None:
     """best-effort Google 이벤트 삭제 — 전체 todo 삭제(DELETE /todos/{id}) 시 enqueue.
 
     todo 행은 이미 삭제됐으므로 push 상태 추적 없이 fire-and-forget. 일시 장애는
-    autoretry, 404 는 멱등 성공. 재시도 소진 시 orphan 은 수용(경고 로깅).
+    self.retry(), 404 는 멱등 성공. 재시도 소진 시 orphan 은 수용 — 원본 예외로 태스크가
+    실패해 celery.app.trace 의 error 로그로 남는다.
     """
     settings = get_settings()
     factory = get_worker_session_factory()
     api_client = GoogleCalendarApiClient(settings.google_calendar)
     try:
         now = datetime.now(timezone.utc)
-        access_token = await _acquire_access_token(factory, api_client, user_id, now)
-        if access_token is None:
-            return
         try:
+            access_token = await _acquire_access_token(factory, api_client, user_id, now)
+            if access_token is None:
+                return
             await api_client.delete_event(access_token, google_event_id)
         except CalendarReauthRequiredException:
             # 재연결 필요 상태 — 삭제 불가. best-effort 이므로 orphan 수용.
@@ -327,5 +364,14 @@ async def delete_calendar_event_task(user_id: str, google_event_id: str) -> None
                 user_id=user_id,
                 gid=google_event_id,
             )
+        except CalendarApiUnavailableException as e:
+            # 일시 장애·속도 제한 — 재시도. 소진 시 원본 예외로 태스크 실패(orphan 수용).
+            countdown = get_exponential_backoff_interval(
+                factor=_DELETE_RETRY_BACKOFF_FACTOR,
+                retries=self.request.retries,
+                maximum=_DELETE_RETRY_BACKOFF_MAX_SECONDS,
+                full_jitter=True,
+            )
+            raise self.retry(exc=e, countdown=countdown) from e
     finally:
         await api_client.close()

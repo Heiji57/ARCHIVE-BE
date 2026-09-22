@@ -3,6 +3,8 @@ import structlog
 from google import genai
 from google.genai import types
 
+from app.shared.domain.exceptions.external import AIEmptyResponseException
+from app.shared.infrastructure.ai import errors as ai_errors
 from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
@@ -20,20 +22,30 @@ class EmbeddingService:
         )
 
     async def embed_text(self, text: str) -> list[float]:
-        response = await self._client.aio.models.embed_content(
-            model=_EMBEDDING_MODEL,
-            contents=text,
-            config=_EMBED_CONFIG,
+        response = await ai_errors.call(
+            "gemini.embed_text",
+            self._client.aio.models.embed_content(
+                model=_EMBEDDING_MODEL,
+                contents=text,
+                config=_EMBED_CONFIG,
+            ),
         )
+        if not response.embeddings or not response.embeddings[0].values:
+            raise AIEmptyResponseException("Gemini returned no embedding.")
         return list(response.embeddings[0].values)
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """여러 텍스트를 한 번에 임베딩. API 호출 1회."""
         if not texts:
             return []
-        response = await self._client.aio.models.embed_content(
-            model=_EMBEDDING_MODEL,
-            contents=texts,
-            config=_EMBED_CONFIG,
+        response = await ai_errors.call(
+            "gemini.embed_batch",
+            self._client.aio.models.embed_content(
+                model=_EMBEDDING_MODEL,
+                contents=texts,
+                config=_EMBED_CONFIG,
+            ),
         )
-        return [list(e.values) for e in response.embeddings]
+        if not response.embeddings:
+            raise AIEmptyResponseException(f"Gemini returned no embeddings ({len(texts)} texts).")
+        return [list(e.values or []) for e in response.embeddings]

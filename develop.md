@@ -94,6 +94,11 @@ docker-compose up -d
 docker-compose logs -f server
 docker-compose logs -f worker
 
+# 에러만 / 특정 요청·태스크만 (로그는 JSON 한 줄 — jq 로 필터)
+docker-compose logs --no-log-prefix server | jq -c 'select(.level=="error")'
+docker-compose logs --no-log-prefix server | jq -c 'select(.request_id=="<X-Request-ID 값>")'
+docker-compose logs --no-log-prefix worker-ai | jq -c 'select(.task_id=="<celery task id>")'
+
 # 마이그레이션 적용
 docker-compose exec server alembic upgrade head
 
@@ -1601,6 +1606,8 @@ def generate_summary_task(self, user_id: str, retro_id: str) -> dict:
 
 **올바른 패턴**: task 를 `bind=True` 로 선언하고, 재시도가 필요한 지점에서 **코루틴 본문 안에서 직접** `raise self.retry(exc=..., countdown=...)` 를 호출한다. `Task.retry()` 는 `Retry` 를 던지기 전에 `S.apply_async()` 로 재큐잉을 동기적으로 먼저 수행하므로 위 우회 문제와 무관하게 항상 실제로 재시도된다. 지수 백오프가 필요하면 `celery.utils.time.get_exponential_backoff_interval(factor=1, retries=self.request.retries, maximum=..., full_jitter=True)` 로 `countdown` 을 직접 계산한다(데코레이터의 `retry_backoff=True` 와 동일 공식).
 
+**전제 — `self.request` 복원 (`app/worker/task_base.py` `AsyncContextTask`)**: celery_aio_pool 은 호출 스레드에서 `push_request()` 후 코루틴 **본문을 별도 루프 스레드**에서 실행하는데, Celery request 스택은 스레드 로컬이라 기본 Task 로는 본문의 `self.request` 가 빈 Context(`id=None`, `retries=0`, `called_directly=True`)다(실측). 그러면 `self.retry()` 는 called_directly 분기로 빠져 **재큐잉 없이 원본 예외만 재발생**한다 — 이 클래스 도입 전에는 모든 async 태스크 재시도가 실제로 일어나지 않았다. `celery_app` 의 `task_cls` 로 지정돼 있으며, `run` 을 감싸 호출 스레드에서 request 를 캡처하고 루프 스레드 코루틴 안에서 ContextVar 로 복원한다(태스크별 로그 컨텍스트 `task_id`/`task_name` 도 여기서 바인딩). 회귀 테스트는 실제 풀을 태우는 `test/test_worker_async_task_request.py` — `retry` 를 목으로 바꾸는 테스트만으로는 이 문제가 안 잡힌다.
+
 **흔한 함정 — `raise self.retry(...)` 는 반드시 그 예외를 잡으려는 `except` 절과 "같은 try 문의 body" 안에 있어야 한다.** `except (SomeError,) as exc: raise self.retry(exc=exc, ...)` 처럼 **형제 except 절 안**에서 호출하면, `max_retries` 소진 시 `Task.retry()` 가 `Retry` 가 아니라 원본 `exc` 를 그대로 재발생시키는데(`raise_with_context`), 이 재발생은 "이미 어느 except 블록 안"에서 일어난 것이라 Python 은 같은 try 문의 다른 형제 except 절(예: 실패 마킹을 하는 `except Exception:`)로 다시 매칭해주지 않는다 — 예외가 그 try/except 전체를 그냥 빠져나가 실패 처리가 통째로 스킵된다. 직접 재현하면:
 
 ```python
@@ -1619,7 +1626,24 @@ except B:
     print("이게 찍힘")       # try/except 밖에서 잡힘
 ```
 
-해결: 재시도 대상 호출을 **바깥 try 의 body 안에 중첩된 try/except** 로 감싼다. 그러면 소진 시 재발생한 예외가 중첩 구조를 완전히 빠져나온 뒤 바깥 try 의 except 절들로 새로 매칭된다. 실제 사례는 `app/worker/tasks/generate_summary.py` 의 Gemini 호출부(`try: gemini = ...; content = await gemini.generate(prompt) except (ServerError, TimeoutException) as exc: raise self.retry(...)` 가 바깥 T1/T2 try 의 body 안에 중첩돼 있고, 바깥엔 `except Retry: raise` / `except Exception: ...FAILED 마킹...` 만 있다) 참고.
+해결: 재시도 대상 호출을 **바깥 try 의 body 안에 중첩된 try/except** 로 감싼다. 그러면 소진 시 재발생한 예외가 중첩 구조를 완전히 빠져나온 뒤 바깥 try 의 except 절들로 새로 매칭된다. 실제 사례는 `app/worker/tasks/generate_summary.py` 의 Gemini 호출부(`try: gemini = ...; content = await gemini.generate(prompt) except AIServiceUnavailableException as exc: raise self.retry(...)` 가 바깥 T1/T2 try 의 body 안에 중첩돼 있고, 바깥엔 `except Retry: raise` / `except Exception: ...FAILED 마킹...` 만 있다) 참고.
+
+같은 패턴을 쓰는 태스크: `generate_summary`, `generate_digest`(재시도 실행은 직전 시도가 남긴 IN_PROGRESS 를 중복 실행으로 오인하지 않도록 `self.request.retries > 0` 이면 가드 통과), `delete_calendar_event`.
+
+### 로깅 — 형식·추적·레벨 정책
+
+- 초기화: `shared/infrastructure/logger/setup.py` 의 `configure_logging()` — API 는 `create_app()`, 워커는 Celery `setup_logging` 시그널에서 한 번. structlog 와 stdlib 로거(uvicorn·celery 등)를 **같은 JSON 한 줄**로 stdout 에 쓴다. 레벨은 env `LOG_LEVEL`(기본 INFO). httpx/httpcore 는 WARNING — INFO 에서 쿼리 포함 URL(syncToken 등)을 남기기 때문.
+- 추적 키(contextvars 로 모든 줄에 자동 부착): API 는 `RequestContextMiddleware` 가 `request_id`(요청의 `X-Request-ID` 가 안전한 형식이면 재사용, 아니면 생성 — 응답 헤더로도 반환)·`method`·`path`·`client_ip`, 인증 의존성이 `user_id`. 워커는 `AsyncContextTask` 가 `task_id`·`task_name`.
+- 레벨 정책(에러 우선): 5xx 응답은 error + 원인 체인 traceback(`errors/handler.py` `log_error_response`), 401/403/429 는 `security` 채널 warning, 그 외 4xx 는 남기지 않음(요청 로그는 uvicorn access). 처리되지 않은 예외는 미들웨어가 `http.unhandled_exception` error 로 남기고 `500 INTERNAL_ERROR` 봉투로 응답. 워커 태스크 실패는 Celery 의 `celery.app.trace` error 로그(+태스크별 `*.failed` 로그).
+- 민감정보: 토큰·인증코드·OAuth code·메일 본문은 로그/예외 메시지에 넣지 않는다. 이메일 주소 대신 user_id, 수신자는 도메인만.
+
+### 외부 연동 예외 번역과 `except Exception` 사용 범위
+
+- 외부 라이브러리 예외(httpx·google-genai·aiosmtplib·redis·응답 형식 오류)는 **infrastructure 경계에서 도메인 예외로 번역**한다 — 상위 레이어는 라이브러리를 모른다. 번역기: `auth/infrastructure/oauth/http.py`, `shared/infrastructure/ai/errors.py`, GitHub/Calendar 클라이언트의 `_send`·`_parse`/`_json`, `shared/infrastructure/email/smtp.py`, Redis 는 `main.py` 전역 핸들러(`CACHE_UNAVAILABLE`, fail-closed).
+- 여러 모듈이 쓰는 외부 실패는 `shared/domain/exceptions/external.py` (메일·캐시·AI). AI 는 `AIServiceUnavailable`(+`AIQuotaExceeded`) = 재시도, `AIRequestRejected`/`AIEmptyResponse` = 재시도 무의미.
+- DB unique 제약 경쟁(check-then-insert 를 동시 요청이 함께 통과)은 repository 가 `shared/infrastructure/database/errors.py` 의 `translate_unique_violations({제약명: 도메인예외})` 로 flush 를 감싸 사전 체크와 같은 409 로 번역한다. 매핑에 없는 제약은 전파. (folders 는 028, retro_templates 는 036 의 유니크 인덱스 — 인덱스 이름이 constraint_name 으로 온다)
+- 호출부는 **구체 예외만** 잡고 종류별로 대응한다(재시도 / 재인증 / 실패 확정 / degrade). 다른 의미의 예외를 빌려 쓰지 않는다(예: 빈 AI 응답에 NotFound 금지).
+- `except Exception` 은 아래 경계에서만 허용하며, 여기까지 온 것은 코드 버그로 보고 traceback 과 함께 남긴다: ① 워커 태스크 최상위(FAILED 확정 후 재발생) ② OAuth 팝업 HTML 콜백 ③ 배치 항목 격리 루프 ④ 정리 후 재발생 ⑤ lifespan 종료 정리. 그 외 "주 작업은 이미 끝난 best-effort 부가 작업"(SSE 알림 publish, orphan 이벤트 정리, 락 해제)은 `except Exception` 대신 예상되는 구체 예외(RedisError, Calendar 도메인 예외)만 잡고 warning.
 
 ### Beat 스케줄 — 사용자 tz 기반 자동 요약
 
