@@ -32,6 +32,11 @@ from app.todo.presentation.router import router as todo_router
 from app.topic.presentation.router import router as topic_router
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.container.providers import AppProvider, RequestProvider
+from app.shared.infrastructure.logger.request_context import (
+    REQUEST_ID_HEADER,
+    RequestContextMiddleware,
+)
+from app.shared.infrastructure.logger.setup import configure_logging
 
 
 _log = structlog.get_logger(__name__)
@@ -63,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     settings = get_settings()
     app = FastAPI(
         title="ARCHIVE API",
@@ -76,27 +82,43 @@ def create_app() -> FastAPI:
     container = make_async_container(AppProvider(), RequestProvider())
     setup_dishka(container, app=app)
 
+    # 순서 주의 — add_middleware 는 바깥쪽에 쌓는다. RequestContext 를 먼저 추가해 CORS 보다
+    # 안쪽에 둬야, 처리되지 않은 예외로 여기서 만든 500 응답에도 CORS 헤더가 붙는다.
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[REQUEST_ID_HEADER],  # FE 가 문의·버그 리포트에 request id 를 실을 수 있게
     )
 
     @app.exception_handler(BaseAppException)
     async def app_exception_handler(request: Request, exc: BaseAppException) -> JSONResponse:
-        from app.shared.infrastructure.errors.handler import api_version_of, to_http_response
-        return to_http_response(exc, api_version_of(request.url.path))
+        from app.shared.infrastructure.errors.handler import (
+            api_version_of,
+            log_error_response,
+            to_http_response,
+        )
+        response = to_http_response(exc, api_version_of(request.url.path))
+        log_error_response(exc, response.status_code)
+        return response
 
     @app.exception_handler(RedisError)
     async def redis_exception_handler(request: Request, exc: RedisError) -> JSONResponse:
         # 캐시 클래스가 10여 개라 각각 감싸는 대신 경계 한 곳에서 번역한다. 로그인 제한·refresh
         # token·OAuth state 가 전부 Redis 라 fail-closed(503) — 우회 허용보다 거부가 안전.
-        from app.shared.infrastructure.errors.handler import api_version_of, to_http_response
+        from app.shared.infrastructure.errors.handler import (
+            api_version_of,
+            log_error_response,
+            to_http_response,
+        )
         translated = CacheUnavailableException(f"{type(exc).__name__}: {exc}")
         translated.__cause__ = exc
-        return to_http_response(translated, api_version_of(request.url.path))
+        response = to_http_response(translated, api_version_of(request.url.path))
+        log_error_response(translated, response.status_code)
+        return response
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

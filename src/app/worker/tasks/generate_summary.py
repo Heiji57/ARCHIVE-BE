@@ -5,6 +5,7 @@ summary_type 별 데이터 소스 선택은 `strategies.get_strategy` 에 위임
 """
 import json
 
+import structlog
 from celery import Task
 from celery.exceptions import Retry
 from celery.utils.time import get_exponential_backoff_interval
@@ -51,6 +52,8 @@ _NOT_YET_VISIBLE_RETRY_COUNTDOWN_SECONDS = 2
 # 에서 autoretry_for 가 async task body 에 대해 실제로 작동하지 않는다). 이 값들도
 # 운영 정책이 아니라 재시도 알고리즘 파라미터라 env 화하지 않는다 — 기존에도
 # 하드코딩 데코레이터 인자였다.
+_log = structlog.get_logger(__name__)
+
 _GEMINI_RETRY_BACKOFF_FACTOR = 1
 # 429 쿼터 초과는 분 단위 윈도우라 짧은 백오프로는 연달아 다시 막힌다.
 _GEMINI_QUOTA_BACKOFF_FACTOR = 30
@@ -281,6 +284,8 @@ async def generate_summary_task(
         # 매칭되지 않고 그냥 빠져나가 FAILED 마킹을 건너뛰는 버그가 있었다.)
         raise
     except Exception:
+        # 태스크 최상위 경계 — 어떤 실패든 FAILED 로 확정해야 영구 IN_PROGRESS 를 막는다.
+        _log.exception("generate_summary.failed", summary_id=summary_id, user_id=user_id)
         saved_notif = None
         failed_period_start = None
         failed_period_end = None

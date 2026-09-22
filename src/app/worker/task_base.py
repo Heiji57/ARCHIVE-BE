@@ -22,7 +22,8 @@ import structlog
 from celery import Task
 from celery.app.task import Context
 
-# (task name, request) — 다른 태스크 객체가 이 값을 자기 request 로 오인하지 않도록 이름을 함께 둔다.
+# (task name, request) — 다른 태스크 객체가 이 값을 자기 request 로 오인하지 않도록
+# 이름을 함께 둔다.
 _current_request: ContextVar[tuple[str, Context] | None] = ContextVar(
     "celery_current_request", default=None
 )
@@ -52,7 +53,7 @@ def _wrap_async_run(orig: Callable[..., Awaitable[Any]], bound: bool) -> Callabl
     return inspect.markcoroutinefunction(run)
 
 
-class AsyncContextTask(Task):
+class AsyncContextTask(Task):  # type: ignore[misc]  # celery 는 타입 스텁이 없다
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         raw = cls.__dict__.get("run")
@@ -61,10 +62,10 @@ class AsyncContextTask(Task):
         bound = not isinstance(raw, staticmethod)
         func = raw if bound else raw.__func__
         if inspect.iscoroutinefunction(func):
-            cls.run = _wrap_async_run(func, bound)  # type: ignore[method-assign]
+            cls.run = _wrap_async_run(func, bound)
 
     @property
-    def request(self) -> Context:  # type: ignore[override]
+    def request(self) -> Context:
         current = _current_request.get()
         if current is not None and current[0] == self.name:
             return current[1]

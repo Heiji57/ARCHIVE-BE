@@ -45,7 +45,11 @@ from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
 from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
-from app.auth.domain.exceptions.exceptions import OnboardingTokenInvalidException
+from app.auth.domain.exceptions.exceptions import (
+    OAuthProviderResponseInvalidException,
+    OAuthProviderUnavailableException,
+    OnboardingTokenInvalidException,
+)
 from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.shared.infrastructure.auth.jwt import create_access_token
 from app.auth.domain.models.value_objects import OAuthProvider
@@ -75,10 +79,16 @@ from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.errors.handler import resolve_code
+from app.shared.infrastructure.logger.security import get_security_logger
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
 _log = structlog.get_logger(__name__)
+# provider 쪽 장애 — 보안 신호가 아니라 서버가 조치할 문제라 error 로 남긴다.
+_OAUTH_PROVIDER_FAILURES = (
+    OAuthProviderUnavailableException,
+    OAuthProviderResponseInvalidException,
+)
 
 _REFRESH_COOKIE = "refresh_token"
 _ONBOARDING_COOKIE = "onboarding_token"
@@ -373,12 +383,27 @@ async def oauth_callback(
             ip=_client_ip(request),
         )
     except BaseAppException as e:
+        # HTML 로 응답하므로 전역 핸들러를 거치지 않는다 — 여기서 직접 남긴다.
+        # state 위조·code 재사용은 보안 신호, provider 장애는 서버 쪽 문제.
+        if isinstance(e, _OAUTH_PROVIDER_FAILURES):
+            _log.error(
+                "auth.oauth.provider_failed",
+                provider=provider.value,
+                code=e.code,
+                error=e.message,
+                exc_info=e,
+            )
+        else:
+            get_security_logger().warning(
+                "auth.oauth.callback_rejected", provider=provider.value, code=e.code
+            )
         return HTMLResponse(
             content=_oauth_error_html(resolve_code(e.code, api_version), frontend_origin)
         )
     except Exception:
         # 팝업 HTML 경계 — 여기서 놓치면 사용자는 빈 팝업을 본다. 도메인 예외로 번역되지
         # 않은 것은 코드 버그로 본다.
+        _log.exception("auth.oauth.callback_unexpected", provider=provider.value)
         return HTMLResponse(
             content=_oauth_error_html(BaseAppException.code, frontend_origin)
         )

@@ -1,5 +1,6 @@
 import json
 
+import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, Depends, Query, status
 from fastapi.responses import HTMLResponse
@@ -35,6 +36,8 @@ from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.errors.handler import resolve_code
 from app.shared.presentation.schemas.response import ApiResponse
 from app.shared.presentation.validators import parse_date_range
+
+_log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], route_class=DishkaRoute)
 
@@ -118,6 +121,8 @@ async def callback(
     try:
         user_id = await use_case.execute(code=code, state=state)
     except BaseAppException as e:
+        # HTML 응답이라 전역 핸들러를 거치지 않는다 — 직접 남긴다.
+        _log.warning("calendar.callback_failed", code=e.code, error=e.message)
         # 캘린더 연결은 v2 가 없다 — 세분화된 새 코드는 v1 기존 코드로 되돌려 보낸다.
         return HTMLResponse(
             content=_callback_html(
@@ -126,6 +131,7 @@ async def callback(
         )
     except Exception:
         # 팝업 HTML 경계 — 도메인 예외로 번역되지 않은 것은 코드 버그.
+        _log.exception("calendar.callback_unexpected")
         return HTMLResponse(
             content=_callback_html(
                 "calendar_error", frontend_origin, error="INTERNAL_ERROR"

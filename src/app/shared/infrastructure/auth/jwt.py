@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+import structlog
 from fastapi import Cookie, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -68,7 +69,10 @@ async def get_current_user(
 ) -> UserContext:
     if not credentials:
         raise AuthTokenInvalidException()
-    return _decode(credentials.credentials, TokenType.ACCESS)
+    user = _decode(credentials.credentials, TokenType.ACCESS)
+    # 이후 이 요청의 모든 로그 줄에 user_id 가 붙는다 (request_context 미들웨어가 요청마다 초기화).
+    structlog.contextvars.bind_contextvars(user_id=user.id)
+    return user
 
 
 def extract_refresh_token(refresh_token: str | None = Cookie(default=None, alias="refresh_token")) -> str:

@@ -19,6 +19,13 @@ info:
     ```
     에러 응답은 `data: null`이며 `details[]`가 추가된다.
 
+    처리되지 않은 서버 오류도 같은 봉투로 `500` + `code: INTERNAL_ERROR` 를 반환한다.
+
+    ### 요청 추적 (`X-Request-ID`)
+    모든 응답에 `X-Request-ID` 헤더가 포함된다 (CORS 로 노출). 요청에 `X-Request-ID`
+    (영숫자·`.`·`_`·`-`, 최대 64자)를 보내면 그 값을 그대로 쓰고, 없거나 형식이 다르면 서버가 생성한다.
+    서버 로그의 `request_id` 와 같으므로 문의·버그 리포트에 함께 전달하면 추적할 수 있다.
+
     ### AI 요약 비동기 처리
     `POST /summaries/generate`는 `202 Accepted`만 반환한다.
     실제 결과는 Celery worker가 처리하며, 클라이언트는 `GET /summaries/{id}/stream` SSE로 완료 신호를 받는다.

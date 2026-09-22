@@ -1,3 +1,4 @@
+import structlog
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -246,6 +247,33 @@ def resolve_code(code: str, api_version: str) -> str:
     if api_version == "v1":
         return _V1_LEGACY_CODES.get(code, code)
     return code
+
+
+_log = structlog.get_logger(__name__)
+# 인증·권한·속도 제한 거절은 공격(무차별 대입·토큰 위조·스캐닝) 신호일 수 있어 보안 채널로 남긴다.
+_SECURITY_STATUSES = frozenset({401, 403, 429})
+
+
+def log_error_response(exc: BaseAppException, status_code: int) -> None:
+    """에러 응답 로깅 정책 — info 는 남기지 않고 서버 문제와 보안 신호에 집중한다.
+
+    - 5xx: error + 원인(__cause__ 체인 포함 traceback). exc.message 에 외부 API 상태코드·응답
+      요약이 들어 있다 — 예전엔 응답 본문에도 로그에도 남지 않고 버려졌다.
+    - 401/403/429: security 채널 warning.
+    - 그 외 4xx: 정상적인 클라이언트 오류라 남기지 않는다 (요청 로그는 uvicorn access log).
+    """
+    if status_code >= 500:
+        _log.error(
+            "http.error_response",
+            status=status_code,
+            code=exc.code,
+            error=exc.message,
+            exc_info=exc,
+        )
+    elif status_code in _SECURITY_STATUSES:
+        structlog.get_logger("security").warning(
+            "http.request_rejected", status=status_code, code=exc.code, error=exc.message
+        )
 
 
 def to_http_response(exc: BaseAppException, api_version: str = "v1") -> JSONResponse:

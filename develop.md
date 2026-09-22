@@ -94,6 +94,11 @@ docker-compose up -d
 docker-compose logs -f server
 docker-compose logs -f worker
 
+# 에러만 / 특정 요청·태스크만 (로그는 JSON 한 줄 — jq 로 필터)
+docker-compose logs --no-log-prefix server | jq -c 'select(.level=="error")'
+docker-compose logs --no-log-prefix server | jq -c 'select(.request_id=="<X-Request-ID 값>")'
+docker-compose logs --no-log-prefix worker-ai | jq -c 'select(.task_id=="<celery task id>")'
+
 # 마이그레이션 적용
 docker-compose exec server alembic upgrade head
 
@@ -1624,6 +1629,13 @@ except B:
 해결: 재시도 대상 호출을 **바깥 try 의 body 안에 중첩된 try/except** 로 감싼다. 그러면 소진 시 재발생한 예외가 중첩 구조를 완전히 빠져나온 뒤 바깥 try 의 except 절들로 새로 매칭된다. 실제 사례는 `app/worker/tasks/generate_summary.py` 의 Gemini 호출부(`try: gemini = ...; content = await gemini.generate(prompt) except AIServiceUnavailableException as exc: raise self.retry(...)` 가 바깥 T1/T2 try 의 body 안에 중첩돼 있고, 바깥엔 `except Retry: raise` / `except Exception: ...FAILED 마킹...` 만 있다) 참고.
 
 같은 패턴을 쓰는 태스크: `generate_summary`, `generate_digest`(재시도 실행은 직전 시도가 남긴 IN_PROGRESS 를 중복 실행으로 오인하지 않도록 `self.request.retries > 0` 이면 가드 통과), `delete_calendar_event`.
+
+### 로깅 — 형식·추적·레벨 정책
+
+- 초기화: `shared/infrastructure/logger/setup.py` 의 `configure_logging()` — API 는 `create_app()`, 워커는 Celery `setup_logging` 시그널에서 한 번. structlog 와 stdlib 로거(uvicorn·celery 등)를 **같은 JSON 한 줄**로 stdout 에 쓴다. 레벨은 env `LOG_LEVEL`(기본 INFO). httpx/httpcore 는 WARNING — INFO 에서 쿼리 포함 URL(syncToken 등)을 남기기 때문.
+- 추적 키(contextvars 로 모든 줄에 자동 부착): API 는 `RequestContextMiddleware` 가 `request_id`(요청의 `X-Request-ID` 가 안전한 형식이면 재사용, 아니면 생성 — 응답 헤더로도 반환)·`method`·`path`·`client_ip`, 인증 의존성이 `user_id`. 워커는 `AsyncContextTask` 가 `task_id`·`task_name`.
+- 레벨 정책(에러 우선): 5xx 응답은 error + 원인 체인 traceback(`errors/handler.py` `log_error_response`), 401/403/429 는 `security` 채널 warning, 그 외 4xx 는 남기지 않음(요청 로그는 uvicorn access). 처리되지 않은 예외는 미들웨어가 `http.unhandled_exception` error 로 남기고 `500 INTERNAL_ERROR` 봉투로 응답. 워커 태스크 실패는 Celery 의 `celery.app.trace` error 로그(+태스크별 `*.failed` 로그).
+- 민감정보: 토큰·인증코드·OAuth code·메일 본문은 로그/예외 메시지에 넣지 않는다. 이메일 주소 대신 user_id, 수신자는 도메인만.
 
 ### 외부 연동 예외 번역과 `except Exception` 사용 범위
 
