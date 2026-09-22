@@ -7,12 +7,12 @@
 기존 데이터에 이미 중복이 있으면 인덱스 생성이 실패하므로, 먼저 가장 오래된 행만 원래
 이름으로 두고 나머지는 이름 뒤에 id 꼬리를 붙여 유일하게 만든다(데이터 삭제 없음).
 
-리비전 번호: 병렬 브랜치 fix/calendar-push-tracking 이 035(down=034)를 쓰고 있어 번호
-충돌을 피해 036 으로 둔다. 두 브랜치 중 나중에 머지되는 쪽이 down_revision 을 앞선 쪽으로
-맞춰 단일 head 를 유지해야 한다 (`alembic heads` 로 확인).
+리비전 체인: 병렬 브랜치(035, todo 시간 보정)와 동시에 개발돼 둘 다 down=034 로 머지됐고
+그 결과 head 가 둘로 갈려 `alembic upgrade head` 가 "Multiple head revisions" 로 실패했다.
+두 마이그레이션은 서로 독립적이므로 이 쪽을 035 뒤로 이어 단일 head 로 되돌린다.
 
 Revision ID: 036
-Revises: 034
+Revises: 035
 Create Date: 2026-09-22
 """
 from typing import Sequence, Union
@@ -20,7 +20,7 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "036"
-down_revision: Union[str, None] = "034"
+down_revision: Union[str, None] = "035"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
