@@ -69,3 +69,10 @@ def test_strict_request_accepts_the_valid_keys():
 
     req = StrictSetActiveSummaryTemplatesRequest.model_validate({"annual": None, "weekly": "t"})
     assert req.to_selections() == {"annual": None, "weekly": "t"}
+
+
+def test_calendar_oauth_callback_exists_only_on_v1(client):
+    """callback 은 Google 에 등록된 redirect_uri — v2 경로가 생기면 api.yaml 설명과 어긋난다."""
+    paths = set(app.openapi()["paths"])
+    assert "/api/v1/calendar/callback" in paths
+    assert "/api/v2/calendar/callback" not in paths

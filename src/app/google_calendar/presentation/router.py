@@ -40,6 +40,8 @@ from app.shared.presentation.validators import parse_date_range
 _log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/calendar", tags=["calendar"], route_class=DishkaRoute)
+# OAuth callback 은 Google 에 등록된 redirect_uri(v1 경로) 전용 — v2 로 마운트하지 않도록 분리.
+callback_router = APIRouter(prefix="/calendar", tags=["calendar"], route_class=DishkaRoute)
 
 _MAX_DATE_RANGE_DAYS = 62  # 두 달
 
@@ -101,7 +103,7 @@ async def connect_init(
     return ApiResponse.ok(CalendarConnectInitResponse(authorize_url=authorize_url))
 
 
-@router.get("/callback")
+@callback_router.get("/callback")
 async def callback(
     use_case: FromDishka[HandleCalendarCallbackUseCase],
     code: str | None = Query(default=None),

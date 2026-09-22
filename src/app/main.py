@@ -14,6 +14,9 @@ from redis.exceptions import RedisError
 from app.auth.presentation.router import router as auth_router
 from app.auth.presentation.router_v2 import router as auth_router_v2
 from app.github.presentation.router import router as github_router
+from app.google_calendar.presentation.router import (
+    callback_router as calendar_callback_router,
+)
 from app.google_calendar.presentation.router import router as calendar_router
 from app.notification.presentation.router import router as notification_router
 from app.retrospective.presentation.folder_router import router as folder_router
@@ -145,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(settings_router, prefix="/api/v1")
     app.include_router(github_router, prefix="/api/v1")
     app.include_router(calendar_router, prefix="/api/v1")
+    app.include_router(calendar_callback_router, prefix="/api/v1")  # redirect_uri — v1 전용
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(topic_router, prefix="/api/v1")
     # v2 — 에러 코드·검증이 v1 과 달라지는 엔드포인트만 (나머지는 v1 유지). GitHub/Calendar 는
