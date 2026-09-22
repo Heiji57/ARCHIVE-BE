@@ -279,6 +279,13 @@ class UpdateTodoUseCase:
             todo.start_time = cmd.start_time  # type: ignore[assignment]
         if cmd.end_time is not UNSET:
             todo.end_time = cmd.end_time  # type: ignore[assignment]
+        # 시간(또는 tz 만 바뀌어 로컬 날짜)이 자정을 넘기면 date_key 도 맞춘다. 시리즈 base
+        # 는 제외 — base 의 date_key 는 시리즈 시작일이라 옮기면 모든 슬롯 계산이 바뀐다.
+        time_changed = (
+            cmd.start_time is not UNSET or cmd.end_time is not UNSET or cmd.timezone is not UNSET
+        )
+        if cmd.date_key is None and time_changed and not todo.is_series_base:
+            todo.align_date_to_time()
         if cmd.tags is not UNSET:
             todo.tags = cmd.tags  # type: ignore[assignment]
         if cmd.due_date_key is not UNSET:

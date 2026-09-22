@@ -84,13 +84,30 @@ class Todo(BaseEntity):
         차이는 유지한다(DST 무관). 같은 요청에 start/end 가 명시되면 호출자가 이후
         덮어쓴다.
         """
-        anchor = self.start_time or self.end_time
-        if anchor is not None:
+        local_date = self._time_local_date()
+        if local_date is not None:
             tz = self._zone()
-            delta = date.fromisoformat(date_key) - _as_utc(anchor).astimezone(tz).date()
+            delta = date.fromisoformat(date_key) - local_date
             self.start_time = _shift_local_days(self.start_time, tz, delta)
             self.end_time = _shift_local_days(self.end_time, tz, delta)
         self.date_key = date_key
+
+    def align_date_to_time(self) -> None:
+        """시간 변경의 반대 방향 — date_key 를 start(없으면 end)의 로컬 날짜로 맞춘다.
+
+        시간만 바꾸다 자정을 넘기면(예: 23:00 → 다음날 01:00) start_time 은 다음 날인데
+        date_key 는 그대로 남아 move_to 와 같은 모순이 생긴다. 시간 없는 todo 는 무변경.
+        """
+        local_date = self._time_local_date()
+        if local_date is not None:
+            self.date_key = local_date.isoformat()
+
+    def _time_local_date(self) -> date | None:
+        """start(없으면 end)의 로컬 날짜 — date_key 와 일치해야 하는 기준."""
+        anchor = self.start_time or self.end_time
+        if anchor is None:
+            return None
+        return _as_utc(anchor).astimezone(self._zone()).date()
 
     def _zone(self) -> ZoneInfo:
         try:
