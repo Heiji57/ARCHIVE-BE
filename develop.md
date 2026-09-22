@@ -1641,7 +1641,7 @@ except B:
 
 - 외부 라이브러리 예외(httpx·google-genai·aiosmtplib·redis·응답 형식 오류)는 **infrastructure 경계에서 도메인 예외로 번역**한다 — 상위 레이어는 라이브러리를 모른다. 번역기: `auth/infrastructure/oauth/http.py`, `shared/infrastructure/ai/errors.py`, GitHub/Calendar 클라이언트의 `_send`·`_parse`/`_json`, `shared/infrastructure/email/smtp.py`, Redis 는 `main.py` 전역 핸들러(`CACHE_UNAVAILABLE`, fail-closed).
 - 여러 모듈이 쓰는 외부 실패는 `shared/domain/exceptions/external.py` (메일·캐시·AI). AI 는 `AIServiceUnavailable`(+`AIQuotaExceeded`) = 재시도, `AIRequestRejected`/`AIEmptyResponse` = 재시도 무의미.
-- DB unique 제약 경쟁(check-then-insert 를 동시 요청이 함께 통과)은 repository 가 `shared/infrastructure/database/errors.py` 의 `translate_unique_violations({제약명: 도메인예외})` 로 flush 를 감싸 사전 체크와 같은 409 로 번역한다. 매핑에 없는 제약은 전파. (folders·retro_templates 이름 중복은 DB 제약이 없어 경쟁 시 중복 저장될 수 있음 — 별도 마이그레이션 필요)
+- DB unique 제약 경쟁(check-then-insert 를 동시 요청이 함께 통과)은 repository 가 `shared/infrastructure/database/errors.py` 의 `translate_unique_violations({제약명: 도메인예외})` 로 flush 를 감싸 사전 체크와 같은 409 로 번역한다. 매핑에 없는 제약은 전파. (folders 는 028, retro_templates 는 036 의 유니크 인덱스 — 인덱스 이름이 constraint_name 으로 온다)
 - 호출부는 **구체 예외만** 잡고 종류별로 대응한다(재시도 / 재인증 / 실패 확정 / degrade). 다른 의미의 예외를 빌려 쓰지 않는다(예: 빈 AI 응답에 NotFound 금지).
 - `except Exception` 은 아래 경계에서만 허용하며, 여기까지 온 것은 코드 버그로 보고 traceback 과 함께 남긴다: ① 워커 태스크 최상위(FAILED 확정 후 재발생) ② OAuth 팝업 HTML 콜백 ③ 배치 항목 격리 루프 ④ 정리 후 재발생 ⑤ lifespan 종료 정리. 그 외 "주 작업은 이미 끝난 best-effort 부가 작업"(SSE 알림 publish, orphan 이벤트 정리, 락 해제)은 `except Exception` 대신 예상되는 구체 예외(RedisError, Calendar 도메인 예외)만 잡고 warning.
 

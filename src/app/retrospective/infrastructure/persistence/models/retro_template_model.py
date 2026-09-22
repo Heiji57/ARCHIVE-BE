@@ -22,4 +22,10 @@ class RetroTemplateModel(Base):
 
     __table_args__ = (
         Index("ix_retro_templates_user_type", "user_id", "retro_type"),
+        # migration 036 — 동시 요청 경쟁에서도 이름 중복을 DB 가 막는다.
+        Index(
+            "uq_retro_templates_user_type_name",
+            "user_id", "retro_type", "name",
+            unique=True,
+        ),
     )

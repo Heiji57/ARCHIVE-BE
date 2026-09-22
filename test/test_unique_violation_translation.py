@@ -111,3 +111,33 @@ async def test_topic_and_digest_repos_use_their_own_mappings():
     # 다른 테이블의 제약 이름은 매핑하지 않는다 — digest repo 에서 topic 제약이 나오면 버그다.
     with pytest.raises(IntegrityError):
         await TopicDigestRepository(_Session("uq_topics_user_name")).save(digest)
+
+
+async def test_folder_and_retro_template_repos_translate_name_races():
+    """folders 는 028 의 COALESCE 표현식 인덱스, retro_templates 는 036 의 인덱스 —
+    둘 다 인덱스 이름이 constraint_name 으로 온다 (일회용 Postgres 에서 실측 확인)."""
+    from app.retrospective.domain.exceptions.exceptions import (
+        FolderNameDuplicatedException,
+        RetroTemplateNameDuplicatedException,
+    )
+    from app.retrospective.domain.models.folder import Folder
+    from app.retrospective.domain.models.retro_template import RetroTemplate
+    from app.retrospective.domain.models.value_objects import RetroType
+    from app.retrospective.infrastructure.persistence.repositories.folder_repo import (
+        FolderRepository,
+    )
+    from app.retrospective.infrastructure.persistence.repositories.retro_template_repo import (
+        RetroTemplateRepository,
+    )
+
+    now = datetime.now(UTC)
+    folder = Folder(id="f1", user_id="u1", parent_folder_id=None, name="A", created_at=now)
+    with pytest.raises(FolderNameDuplicatedException):
+        await FolderRepository(_Session("uq_folders_user_parent_name")).save(folder)
+
+    template = RetroTemplate(
+        id="tmpl_1", user_id="u1", retro_type=RetroType("daily"), name="n", content="c",
+        is_default=False, created_at=now,
+    )
+    with pytest.raises(RetroTemplateNameDuplicatedException):
+        await RetroTemplateRepository(_Session("uq_retro_templates_user_type_name")).save(template)
