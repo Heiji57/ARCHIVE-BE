@@ -5,11 +5,9 @@ summary_type 별 데이터 소스 선택은 `strategies.get_strategy` 에 위임
 """
 import json
 
-import httpx
 from celery import Task
 from celery.exceptions import Retry
 from celery.utils.time import get_exponential_backoff_interval
-from google.genai import errors as genai_errors
 from redis.asyncio import Redis
 
 from app.notification.domain.models.notification import Notification
@@ -33,6 +31,10 @@ from app.retrospective.infrastructure.persistence.repositories.summary_template_
 from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
     UserSettingsRepository,
 )
+from app.shared.domain.exceptions.external import (
+    AIQuotaExceededException,
+    AIServiceUnavailableException,
+)
 from app.shared.infrastructure.config.settings import get_settings
 from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
@@ -50,6 +52,8 @@ _NOT_YET_VISIBLE_RETRY_COUNTDOWN_SECONDS = 2
 # 운영 정책이 아니라 재시도 알고리즘 파라미터라 env 화하지 않는다 — 기존에도
 # 하드코딩 데코레이터 인자였다.
 _GEMINI_RETRY_BACKOFF_FACTOR = 1
+# 429 쿼터 초과는 분 단위 윈도우라 짧은 백오프로는 연달아 다시 막힌다.
+_GEMINI_QUOTA_BACKOFF_FACTOR = 30
 _GEMINI_RETRY_BACKOFF_MAX_SECONDS = 600
 
 
@@ -206,8 +210,11 @@ async def generate_summary_task(
         try:
             gemini = GeminiSummaryClient(settings.ai)
             content = await gemini.generate(prompt)
-        except (genai_errors.ServerError, httpx.TimeoutException) as exc:
-            # Gemini 일시 장애 / 응답 타임아웃 — 지수 백오프로 직접 재시도한다.
+        except AIServiceUnavailableException as exc:
+            # Gemini 일시 장애(5xx·네트워크·타임아웃) / 쿼터 초과 — 지수 백오프로 직접
+            # 재시도한다. 클라이언트가 SDK 예외를 shared AI 예외로 번역해 준다.
+            # RequestRejected(키·요청 형식) / EmptyResponse(safety) 는 재시도해도
+            # 같으므로 잡지 않는다 → 바깥 `except Exception:` 에서 FAILED 처리.
             # `autoretry_for` 로 위임하지 않는 이유는 아래 데코레이터 주석 참고.
             # 이 except 는 바깥 try 의 "body" 안에 중첩돼 있어야 한다 — 바깥
             # try 의 형제 except 절 안에 두면, max_retries 소진 시 self.retry()
@@ -216,7 +223,11 @@ async def generate_summary_task(
             # 그냥 빠져나가 FAILED 마킹을 건너뛴 채 IN_PROGRESS 에 영구히
             # 멈춘다 — 실제로 재현해 확인한 회귀.
             countdown = get_exponential_backoff_interval(
-                factor=_GEMINI_RETRY_BACKOFF_FACTOR,
+                factor=(
+                    _GEMINI_QUOTA_BACKOFF_FACTOR
+                    if isinstance(exc, AIQuotaExceededException)
+                    else _GEMINI_RETRY_BACKOFF_FACTOR
+                ),
                 retries=self.request.retries,
                 maximum=_GEMINI_RETRY_BACKOFF_MAX_SECONDS,
                 full_jitter=True,

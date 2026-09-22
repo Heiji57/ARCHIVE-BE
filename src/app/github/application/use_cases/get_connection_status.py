@@ -4,6 +4,14 @@ import structlog
 
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
+from app.github.domain.exceptions.exceptions import (
+    GitHubApiUnavailableException,
+    GitHubPermissionDeniedException,
+    GitHubRateLimitedException,
+    GitHubRepositoryNotFoundException,
+    GitHubResponseInvalidException,
+    GitHubTokenInvalidException,
+)
 from app.github.infrastructure.api.github_api_client import GitHubApiClient
 from app.settings.domain.repositories.repository import IUserSettingsRepository
 
@@ -59,7 +67,8 @@ class GetConnectionStatusUseCase:
         emails = github_conn.provider_verified_emails or []
         has_verified_emails = len(emails) > 0
 
-        # 토큰 유효성 확인을 위해 login 조회 — 실패해도 throw하지 않고 connected=False
+        # 토큰 유효성 확인을 위해 login 조회 — GitHub 쪽 실패는 throw하지 않고 connected=False
+        # (응답 계약). 코드 버그(그 외 예외)는 "연결 끊김" 으로 위장되지 않도록 전파한다.
         try:
             authenticated = await self._api_client.get_authenticated_user(
                 github_conn.access_token
@@ -70,15 +79,31 @@ class GetConnectionStatusUseCase:
                 push_target_repository_id=push_target_id,
                 has_verified_emails=has_verified_emails,
             )
-        except Exception as e:
+        except (GitHubTokenInvalidException, GitHubPermissionDeniedException) as e:
+            # 토큰 폐기·scope 회수 — 사용자가 재연결해야 하는 정상적인 상태.
+            _log.info("github.connection.token_rejected", user_id=user_id, code=e.code)
+            return self._disconnected(push_target_id, has_verified_emails)
+        except (
+            GitHubApiUnavailableException,
+            GitHubRateLimitedException,
+            GitHubResponseInvalidException,
+            GitHubRepositoryNotFoundException,
+        ) as e:
+            # GitHub 쪽 일시 장애 — 토큰은 멀쩡할 수 있다.
+            # 계약상 connected=False 지만 원인은 남긴다.
             _log.warning(
-                "github.connection.token_verify_failed",
+                "github.connection.verify_unavailable",
                 user_id=user_id,
-                error=str(e),
+                code=e.code,
+                error=e.message,
             )
-            return ConnectionStatus(
-                connected=False,
-                login=None,
-                push_target_repository_id=push_target_id,
-                has_verified_emails=has_verified_emails,
-            )
+            return self._disconnected(push_target_id, has_verified_emails)
+
+    @staticmethod
+    def _disconnected(push_target_id: str | None, has_verified_emails: bool) -> ConnectionStatus:
+        return ConnectionStatus(
+            connected=False,
+            login=None,
+            push_target_repository_id=push_target_id,
+            has_verified_emails=has_verified_emails,
+        )

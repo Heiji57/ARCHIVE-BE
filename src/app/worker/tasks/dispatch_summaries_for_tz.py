@@ -12,8 +12,9 @@
 import hashlib
 import os
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import structlog
 from celery import chain as celery_chain
 from sqlalchemy import or_, select
 
@@ -30,6 +31,8 @@ from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
 
 # 사용자별 결정적 지터 폭 (초). 0이면 정시 발사. 기본 1800초 = 0~30분 분산.
+_log = structlog.get_logger(__name__)
+
 SUMMARY_JITTER_SECONDS = int(os.getenv("SUMMARY_JITTER_SECONDS", "1800"))
 
 # 트리거 현지 시간대 — 01:00 ~ 01:59 사이의 사용자만 dispatch
@@ -265,8 +268,12 @@ async def dispatch_summaries_for_tz_task() -> None:
         user_id, tz_str, last_local_date, weekly_on, monthly_on, yearly_on = row
         try:
             tz = ZoneInfo(tz_str)
-        except Exception:
-            continue  # 잘못된 tz는 skip
+        except (ZoneInfoNotFoundError, ValueError):
+            # 잘못된 tz 는 skip — 이 사용자는 자동 요약이 영영 안 돈다. 데이터 정정이 필요하다.
+            _log.warning(
+                "dispatch_summaries.invalid_timezone", user_id=user_id, timezone=tz_str
+            )
+            continue
 
         local_now = now_utc.astimezone(tz)
         if local_now.hour != TRIGGER_HOUR:

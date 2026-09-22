@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+import structlog
 from dishka import make_async_container
 from dishka.integrations.fastapi import setup_dishka
 from fastapi import FastAPI, Request
@@ -8,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from redis.exceptions import RedisError
 
 from app.auth.presentation.router import router as auth_router
 from app.auth.presentation.router_v2 import router as auth_router_v2
@@ -25,34 +27,37 @@ from app.retrospective.presentation.template_router import (
 )
 from app.search.presentation.router import router as search_router
 from app.shared.domain.exceptions.base import BaseAppException
+from app.shared.domain.exceptions.external import CacheUnavailableException
 from app.todo.presentation.router import router as todo_router
 from app.topic.presentation.router import router as topic_router
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.container.providers import AppProvider, RequestProvider
 
 
+_log = structlog.get_logger(__name__)
+
+
+async def _close_app_client(app: FastAPI, client_type: type) -> None:
+    """APP-scope httpx 클라이언트 종료. 종료 경계라 하나가 실패해도 나머지 정리는 계속한다."""
+    try:
+        client = await app.state.dishka_container.get(client_type)
+        await client.close()
+    except Exception:
+        _log.warning("lifespan.client_close_failed", client=client_type.__name__, exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
-    # dishka 가 만든 APP-scope 인스턴스 중 명시적으로 close 가 필요한 것들 정리.
-    # GitHubApiClient 는 httpx.AsyncClient 를 멤버로 유지하므로 lifespan 종료 시 닫는다.
-    try:
-        from app.github.infrastructure.api.github_api_client import GitHubApiClient
-        api_client: GitHubApiClient = await app.state.dishka_container.get(GitHubApiClient)
-        await api_client.close()
-    except Exception:
-        pass
-    # GoogleCalendarApiClient 도 httpx.AsyncClient 를 멤버로 유지 — lifespan 종료 시 닫는다.
-    try:
-        from app.google_calendar.infrastructure.api.google_calendar_client import (
-            GoogleCalendarApiClient,
-        )
-        calendar_client: GoogleCalendarApiClient = await app.state.dishka_container.get(
-            GoogleCalendarApiClient
-        )
-        await calendar_client.close()
-    except Exception:
-        pass
+    # dishka 가 만든 APP-scope 인스턴스 중 명시적으로 close 가 필요한 것들 정리 —
+    # 둘 다 httpx.AsyncClient 를 멤버로 유지한다.
+    from app.github.infrastructure.api.github_api_client import GitHubApiClient
+    from app.google_calendar.infrastructure.api.google_calendar_client import (
+        GoogleCalendarApiClient,
+    )
+
+    await _close_app_client(app, GitHubApiClient)
+    await _close_app_client(app, GoogleCalendarApiClient)
     # dishka가 app.state.dishka_container에 컨테이너를 저장함
     await app.state.dishka_container.close()
 
@@ -83,6 +88,15 @@ def create_app() -> FastAPI:
     async def app_exception_handler(request: Request, exc: BaseAppException) -> JSONResponse:
         from app.shared.infrastructure.errors.handler import api_version_of, to_http_response
         return to_http_response(exc, api_version_of(request.url.path))
+
+    @app.exception_handler(RedisError)
+    async def redis_exception_handler(request: Request, exc: RedisError) -> JSONResponse:
+        # 캐시 클래스가 10여 개라 각각 감싸는 대신 경계 한 곳에서 번역한다. 로그인 제한·refresh
+        # token·OAuth state 가 전부 Redis 라 fail-closed(503) — 우회 허용보다 거부가 안전.
+        from app.shared.infrastructure.errors.handler import api_version_of, to_http_response
+        translated = CacheUnavailableException(f"{type(exc).__name__}: {exc}")
+        translated.__cause__ = exc
+        return to_http_response(translated, api_version_of(request.url.path))
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

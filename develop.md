@@ -1619,7 +1619,16 @@ except B:
     print("이게 찍힘")       # try/except 밖에서 잡힘
 ```
 
-해결: 재시도 대상 호출을 **바깥 try 의 body 안에 중첩된 try/except** 로 감싼다. 그러면 소진 시 재발생한 예외가 중첩 구조를 완전히 빠져나온 뒤 바깥 try 의 except 절들로 새로 매칭된다. 실제 사례는 `app/worker/tasks/generate_summary.py` 의 Gemini 호출부(`try: gemini = ...; content = await gemini.generate(prompt) except (ServerError, TimeoutException) as exc: raise self.retry(...)` 가 바깥 T1/T2 try 의 body 안에 중첩돼 있고, 바깥엔 `except Retry: raise` / `except Exception: ...FAILED 마킹...` 만 있다) 참고.
+해결: 재시도 대상 호출을 **바깥 try 의 body 안에 중첩된 try/except** 로 감싼다. 그러면 소진 시 재발생한 예외가 중첩 구조를 완전히 빠져나온 뒤 바깥 try 의 except 절들로 새로 매칭된다. 실제 사례는 `app/worker/tasks/generate_summary.py` 의 Gemini 호출부(`try: gemini = ...; content = await gemini.generate(prompt) except AIServiceUnavailableException as exc: raise self.retry(...)` 가 바깥 T1/T2 try 의 body 안에 중첩돼 있고, 바깥엔 `except Retry: raise` / `except Exception: ...FAILED 마킹...` 만 있다) 참고.
+
+같은 패턴을 쓰는 태스크: `generate_summary`, `generate_digest`(재시도 실행은 직전 시도가 남긴 IN_PROGRESS 를 중복 실행으로 오인하지 않도록 `self.request.retries > 0` 이면 가드 통과), `delete_calendar_event`.
+
+### 외부 연동 예외 번역과 `except Exception` 사용 범위
+
+- 외부 라이브러리 예외(httpx·google-genai·aiosmtplib·redis·응답 형식 오류)는 **infrastructure 경계에서 도메인 예외로 번역**한다 — 상위 레이어는 라이브러리를 모른다. 번역기: `auth/infrastructure/oauth/http.py`, `shared/infrastructure/ai/errors.py`, GitHub/Calendar 클라이언트의 `_send`·`_parse`/`_json`, `shared/infrastructure/email/smtp.py`, Redis 는 `main.py` 전역 핸들러(`CACHE_UNAVAILABLE`, fail-closed).
+- 여러 모듈이 쓰는 외부 실패는 `shared/domain/exceptions/external.py` (메일·캐시·AI). AI 는 `AIServiceUnavailable`(+`AIQuotaExceeded`) = 재시도, `AIRequestRejected`/`AIEmptyResponse` = 재시도 무의미.
+- 호출부는 **구체 예외만** 잡고 종류별로 대응한다(재시도 / 재인증 / 실패 확정 / degrade). 다른 의미의 예외를 빌려 쓰지 않는다(예: 빈 AI 응답에 NotFound 금지).
+- `except Exception` 은 아래 경계에서만 허용하며, 여기까지 온 것은 코드 버그로 보고 traceback 과 함께 남긴다: ① 워커 태스크 최상위(FAILED 확정 후 재발생) ② OAuth 팝업 HTML 콜백 ③ 배치 항목 격리 루프 ④ 정리 후 재발생 ⑤ lifespan 종료 정리.
 
 ### Beat 스케줄 — 사용자 tz 기반 자동 요약
 

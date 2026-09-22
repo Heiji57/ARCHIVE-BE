@@ -1,11 +1,21 @@
 """임베딩 큐 드레이너 — 5분마다 실행해 stale 항목을 일괄 임베딩."""
 import asyncio
+import enum
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
+from functools import partial
 
 import structlog
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.shared.domain.exceptions.external import (
+    AIServiceException,
+    AIServiceUnavailableException,
+)
 from app.shared.domain.utils.id import generate_id
 from app.shared.infrastructure.config.settings import get_settings
+from app.topic.domain.models.topic import EmbeddingQueueItem
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
 from app.topic.infrastructure.persistence.models.chunk_model import (  # noqa: F401 — SQLAlchemy metadata
     EmbeddingQueueModel,
@@ -152,6 +162,52 @@ async def _embed_todo_item(item, todo_repo, todo_emb_repo, queue_repo, emb_servi
     await queue_repo.delete(item.id)
 
 
+class _Outcome(enum.Enum):
+    DONE = "done"  # 임베딩 저장 + 큐에서 삭제
+    SKIP = "skip"  # 이 항목만 실패 — 큐에 남아 다음 주기에 재시도
+    STOP = "stop"  # AI 일시 장애 — 나머지 항목도 같은 결과라 배치 중단
+
+
+async def _run_item(
+    session: AsyncSession, item: EmbeddingQueueItem, work: Callable[[], Awaitable[None]]
+) -> _Outcome:
+    """항목 하나를 SAVEPOINT 로 격리해 실행하고, 실패를 종류별로 분류한다."""
+    try:
+        async with session.begin_nested():
+            await work()
+    except AIServiceUnavailableException:
+        # 장애/쿼터 중에 남은 항목을 계속 두드리면 쿼터만 소모한다.
+        _log.warning(
+            "embed_stale.ai_unavailable_batch_stopped",
+            entity_type=item.entity_type,
+            entity_id=item.entity_id,
+            exc_info=True,
+        )
+        return _Outcome.STOP
+    except AIServiceException:
+        # 요청 거부(길이·키) / 빈 응답 — 재시도해도 같을 가능성이 높다. 반복되면 확인 필요.
+        _log.error(
+            "embed_stale.ai_rejected",
+            entity_type=item.entity_type,
+            entity_id=item.entity_id,
+            exc_info=True,
+        )
+        return _Outcome.SKIP
+    except SQLAlchemyError:
+        # SAVEPOINT 가 롤백돼 배치의 다른 항목은 영향 없음 (#13).
+        _log.exception(
+            "embed_stale.db_failed", entity_type=item.entity_type, entity_id=item.entity_id
+        )
+        return _Outcome.SKIP
+    except Exception:
+        # 배치 항목 격리 경계 — 위에서 분류되지 않은 건 코드 버그. 한 항목이 배치를 죽이지 않게.
+        _log.exception(
+            "embed_stale.unexpected", entity_type=item.entity_type, entity_id=item.entity_id
+        )
+        return _Outcome.SKIP
+    return _Outcome.DONE
+
+
 async def _process_batch(user_id_filter: str | None = None) -> int:
     """큐에서 한 배치를 처리하고 **큐에서 실제로 없어진** 항목 수를 반환한다.
 
@@ -192,14 +248,17 @@ async def _process_batch(user_id_filter: str | None = None) -> int:
             chunk_repo = EntryChunkRepository(session)
 
             for item in entry_items:
-                try:
-                    async with session.begin_nested():
-                        await _embed_entry_item(
-                            item, entry_repo, chunk_repo, queue_repo, emb_service, cfg
-                        )
-                    completed += 1
-                except Exception:
-                    _log.exception("embed_stale.entry_failed", entity_id=item.entity_id)
+                outcome = await _run_item(
+                    session,
+                    item,
+                    partial(
+                        _embed_entry_item,
+                        item, entry_repo, chunk_repo, queue_repo, emb_service, cfg,
+                    ),
+                )
+                if outcome is _Outcome.STOP:
+                    return completed
+                completed += outcome is _Outcome.DONE
 
         # ── Todo 임베딩 ──────────────────────────────────────────────────────
         if todo_items:
@@ -208,14 +267,16 @@ async def _process_batch(user_id_filter: str | None = None) -> int:
             todo_emb_repo = TodoEmbeddingRepository(session)
 
             for item in todo_items:
-                try:
-                    async with session.begin_nested():
-                        await _embed_todo_item(
-                            item, todo_repo, todo_emb_repo, queue_repo, emb_service
-                        )
-                    completed += 1
-                except Exception:
-                    _log.exception("embed_stale.todo_failed", entity_id=item.entity_id)
+                outcome = await _run_item(
+                    session,
+                    item,
+                    partial(
+                        _embed_todo_item, item, todo_repo, todo_emb_repo, queue_repo, emb_service
+                    ),
+                )
+                if outcome is _Outcome.STOP:
+                    return completed
+                completed += outcome is _Outcome.DONE
 
     return completed
 

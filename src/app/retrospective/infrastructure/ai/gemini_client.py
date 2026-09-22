@@ -4,19 +4,18 @@
 - response_schema 없이 마크다운 직접 출력. 프롬프트가 사용자 템플릿 블록 구조를
   그대로 따르도록 지시하며, Gemini 2.5 Flash 는 이 지시를 신뢰도 높게 따른다.
 - `response.text` 가 None 인 케이스(safety filter, blocked candidates 등) 명시적
-  방어 → 식별 가능한 예외로 변환. 호출자가 retry/Failed 분기를 정확히 판단할 수
+  방어 → AIEmptyResponseException. 호출자가 retry/Failed 분기를 정확히 판단할 수
   있게 한다.
-- 503 등 transient 에러는 SDK 의 ServerError 그대로 위로 전파 → Celery autoretry
-  에서 처리.
+- SDK/httpx 예외는 shared AI 예외로 번역(`shared/infrastructure/ai/errors.py`) —
+  일시 장애(Unavailable/QuotaExceeded)만 워커가 self.retry() 로 재시도한다.
 """
 import structlog
 from google import genai
 from google.genai import types
 
-from app.retrospective.domain.exceptions.exceptions import (
-    SummaryInvalidStateException,
-)
 from app.retrospective.domain.models.value_objects import SummaryContent
+from app.shared.domain.exceptions.external import AIEmptyResponseException
+from app.shared.infrastructure.ai import errors as ai_errors
 from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
@@ -41,10 +40,13 @@ class GeminiSummaryClient:
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
 
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=prompt,
-            config=config,
+        response = await ai_errors.call(
+            "gemini.summary.generate",
+            self._client.aio.models.generate_content(
+                model=self._model,
+                contents=prompt,
+                config=config,
+            ),
         )
 
         text = response.text
@@ -59,8 +61,8 @@ class GeminiSummaryClient:
                 finish_reasons=finish_reasons,
                 prompt_feedback=str(getattr(response, "prompt_feedback", None)),
             )
-            raise SummaryInvalidStateException(
-                "Gemini returned no text (safety filter or empty candidates)."
+            raise AIEmptyResponseException(
+                f"Gemini returned no text (finish_reasons={finish_reasons})."
             )
 
         return SummaryContent.from_text(text)

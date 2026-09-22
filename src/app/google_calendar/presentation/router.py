@@ -32,6 +32,7 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.infrastructure.config.settings import get_settings
+from app.shared.infrastructure.errors.handler import resolve_code
 from app.shared.presentation.schemas.response import ApiResponse
 from app.shared.presentation.validators import parse_date_range
 
@@ -117,10 +118,14 @@ async def callback(
     try:
         user_id = await use_case.execute(code=code, state=state)
     except BaseAppException as e:
+        # 캘린더 연결은 v2 가 없다 — 세분화된 새 코드는 v1 기존 코드로 되돌려 보낸다.
         return HTMLResponse(
-            content=_callback_html("calendar_error", frontend_origin, error=e.code)
+            content=_callback_html(
+                "calendar_error", frontend_origin, error=resolve_code(e.code, "v1")
+            )
         )
     except Exception:
+        # 팝업 HTML 경계 — 도메인 예외로 번역되지 않은 것은 코드 버그.
         return HTMLResponse(
             content=_callback_html(
                 "calendar_error", frontend_origin, error="INTERNAL_ERROR"

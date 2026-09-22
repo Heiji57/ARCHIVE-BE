@@ -3296,6 +3296,8 @@ components:
         - `GITHUB_API_UNAVAILABLE` — GitHub API 장애
         - `GOOGLE_CALENDAR_API_UNAVAILABLE` — Google Calendar API 장애
         - `AUTH_OAUTH_PROVIDER_UNAVAILABLE` — [v2, OAuth callback] OAuth provider 일시 장애
+        - `EMAIL_DELIVERY_FAILED` — [v2] 메일 서버 발송 실패 (v1: `500 INTERNAL_ERROR`)
+        - `CACHE_UNAVAILABLE` — [v2] 캐시(Redis) 장애. 로그인 제한 등 보안 기능은 fail-closed (v1: `500 INTERNAL_ERROR`)
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }

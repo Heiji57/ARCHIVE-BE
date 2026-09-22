@@ -1,5 +1,6 @@
 import json
 
+import structlog
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import (
     APIRouter,
@@ -27,6 +28,7 @@ from app.auth.application.use_cases.complete_onboarding import CompleteOnboardin
 from app.auth.application.use_cases.initiate_oauth_link import InitiateOAuthLinkUseCase
 from app.auth.application.use_cases.list_sessions import ListSessionsUseCase
 from app.auth.application.use_cases.request_password_reset import RequestPasswordResetUseCase
+from app.shared.domain.exceptions.external import EmailDeliveryFailedException
 from app.shared.infrastructure.email.smtp import send_email
 from app.auth.application.use_cases.reset_password import ResetPasswordUseCase
 from app.auth.application.use_cases.revoke_session import (
@@ -76,6 +78,7 @@ from app.shared.infrastructure.errors.handler import resolve_code
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
+_log = structlog.get_logger(__name__)
 
 _REFRESH_COOKIE = "refresh_token"
 _ONBOARDING_COOKIE = "onboarding_token"
@@ -87,6 +90,17 @@ def _refresh_cookie_max_age() -> int:
 
 def _onboarding_cookie_max_age() -> int:
     return get_settings().auth.onboarding_token_ttl_seconds
+
+
+async def _send_password_reset_email(
+    to: str, subject: str, body: str, html_body: str | None = None
+) -> None:
+    """응답 이후 실행 — 실패를 호출자에게 알릴 수 없고(계정 열거 방지로 항상 200), 여기서
+    놓치면 ASGI 까지 올라가 요청과 무관한 traceback 만 남는다."""
+    try:
+        await send_email(to=to, subject=subject, body=body, html_body=html_body)
+    except EmailDeliveryFailedException as e:
+        _log.error("auth.password_reset.email_failed", error=e.message)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -443,7 +457,7 @@ async def request_password_reset(
     email_job = await use_case.execute(RequestPasswordResetCommand(email=body.email))
     if email_job is not None:
         background_tasks.add_task(
-            send_email,
+            _send_password_reset_email,
             to=email_job.to,
             subject=email_job.subject,
             body=email_job.body,

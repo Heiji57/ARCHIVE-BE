@@ -80,9 +80,15 @@ class SyncCalendarEventsUseCase:
                 return conn
 
         # ── 토큰 갱신 (pull-sync / push 공용 헬퍼) ──────────────────────────────
-        access_token = await ensure_valid_access_token(
-            conn, self._api_client, self._connection_repo, now
-        )
+        try:
+            access_token = await ensure_valid_access_token(
+                conn, self._api_client, self._connection_repo, now
+            )
+        except CalendarApiUnavailableException:
+            # 토큰 갱신 중 Google 일시 장애 — reauth 아님.
+            # 이벤트 조회 장애와 동일하게 이번 사이클 skip.
+            _log.warning("calendar.sync.token_refresh_unavailable", user_id=user_id)
+            return conn
         if access_token is None:
             return conn  # needs_reauth — FE 재연결 유도
 

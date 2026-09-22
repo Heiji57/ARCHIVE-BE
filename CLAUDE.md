@@ -121,6 +121,7 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 - **응답 형식**: `ApiResponse[T]` 래퍼 사용 (`shared/presentation/schemas/response.py`)
 - **인증**: 인증이 필요한 엔드포인트는 `current_user: UserContext = Depends(get_current_user)` 사용
 - **DB 마이그레이션**: 스키마 변경 시 `migrations/versions/` 에 Alembic 파일 추가
+- **예외 처리**: 외부 라이브러리 예외는 infrastructure 경계에서 도메인 예외로 번역하고, 호출부는 구체 예외만 잡는다. `except Exception` 은 정해진 경계(태스크 최상위·OAuth 팝업 콜백·배치 항목 격리·정리 후 재발생·lifespan)에서만 — 상세는 `develop.md` "외부 연동 예외 번역과 `except Exception` 사용 범위".
 - **사용자 타임존**: 사용자별 `users.timezone`(IANA tz) 보유. 모든 기간 계산("오늘", "이번 주" 등)은 이 tz 기준으로 처리한다. 절대 서버 UTC 기준으로 계산하지 않는다. `shared/domain/utils/period.py`의 `today_in_tz(tz)`, `now_in_tz(tz)` 사용.
 
 ## Environment Setup

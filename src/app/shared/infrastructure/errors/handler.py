@@ -37,18 +37,22 @@ from app.github.domain.exceptions.exceptions import (
     DeveloperAccountRequiredException,
     GitHubApiUnavailableException,
     GitHubConnectionNotFoundException,
+    GitHubPermissionDeniedException,
     GitHubPushFailedException,
     GitHubPushTargetNotSetException,
     GitHubRateLimitedException,
     GitHubRepositoryAlreadyLinkedException,
     GitHubRepositoryNotFoundException,
     GitHubRepositoryNotLinkedException,
+    GitHubResponseInvalidException,
     GitHubTokenInvalidException,
 )
 from app.google_calendar.domain.exceptions.exceptions import (
     CalendarApiUnavailableException,
     CalendarNotConnectedException,
+    CalendarRateLimitedException,
     CalendarReauthRequiredException,
+    CalendarResponseInvalidException,
     CalendarStateInvalidException,
 )
 from app.notification.domain.exceptions.exceptions import NotificationNotFoundException
@@ -73,6 +77,15 @@ from app.retrospective.domain.exceptions.exceptions import (
     SummaryTemplateNotFoundException,
 )
 from app.shared.domain.exceptions.base import BaseAppException
+from app.shared.domain.exceptions.external import (
+    AIEmptyResponseException,
+    AIQuotaExceededException,
+    AIRequestRejectedException,
+    AIServiceException,
+    AIServiceUnavailableException,
+    CacheUnavailableException,
+    EmailDeliveryFailedException,
+)
 from app.topic.domain.exceptions.exceptions import (
     DigestAlreadyInProgressException,
     DigestNotFoundException,
@@ -179,6 +192,22 @@ _STATUS_MAP: dict[str, int] = {
     OAuthEmailNotVerifiedException.code: 400,
     OAuthProviderUnavailableException.code: 503,
     OAuthProviderResponseInvalidException.code: 502,
+    # ── GitHub 세분화 ────────────────────────────────────────────────────────
+    GitHubPermissionDeniedException.code: 403,
+    GitHubResponseInvalidException.code: 502,
+    # ── Google Calendar 세분화 ───────────────────────────────────────────────
+    CalendarRateLimitedException.code: 429,
+    CalendarResponseInvalidException.code: 502,
+    # ── 외부 연동 공통 (shared/domain/exceptions/external.py) ────────────────
+    EmailDeliveryFailedException.code: 503,
+    CacheUnavailableException.code: 503,
+    # AI 예외는 주로 워커에서만 발생 — HTTP 로 새는 경로(토픽 매칭 등)는 degrade 처리하므로
+    # api.yaml 엔드포인트 계약에는 없다. 새어 나가더라도 올바른 상태로 응답하도록 등록만 한다.
+    AIServiceException.code: 502,
+    AIServiceUnavailableException.code: 503,
+    AIQuotaExceededException.code: 503,  # 우리 쪽 쿼터 소진 — 클라이언트 rate limit(429) 아님
+    AIRequestRejectedException.code: 502,
+    AIEmptyResponseException.code: 502,
 }
 
 # v1 하위호환 — 세분화 이전에 같은 상황에서 내보내던 코드. v1 경로(와 v1 으로 시작한 OAuth
@@ -193,6 +222,18 @@ _V1_LEGACY_CODES: dict[str, str] = {
     OAuthEmailNotVerifiedException.code: OAuthStateInvalidException.code,
     OAuthProviderUnavailableException.code: BaseAppException.code,
     OAuthProviderResponseInvalidException.code: BaseAppException.code,
+    EmailDeliveryFailedException.code: BaseAppException.code,
+    CacheUnavailableException.code: BaseAppException.code,
+    GitHubPermissionDeniedException.code: GitHubApiUnavailableException.code,
+    GitHubResponseInvalidException.code: BaseAppException.code,
+    # Calendar 두 예외는 CalendarApiUnavailable 하위 — v1 에선 그 코드로 보였다.
+    CalendarRateLimitedException.code: CalendarApiUnavailableException.code,
+    CalendarResponseInvalidException.code: CalendarApiUnavailableException.code,
+    AIServiceException.code: BaseAppException.code,
+    AIServiceUnavailableException.code: BaseAppException.code,
+    AIQuotaExceededException.code: BaseAppException.code,
+    AIRequestRejectedException.code: BaseAppException.code,
+    AIEmptyResponseException.code: BaseAppException.code,
 }
 
 

@@ -12,13 +12,16 @@ lifespan 종료 시 `close()`.
 """
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
 
 import httpx
 
 from app.google_calendar.domain.exceptions.exceptions import (
     CalendarApiUnavailableException,
+    CalendarRateLimitedException,
     CalendarReauthRequiredException,
+    CalendarResponseInvalidException,
 )
 from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
 
@@ -31,6 +34,50 @@ _PAGE_SIZE = 2500
 _MAX_PAGES = 20
 
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
+_RATE_LIMIT_REASONS = frozenset({"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"})
+
+
+def _is_rate_limited(response: httpx.Response) -> bool:
+    if response.status_code == 429:
+        return True
+    if response.status_code != 403:
+        return False
+    try:
+        errors = response.json().get("error", {}).get("errors", [])
+        return any(e.get("reason") in _RATE_LIMIT_REASONS for e in errors)
+    except (ValueError, AttributeError):
+        return False
+
+
+def _json(response: httpx.Response) -> dict[str, Any]:
+    try:
+        data = response.json()
+    except ValueError as e:
+        raise CalendarResponseInvalidException(
+            f"{response.request.url.path}: non-JSON body (HTTP {response.status_code})"
+        ) from e
+    if not isinstance(data, dict):
+        raise CalendarResponseInvalidException(f"{response.request.url.path}: not an object")
+    return data
+
+
+def _require(response: httpx.Response, key: str) -> Any:
+    value = _json(response).get(key)
+    if value is None:
+        raise CalendarResponseInvalidException(f"{response.request.url.path}: missing '{key}'")
+    return value
+
+
+def _token_bundle(response: httpx.Response) -> "CalendarTokenBundle":
+    data = _json(response)
+    try:
+        return CalendarTokenBundle(
+            access_token=data["access_token"],
+            refresh_token=data.get("refresh_token"),
+            expires_in=int(data.get("expires_in", 3600)),
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        raise CalendarResponseInvalidException(f"token response: {type(e).__name__}") from e
 
 
 class CalendarSyncTokenExpiredError(Exception):
@@ -171,6 +218,20 @@ class GoogleCalendarApiClient:
     async def close(self) -> None:
         await self._client.aclose()
 
+    async def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """전송 오류·속도 제한을 도메인 예외로 번역. 나머지 상태 코드는 호출부가 분기한다."""
+        try:
+            response = await self._client.request(method, url, **kwargs)
+        except httpx.TransportError as e:
+            raise CalendarApiUnavailableException(
+                f"{method} {httpx.URL(url).path}: {type(e).__name__}"
+            ) from e
+        if _is_rate_limited(response):
+            raise CalendarRateLimitedException(
+                f"{method} {httpx.URL(url).path}: HTTP {response.status_code}"
+            )
+        return response
+
     @property
     def scope(self) -> str:
         return self._config.calendar_scope
@@ -192,7 +253,8 @@ class GoogleCalendarApiClient:
         return f"{_AUTH_URL}?{params}"
 
     async def exchange_code(self, code: str) -> CalendarTokenBundle:
-        response = await self._client.post(
+        response = await self._send(
+            "POST",
             _TOKEN_URL,
             data={
                 "client_id": self._config.client_id,
@@ -202,19 +264,17 @@ class GoogleCalendarApiClient:
                 "grant_type": "authorization_code",
             },
         )
+        if response.status_code >= 500:
+            raise CalendarApiUnavailableException(f"Token exchange: HTTP {response.status_code}")
         if response.status_code >= 400:
             raise CalendarReauthRequiredException(
                 f"Token exchange failed: {response.text[:200]}"
             )
-        data = response.json()
-        return CalendarTokenBundle(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token"),
-            expires_in=int(data.get("expires_in", 3600)),
-        )
+        return _token_bundle(response)
 
     async def refresh_access_token(self, refresh_token: str) -> CalendarTokenBundle:
-        response = await self._client.post(
+        response = await self._send(
+            "POST",
             _TOKEN_URL,
             data={
                 "client_id": self._config.client_id,
@@ -223,26 +283,28 @@ class GoogleCalendarApiClient:
                 "grant_type": "refresh_token",
             },
         )
+        if response.status_code >= 500:
+            # Google 일시 장애 — refresh_token 은 멀쩡하다. reauth 로 마킹하면 장애 한 번에
+            # 사용자가 캘린더를 다시 연결해야 한다.
+            raise CalendarApiUnavailableException(f"Token refresh: HTTP {response.status_code}")
         if response.status_code >= 400:
             # invalid_grant 등 → refresh_token 무효, 사용자 재연결 필요.
             raise CalendarReauthRequiredException(
                 f"Token refresh failed: {response.text[:200]}"
             )
-        data = response.json()
-        return CalendarTokenBundle(
-            access_token=data["access_token"],
-            refresh_token=data.get("refresh_token"),
-            expires_in=int(data.get("expires_in", 3600)),
-        )
+        return _token_bundle(response)
 
     async def get_user_id(self, access_token: str) -> str:
-        response = await self._client.get(
+        response = await self._send(
+            "GET",
             _USERINFO_URL,
             headers={"Authorization": f"Bearer {access_token}"},
         )
+        if response.status_code >= 500:
+            raise CalendarApiUnavailableException(f"userinfo: HTTP {response.status_code}")
         if response.status_code >= 400:
             raise CalendarReauthRequiredException("Failed to fetch Google user info.")
-        return response.json()["id"]
+        return str(_require(response, "id"))
 
     # ── Calendar ───────────────────────────────────────────────────────────────
 
@@ -279,7 +341,8 @@ class GoogleCalendarApiClient:
             if page_token:
                 params["pageToken"] = page_token
 
-            response = await self._client.get(
+            response = await self._send(
+                "GET",
                 url,
                 headers={"Authorization": f"Bearer {access_token}"},
                 params=params,
@@ -294,11 +357,16 @@ class GoogleCalendarApiClient:
                     f"Calendar API returned {response.status_code}: {response.text[:200]}"
                 )
 
-            data = response.json()
-            for item in data.get("items", []):
-                parsed = _parse_event(item, calendar_id)
-                if parsed is not None:
-                    events.append(parsed)
+            data = _json(response)
+            try:
+                for item in data.get("items", []):
+                    parsed = _parse_event(item, calendar_id)
+                    if parsed is not None:
+                        events.append(parsed)
+            except (KeyError, TypeError, ValueError, AttributeError) as e:
+                raise CalendarResponseInvalidException(
+                    f"events.list item: {type(e).__name__}: {e}"
+                ) from e
 
             next_sync_token = data.get("nextSyncToken") or next_sync_token
             page_token = data.get("nextPageToken")
@@ -343,7 +411,8 @@ class GoogleCalendarApiClient:
     ) -> str:
         """이벤트 생성 후 Google event id 반환."""
         url = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
-        response = await self._client.post(
+        response = await self._send(
+            "POST",
             url,
             headers={"Authorization": f"Bearer {access_token}"},
             json=self._build_event_body(ev),
@@ -354,7 +423,7 @@ class GoogleCalendarApiClient:
             raise CalendarApiUnavailableException(
                 f"Calendar create failed {response.status_code}: {response.text[:200]}"
             )
-        return response.json()["id"]
+        return str(_require(response, "id"))
 
     async def update_event(
         self,
@@ -365,7 +434,8 @@ class GoogleCalendarApiClient:
     ) -> str | None:
         """이벤트 갱신 후 id 반환. 404(이벤트 사라짐)면 None → 호출자가 create fallback."""
         base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
-        response = await self._client.put(
+        response = await self._send(
+            "PUT",
             f"{base}/{google_event_id}",
             headers={"Authorization": f"Bearer {access_token}"},
             json=self._build_event_body(ev),
@@ -378,7 +448,7 @@ class GoogleCalendarApiClient:
             raise CalendarApiUnavailableException(
                 f"Calendar update failed {response.status_code}: {response.text[:200]}"
             )
-        return response.json()["id"]
+        return str(_require(response, "id"))
 
     async def delete_event(
         self,
@@ -388,7 +458,8 @@ class GoogleCalendarApiClient:
     ) -> None:
         """이벤트 삭제. 404/410(이미 삭제됨)은 멱등 성공으로 처리."""
         base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
-        response = await self._client.delete(
+        response = await self._send(
+            "DELETE",
             f"{base}/{google_event_id}",
             headers={"Authorization": f"Bearer {access_token}"},
         )
@@ -412,7 +483,8 @@ class GoogleCalendarApiClient:
         body = self._build_event_body(ev)
         # recurrence 는 instance 에 설정 불가 — 제거
         body.pop("recurrence", None)
-        response = await self._client.patch(
+        response = await self._send(
+            "PATCH",
             f"{base}/{instance_id}",
             headers={"Authorization": f"Bearer {access_token}"},
             json=body,
@@ -425,7 +497,7 @@ class GoogleCalendarApiClient:
             raise CalendarApiUnavailableException(
                 f"Calendar patch instance failed {response.status_code}: {response.text[:200]}"
             )
-        return response.json()["id"]
+        return str(_require(response, "id"))
 
     async def patch_event_status(
         self,
@@ -436,7 +508,8 @@ class GoogleCalendarApiClient:
     ) -> None:
         """이벤트/인스턴스 status PATCH (예: 'cancelled' — 슬롯 삭제). 404/410 멱등 처리."""
         base = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
-        response = await self._client.patch(
+        response = await self._send(
+            "PATCH",
             f"{base}/{instance_id}",
             headers={"Authorization": f"Bearer {access_token}"},
             json={"status": event_status},
@@ -461,7 +534,8 @@ class GoogleCalendarApiClient:
         이벤트를 만드는 크래시 윈도우를 닫는다. syncToken 없이 targeted list 호출.
         """
         url = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
-        response = await self._client.get(
+        response = await self._send(
+            "GET",
             url,
             headers={"Authorization": f"Bearer {access_token}"},
             params={
@@ -477,7 +551,7 @@ class GoogleCalendarApiClient:
             raise CalendarApiUnavailableException(
                 f"Calendar lookup failed {response.status_code}: {response.text[:200]}"
             )
-        for item in response.json().get("items", []):
+        for item in _json(response).get("items", []):
             if item.get("status") != "cancelled" and item.get("id"):
                 return item["id"]
         return None
