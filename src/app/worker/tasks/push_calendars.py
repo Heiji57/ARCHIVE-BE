@@ -19,7 +19,8 @@ import structlog
 from celery import Task
 from celery.utils.time import get_exponential_backoff_interval
 from redis.asyncio import Redis
-from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
+from redis.exceptions import RedisError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.google_calendar.application.services.calendar_push_service import (
     CalendarPushService,
@@ -83,7 +84,8 @@ async def _publish_todo_sync_event(
     }
     try:
         await redis.publish(f"notifications:{user_id}", json.dumps(payload))
-    except Exception:
+    except RedisError:
+        # best-effort 부가 알림 — push 자체는 이미 확정됐다. FE 는 다음 조회에서 상태를 본다.
         _log.warning(
             "calendar.push.sse_publish_failed",
             user_id=user_id,
@@ -148,7 +150,8 @@ async def _finalize(
     ):
         try:
             await api_client.delete_event(access_token, outcome.result_gid)
-        except Exception:
+        except (CalendarApiUnavailableException, CalendarReauthRequiredException):
+            # best-effort 정리 — 실패하면 Google 에 orphan 이벤트가 남는다(수용).
             _log.warning(
                 "calendar.push.orphan_cleanup_failed",
                 user_id=user_id,
@@ -341,7 +344,8 @@ async def delete_calendar_event_task(self: Task, user_id: str, google_event_id: 
     """best-effort Google 이벤트 삭제 — 전체 todo 삭제(DELETE /todos/{id}) 시 enqueue.
 
     todo 행은 이미 삭제됐으므로 push 상태 추적 없이 fire-and-forget. 일시 장애는
-    self.retry(), 404 는 멱등 성공. 재시도 소진 시 orphan 은 수용(경고 로깅).
+    self.retry(), 404 는 멱등 성공. 재시도 소진 시 orphan 은 수용 — 원본 예외로 태스크가
+    실패해 celery.app.trace 의 error 로그로 남는다.
     """
     settings = get_settings()
     factory = get_worker_session_factory()

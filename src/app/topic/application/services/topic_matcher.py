@@ -12,6 +12,7 @@ from typing import Any
 
 import structlog
 from redis.asyncio.lock import Lock
+from redis.exceptions import RedisError
 
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
 from app.shared.infrastructure.config.topic import TopicConfig
@@ -178,7 +179,8 @@ class TopicMatcher:
         for topic_id, lock in locks.items():
             try:
                 await lock.release()
-            except Exception:
+            except RedisError:
+                # LockNotOwnedError(LockError ⊂ RedisError) 포함 — 락 없음이 원하던 상태.
                 _log.warning(
                     "topic_matcher.lock_release_failed", topic_id=topic_id, exc_info=True
                 )

@@ -83,3 +83,36 @@ def test_project_celery_app_uses_the_context_task():
 
     for task in (generate_summary_task, generate_digest_task, delete_calendar_event_task):
         assert isinstance(task, AsyncContextTask), task.name
+
+
+def test_concurrent_tasks_in_one_loop_keep_their_own_request(probe_app):
+    """풀의 이벤트 루프 하나에서 두 태스크가 번갈아 실행돼도 서로의 request 를 보지 않는다."""
+    import asyncio
+    import threading
+
+    seen: dict[str, list[str]] = {}
+    both_started = threading.Barrier(2)
+
+    @probe_app.task(bind=True, name="probe.concurrent")
+    async def probe(self, label):
+        before = self.request.id
+        await asyncio.sleep(0.05)  # 다른 태스크가 이 사이에 실행된다
+        seen[label] = [before, self.request.id]
+
+    task = probe_app.tasks["probe.concurrent"]
+
+    def run(label: str) -> None:
+        task.push_request(id=f"id-{label}", retries=0, called_directly=False, args=(label,))
+        try:
+            both_started.wait()
+            AsyncIOPool.run_in_pool(task.run, label)
+        finally:
+            task.pop_request()
+
+    threads = [threading.Thread(target=run, args=(label,)) for label in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert seen == {"a": ["id-a", "id-a"], "b": ["id-b", "id-b"]}

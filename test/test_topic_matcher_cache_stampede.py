@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 import pytest
+from redis.exceptions import LockNotOwnedError
 
 from app.shared.infrastructure.config.topic import TopicConfig
 from app.topic.application.services.topic_matcher import TopicMatcher
@@ -65,7 +66,8 @@ class _FakeLock:
     async def release(self) -> None:
         self.release_attempts += 1
         if self.raise_on_release:
-            raise RuntimeError("LockNotOwnedError: TTL 만료로 이미 풀림")
+            # redis-py 가 실제로 던지는 예외 — 매처는 RedisError 계열만 삼킨다(코드 버그는 전파).
+            raise LockNotOwnedError("TTL 만료로 이미 풀림")
         self.released = True
 
 

@@ -16,20 +16,20 @@ from app.auth.presentation.router_v2 import router as auth_router_v2
 from app.github.presentation.router import router as github_router
 from app.google_calendar.presentation.router import router as calendar_router
 from app.notification.presentation.router import router as notification_router
-from app.settings.presentation.router import router as settings_router
-from app.retrospective.presentation.router import router as entry_router
 from app.retrospective.presentation.folder_router import router as folder_router
-from app.retrospective.presentation.summary_router import router as summary_router
 from app.retrospective.presentation.retro_template_router import router as retro_template_router
+from app.retrospective.presentation.router import router as entry_router
+from app.retrospective.presentation.summary_router import router as summary_router
 from app.retrospective.presentation.template_router import (
     active_router as summary_active_router,
+)
+from app.retrospective.presentation.template_router import (
     template_router as summary_template_router,
 )
 from app.search.presentation.router import router as search_router
+from app.settings.presentation.router import router as settings_router
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.domain.exceptions.external import CacheUnavailableException
-from app.todo.presentation.router import router as todo_router
-from app.topic.presentation.router import router as topic_router
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.container.providers import AppProvider, RequestProvider
 from app.shared.infrastructure.logger.request_context import (
@@ -37,7 +37,8 @@ from app.shared.infrastructure.logger.request_context import (
     RequestContextMiddleware,
 )
 from app.shared.infrastructure.logger.setup import configure_logging
-
+from app.todo.presentation.router import router as todo_router
+from app.topic.presentation.router import router as topic_router
 
 _log = structlog.get_logger(__name__)
 
@@ -48,7 +49,7 @@ async def _close_app_client(app: FastAPI, client_type: type) -> None:
         client = await app.state.dishka_container.get(client_type)
         await client.close()
     except Exception:
-        _log.warning("lifespan.client_close_failed", client=client_type.__name__, exc_info=True)
+        _log.error("lifespan.client_close_failed", client=client_type.__name__, exc_info=True)
 
 
 @asynccontextmanager
@@ -122,7 +123,9 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-        from app.shared.infrastructure.errors.handler import validation_exception_handler as _handler
+        from app.shared.infrastructure.errors.handler import (
+            validation_exception_handler as _handler,
+        )
         return await _handler(request, exc)
 
     app.mount("/static", StaticFiles(directory="static"), name="static")
