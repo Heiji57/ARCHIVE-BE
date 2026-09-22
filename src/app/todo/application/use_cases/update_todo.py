@@ -227,6 +227,9 @@ class UpdateTodoUseCase:
             todo.title = cmd.title
         if cmd.description is not None:
             todo.description = cmd.description
+        # timezone 을 date_key 보다 먼저 — move_to 가 새 tz 의 벽시계 기준으로 시간을 옮기도록.
+        if cmd.timezone is not UNSET:
+            todo.timezone = cmd.timezone  # type: ignore[assignment]
         if cmd.date_key is not None:
             todo.move_to(cmd.date_key)
         if cmd.status is not None:
@@ -242,8 +245,6 @@ class UpdateTodoUseCase:
             todo.start_time = cmd.start_time  # type: ignore[assignment]
         if cmd.end_time is not UNSET:
             todo.end_time = cmd.end_time  # type: ignore[assignment]
-        if cmd.timezone is not UNSET:
-            todo.timezone = cmd.timezone  # type: ignore[assignment]
         if cmd.tags is not UNSET:
             todo.tags = cmd.tags  # type: ignore[assignment]
         if cmd.due_date_key is not UNSET:
