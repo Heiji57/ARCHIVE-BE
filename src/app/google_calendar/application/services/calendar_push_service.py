@@ -48,8 +48,11 @@ class CalendarPushService:
     async def push_one(self, access_token: str, todo: Todo) -> PushOutcome:
         if todo.push_intent == "delete":
             return await self._delete(access_token, todo)
-        # exception row (series_id non-null) → instance patch 경로
-        if todo.series_id and todo.master_google_event_id and todo.original_start_time:
+        # exception row (series_id non-null) → instance patch 경로.
+        # 종일 시리즈는 original_start_time 이 없어 instance ID 를 original_date_key 로 만든다.
+        if todo.series_id and todo.master_google_event_id and (
+            todo.original_start_time or todo.original_date_key
+        ):
             return await self._push_exception_instance(access_token, todo)
         return await self._push(access_token, todo)
 
@@ -86,7 +89,8 @@ class CalendarPushService:
         """
         instance_id = build_gcal_instance_id(
             todo.master_google_event_id,  # type: ignore[arg-type]
-            todo.original_start_time,  # type: ignore[arg-type]
+            todo.original_start_time,
+            todo.original_date_key,
         )
         ev = self._to_write(todo)
         updated_id = await self._api.patch_instance(access_token, instance_id, ev)

@@ -19,6 +19,17 @@ from app.todo.domain.utils.recurrence import (
 )
 
 
+def _is_pushable_series(master: Todo) -> bool:
+    """master 가 GCal 에 push 된(연동 유지 중) 반복 시리즈인지 — 예외 row 를
+    instance PATCH 로 반영할 수 있는 조건. gid 가 아직 없으면(master push 대기)
+    instance ID 를 만들 수 없어 제외한다."""
+    return (
+        master.calendar_push_status is not None
+        and master.push_intent != "delete"
+        and master.google_event_id is not None
+    )
+
+
 @dataclass(frozen=True)
 class UpdateTodoOutcome:
     """수정 결과 + 라우터가 추가로 enqueue 해야 할 캘린더 push 신호.
@@ -104,7 +115,10 @@ class UpdateTodoUseCase:
             due_date_key=master.due_date_key,
         )
         self._apply_patch(exc, cmd)
-        return await self._todo_repo.upsert_exception(exc)
+        saved = await self._todo_repo.upsert_exception(exc)
+        if _is_pushable_series(master):
+            await self._mark_pushed(saved, cmd.user_id)
+        return saved
 
     # ── "following" scope — 시리즈 분리 ────────────────────────────────────────
 
@@ -212,13 +226,33 @@ class UpdateTodoUseCase:
         if cmd.recurrence_rule is not None and todo.series_id is None:
             todo.recurrence_rule = cmd.recurrence_rule
         self._apply_patch(todo, cmd)
-        re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
+        if todo.series_id is not None:
+            re_push = await self._refresh_exception_link(todo, todo.series_id, cmd.user_id)
+        else:
+            re_push = todo.calendar_push_status is not None and todo.push_intent != "delete"
         saved = await self._todo_repo.save(todo)
         if re_push:
-            await self._todo_repo.mark_for_push(saved.id, cmd.user_id)
-            saved.calendar_push_status = "pending"
-            saved.push_intent = "push"
+            await self._mark_pushed(saved, cmd.user_id)
         return saved
+
+    async def _refresh_exception_link(self, exc: Todo, series_id: str, user_id: str) -> bool:
+        """예외 row 의 push 여부 판단 + master_google_event_id 스냅샷 갱신.
+
+        예외 row 자체의 calendar_push_status 가 아니라 master(시리즈) 연동 상태를 본다 —
+        "this" 로 실체화된 row 는 push 상태가 NULL 로 시작하기 때문. 스냅샷은 예외 row
+        생성 뒤 master 가 push 됐을 수 있어(NULL 스냅샷) master 의 현재 gid 로 맞춘다.
+        스냅샷이 NULL 이면 워커가 instance PATCH 대신 별도 이벤트를 만들어 중복된다.
+        """
+        master = await self._todo_repo.find_series_base(series_id, user_id)
+        if master is None or not _is_pushable_series(master):
+            return False
+        exc.master_google_event_id = master.google_event_id
+        return True
+
+    async def _mark_pushed(self, saved: Todo, user_id: str) -> None:
+        await self._todo_repo.mark_for_push(saved.id, user_id)
+        saved.calendar_push_status = "pending"
+        saved.push_intent = "push"
 
     # ── 공통 패치 헬퍼 ─────────────────────────────────────────────────────────
 
