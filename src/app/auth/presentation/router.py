@@ -44,6 +44,7 @@ from app.auth.application.use_cases.send_email_verification import SendEmailVeri
 from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
 from app.auth.domain.exceptions.exceptions import OnboardingTokenInvalidException
+from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.shared.infrastructure.auth.jwt import create_access_token
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.presentation.requests.requests import (
@@ -71,6 +72,7 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
 from app.shared.infrastructure.config.settings import get_settings
+from app.shared.infrastructure.errors.handler import resolve_code
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
@@ -334,6 +336,7 @@ async def oauth_callback(
     provider: OAuthProvider,
     request: Request,
     use_case: FromDishka[HandleOAuthCallbackUseCase],
+    state_cache: FromDishka[OAuthStateCache],
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
@@ -342,6 +345,10 @@ async def oauth_callback(
 
     if error or not code or not state:
         return HTMLResponse(content=_oauth_error_html(error or "missing_params", frontend_origin))
+
+    # callback 은 v1 경로 고정 — 흐름을 시작한 authorize/link-init 의 버전으로 에러 코드를
+    # 고른다. use_case 가 state 를 소비하기 전에 조회해야 한다.
+    api_version = await state_cache.peek_api_version(state)
 
     try:
         result = await use_case.execute(
@@ -352,9 +359,15 @@ async def oauth_callback(
             ip=_client_ip(request),
         )
     except BaseAppException as e:
-        return HTMLResponse(content=_oauth_error_html(e.code, frontend_origin))
+        return HTMLResponse(
+            content=_oauth_error_html(resolve_code(e.code, api_version), frontend_origin)
+        )
     except Exception:
-        return HTMLResponse(content=_oauth_error_html("INTERNAL_ERROR", frontend_origin))
+        # 팝업 HTML 경계 — 여기서 놓치면 사용자는 빈 팝업을 본다. 도메인 예외로 번역되지
+        # 않은 것은 코드 버그로 본다.
+        return HTMLResponse(
+            content=_oauth_error_html(BaseAppException.code, frontend_origin)
+        )
 
     if result.kind == "onboarding":
         # 신규 사용자 — onboarding cookie 발급 + FE 온보딩 페이지로 안내

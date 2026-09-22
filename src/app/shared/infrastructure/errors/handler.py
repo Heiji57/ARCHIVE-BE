@@ -9,10 +9,18 @@ from app.auth.domain.exceptions.exceptions import (
     AuthTokenInvalidException,
     CountryInvalidException,
     CountryTimezoneRequiredException,
+    EmailCodeAttemptsExceededException,
+    EmailCodeExpiredException,
+    EmailCodeInvalidException,
     EmailNotVerifiedException,
+    EmailSendCooldownException,
     LoginRateLimitExceededException,
     OAuthAccountAlreadyLinkedException,
+    OAuthCodeInvalidException,
+    OAuthEmailNotVerifiedException,
     OAuthProviderAlreadyLinkedException,
+    OAuthProviderResponseInvalidException,
+    OAuthProviderUnavailableException,
     OAuthStateInvalidException,
     OnboardingTokenExpiredException,
     OnboardingTokenInvalidException,
@@ -162,16 +170,51 @@ _STATUS_MAP: dict[str, int] = {
     # 503
     GitHubApiUnavailableException.code: 503,
     CalendarApiUnavailableException.code: 503,
+    # ── Auth 세분화 (v2) ─────────────────────────────────────────────────────
+    EmailCodeInvalidException.code: 400,
+    EmailCodeExpiredException.code: 400,
+    EmailCodeAttemptsExceededException.code: 429,
+    EmailSendCooldownException.code: 429,
+    OAuthCodeInvalidException.code: 400,
+    OAuthEmailNotVerifiedException.code: 400,
+    OAuthProviderUnavailableException.code: 503,
+    OAuthProviderResponseInvalidException.code: 502,
+}
+
+# v1 하위호환 — 세분화 이전에 같은 상황에서 내보내던 코드. v1 경로(와 v1 으로 시작한 OAuth
+# 흐름)에서는 새 코드를 이 값으로 되돌린다. 이전에 KeyError 등으로 500 이 나던 상황은
+# INTERNAL_ERROR. 새 예외를 추가할 때 v1 계약이 바뀌면 여기에 등록한다.
+_V1_LEGACY_CODES: dict[str, str] = {
+    EmailCodeInvalidException.code: AuthTokenInvalidException.code,
+    EmailCodeExpiredException.code: AuthTokenInvalidException.code,
+    EmailCodeAttemptsExceededException.code: AuthTokenInvalidException.code,
+    EmailSendCooldownException.code: AuthTokenInvalidException.code,
+    OAuthCodeInvalidException.code: OAuthStateInvalidException.code,
+    OAuthEmailNotVerifiedException.code: OAuthStateInvalidException.code,
+    OAuthProviderUnavailableException.code: BaseAppException.code,
+    OAuthProviderResponseInvalidException.code: BaseAppException.code,
 }
 
 
-def to_http_response(exc: BaseAppException) -> JSONResponse:
-    status_code = _STATUS_MAP.get(exc.code, 500)
+def api_version_of(path: str) -> str:
+    """요청 경로의 API 버전. v2 는 일부 엔드포인트에만 존재하므로 그 외는 전부 v1."""
+    return "v2" if path.startswith("/api/v2/") else "v1"
+
+
+def resolve_code(code: str, api_version: str) -> str:
+    if api_version == "v1":
+        return _V1_LEGACY_CODES.get(code, code)
+    return code
+
+
+def to_http_response(exc: BaseAppException, api_version: str = "v1") -> JSONResponse:
+    code = resolve_code(exc.code, api_version)
+    status_code = _STATUS_MAP.get(code, 500)
     return JSONResponse(
         status_code=status_code,
         content={
             "status": "error",
-            "code": exc.code,
+            "code": code,
             "data": None,
             "details": exc.details,
         },

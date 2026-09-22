@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.auth.presentation.router import router as auth_router
+from app.auth.presentation.router_v2 import router as auth_router_v2
 from app.github.presentation.router import router as github_router
 from app.google_calendar.presentation.router import router as calendar_router
 from app.notification.presentation.router import router as notification_router
@@ -80,8 +81,8 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(BaseAppException)
     async def app_exception_handler(request: Request, exc: BaseAppException) -> JSONResponse:
-        from app.shared.infrastructure.errors.handler import to_http_response
-        return to_http_response(exc)
+        from app.shared.infrastructure.errors.handler import api_version_of, to_http_response
+        return to_http_response(exc, api_version_of(request.url.path))
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -106,6 +107,8 @@ def create_app() -> FastAPI:
     app.include_router(calendar_router, prefix="/api/v1")
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(topic_router, prefix="/api/v1")
+    # v2 — 에러 코드가 세분화된 일부 엔드포인트만 (나머지는 v1 유지)
+    app.include_router(auth_router_v2, prefix="/api/v2")
     return app
 
 

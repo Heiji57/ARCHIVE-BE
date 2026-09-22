@@ -84,6 +84,7 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 | Auth | `GET /auth/me`, `PATCH /auth/me` |
 | Auth | `GET /auth/oauth/{provider}/authorize`, `/callback`, `POST /auth/oauth/{provider}/link/init`, `POST /auth/oauth/onboarding` |
 | Auth | `GET /auth/sessions`, `DELETE /auth/sessions`, `DELETE /auth/sessions/{sessionId}` (활성 세션 관리) |
+| Auth **v2** | `POST /api/v2/auth/email/verify/send`, `/confirm`, `GET /api/v2/auth/oauth/{provider}/authorize`, `POST /api/v2/auth/oauth/{provider}/link/init` (에러 코드 세분화 — `auth/presentation/router_v2.py`) |
 | Todo | `GET/POST /todos`, `PATCH/DELETE /todos/{id}` |
 | Entry | `GET/POST /entries`, `GET /entries/paginated`, `GET/PUT/DELETE /entries/{id}`, `PATCH /entries/{id}/folder` |
 | Folder | `POST /folders`, `GET /folders/contents`, `PATCH/DELETE /folders/{id}` (중첩 폴더로 회고록 정리) |
@@ -105,6 +106,7 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
   1. `_STATUS_MAP`에 HTTP 상태 코드 매핑 추가
   2. `api.yaml`의 해당 엔드포인트 `x-error-codes`에 코드 명시
   3. `api.yaml`의 공통 응답(`Unauthorized_401`, `Conflict_409` 등) description의 코드 목록에 추가
+- **v2 와 v1 하위호환**: 에러 코드를 세분화해 기존 코드가 바뀌는 엔드포인트는 v2 로 분리한다. 코드 선택은 전역 핸들러가 경로 prefix(`/api/v2/`)로 하며, v1 경로에서는 `errors/handler.py` 의 `_V1_LEGACY_CODES` 로 새 코드를 기존 코드로 되돌린다 — v1 계약을 바꾸는 새 예외는 반드시 여기에도 등록한다. OAuth callback 은 provider redirect_uri 라 v1 경로 고정이고, state 의 `api_version` 으로 코드 버전을 고른다.
 - 인증 관련 응답은 HTTP 표준 준수:
   - `401 Unauthorized` — 토큰 만료/무효/누락/자격증명 불일치 (FE는 `401 + AUTH_TOKEN_EXPIRED`에서만 자동 refresh 트리거)
   - `400 Bad Request` — 요청 자체의 도메인 조건 위반 (예: 이메일 미인증)

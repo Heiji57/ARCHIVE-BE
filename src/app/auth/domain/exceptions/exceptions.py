@@ -92,3 +92,47 @@ class PasswordResetTokenExpiredException(BaseAppException):
 class PasswordResetNotAllowedException(BaseAppException):
     """OAuth 전용 사용자(비밀번호 없음)는 재설정 불가."""
     code = "AUTH_PASSWORD_RESET_NOT_ALLOWED"
+
+
+# ── 이메일 인증 (v1 에선 전부 AUTH_TOKEN_INVALID 로 매핑 — errors/handler.py) ──
+
+class EmailCodeInvalidException(BaseAppException):
+    """인증 코드 불일치. 남은 시도 횟수 안에서 재입력 가능."""
+    code = "AUTH_EMAIL_CODE_INVALID"
+
+
+class EmailCodeExpiredException(BaseAppException):
+    """인증 코드 만료 또는 발급 이력 없음. 새 코드 요청 필요."""
+    code = "AUTH_EMAIL_CODE_EXPIRED"
+
+
+class EmailCodeAttemptsExceededException(BaseAppException):
+    """인증 코드 오입력 한도 초과. 코드는 폐기되며 새 코드 요청 필요."""
+    code = "AUTH_EMAIL_CODE_ATTEMPTS_EXCEEDED"
+
+
+class EmailSendCooldownException(BaseAppException):
+    """인증 코드 재발송 쿨다운 중."""
+    code = "AUTH_EMAIL_SEND_COOLDOWN"
+
+
+# ── OAuth provider 연동 ────────────────────────────────────────────────────────
+
+class OAuthCodeInvalidException(BaseAppException):
+    """provider 가 authorization code 를 거부 (만료·재사용). state 위조와 구분한다."""
+    code = "AUTH_OAUTH_CODE_INVALID"
+
+
+class OAuthEmailNotVerifiedException(BaseAppException):
+    """provider 계정에 인증된(primary) 이메일이 없음."""
+    code = "AUTH_OAUTH_EMAIL_NOT_VERIFIED"
+
+
+class OAuthProviderUnavailableException(BaseAppException):
+    """provider 네트워크 오류·타임아웃·5xx·429 — 일시 장애, 재시도 가능."""
+    code = "AUTH_OAUTH_PROVIDER_UNAVAILABLE"
+
+
+class OAuthProviderResponseInvalidException(BaseAppException):
+    """provider 응답이 예상 형식이 아니거나 우리 요청을 거부 (client 설정 오류 등)."""
+    code = "AUTH_OAUTH_PROVIDER_RESPONSE_INVALID"

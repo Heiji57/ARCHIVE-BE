@@ -44,16 +44,20 @@ def _decode(token: str, expected_type: TokenType) -> UserContext:
     settings = get_settings()
     try:
         payload = jwt.decode(token, settings.auth.secret_key, algorithms=[_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise AuthTokenExpiredException()
-    except JWTError:
-        raise AuthTokenInvalidException()
+    except jwt.ExpiredSignatureError as e:
+        raise AuthTokenExpiredException() from e
+    except JWTError as e:
+        raise AuthTokenInvalidException() from e
 
     if payload.get("type") != expected_type:
         raise AuthTokenInvalidException()
+    # 서명이 유효해도 sub 가 없으면 사용자를 특정할 수 없다 — KeyError(500) 대신 401.
+    user_id = payload.get("sub")
+    if not isinstance(user_id, str) or not user_id:
+        raise AuthTokenInvalidException()
 
     return UserContext(
-        id=payload["sub"],
+        id=user_id,
         email=payload.get("email", ""),
         account_type=payload.get("account_type", "user"),
     )
