@@ -233,6 +233,8 @@ async def _build_prompt(
     max_retries=3,
 )
 async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_id: str) -> None:
+    # ai.usage 로그의 사용자 귀속 — generate_summary 와 같은 이유로 태스크 밖으로 새지 않는다.
+    structlog.contextvars.bind_contextvars(user_id=user_id)
     settings = get_settings()
     factory = get_worker_session_factory()
     cfg: TopicConfig = settings.topic

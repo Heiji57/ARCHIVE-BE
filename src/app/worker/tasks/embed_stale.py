@@ -173,8 +173,10 @@ async def _run_item(
 ) -> _Outcome:
     """항목 하나를 SAVEPOINT 로 격리해 실행하고, 실패를 종류별로 분류한다."""
     try:
-        async with session.begin_nested():
-            await work()
+        # 배치에 여러 사용자가 섞이므로 ai.usage 로그 귀속을 항목 단위로 붙인다.
+        with structlog.contextvars.bound_contextvars(user_id=item.user_id):
+            async with session.begin_nested():
+                await work()
     except AIServiceUnavailableException:
         # 장애/쿼터 중에 남은 항목을 계속 두드리면 쿼터만 소모한다.
         _log.warning(

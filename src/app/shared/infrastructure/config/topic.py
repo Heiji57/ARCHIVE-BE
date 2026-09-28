@@ -26,6 +26,9 @@ class TopicConfig(BaseSettings):
     topic_digest_neighbor_window: int = 1
     # 연속 증분 재생성 상한 — 넘으면 전체 재생성으로 요약 위 요약 drift 를 리셋한다.
     topic_digest_full_regen_every: int = 5
+    # 사용자별 주제 정리 생성 한도(sliding window) — AI 1회 호출이 가장 비싼 경로의 비용 상한.
+    topic_digest_rate_limit: int = 10
+    topic_digest_rate_window_seconds: int = 24 * 3600
     # 캐시 미스 시 stampede 방지용 락(SETNX, redis.lock) — 같은 topic 을 동시에 여러
     # 요청(다른 탭/중복 새로고침 등)이 미스하면, 한 요청만 임베딩+DB 계산을 하고 나머지는
     # 결과가 캐시에 쓰이길 기다렸다가 재사용한다. TTL 은 락 보유자가 죽었을 때(크래시,

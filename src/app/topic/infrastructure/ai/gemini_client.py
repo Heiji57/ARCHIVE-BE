@@ -5,6 +5,7 @@ from google.genai import types
 
 from app.shared.domain.exceptions.external import AIEmptyResponseException
 from app.shared.infrastructure.ai import errors as ai_errors
+from app.shared.infrastructure.ai.usage import log_generate_usage
 from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
@@ -32,6 +33,7 @@ class TopicGeminiClient:
                 config=config,
             ),
         )
+        log_generate_usage("gemini.digest.generate", self._model, response)
         text = response.text
         if text is None:
             # safety filter / blocked — 재시도해도 같은 결과

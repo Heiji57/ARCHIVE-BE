@@ -23,6 +23,8 @@ class RetroSummary(BaseEntity):
     content: SummaryContent | None  # None — pending / in_progress / failed
     edited_content: str | None = None  # 사용자 편집 마크다운 오버라이드 (있으면 FE 가 우선 렌더)
     folder_id: str | None = None
+    # 소스 없이 AI 호출을 건너뛴 요약 — 상위 요약(월간/연간)이 이 본문을 입력으로 쓰지 않는다.
+    is_empty: bool = False
 
     def mark_in_progress(self) -> None:
         if self.status == SummaryStatus.IN_PROGRESS:
@@ -31,9 +33,11 @@ class RetroSummary(BaseEntity):
             raise SummaryInvalidStateException("Already completed summary cannot restart.")
         self.status = SummaryStatus.IN_PROGRESS
 
-    def complete(self, content: SummaryContent) -> None:
+    def complete(self, content: SummaryContent, *, is_empty: bool = False) -> None:
+        """`is_empty` — 소스가 없어 AI 없이 안내 문구로 완료. 재생성 시 기본값이 해제한다."""
         self.status = SummaryStatus.COMPLETED
         self.content = content
+        self.is_empty = is_empty
 
     def fail(self) -> None:
         self.status = SummaryStatus.FAILED
