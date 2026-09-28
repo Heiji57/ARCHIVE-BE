@@ -4,13 +4,16 @@
   1. mark in_progress
   2. 사용자의 embedding_queue 잔여 항목 사전 동기화
   3. 토픽 쿼리 벡터 생성
-  4. entry chunk / todo embedding 유사도 검색 (주제 전체 — 최초/재생성 동일)
+  4. 전체/증분 판정 후 entry chunk(+앞뒤 청크) / todo embedding 유사도 검색
   5. 프롬프트 조립 — 소스를 접어 넣으며 in_progress 진행률 pub/sub 발행
   6. Gemini 로 마크다운 다이제스트 생성
-  7. mark completed + watermark 갱신 + Redis pub/sub 알림
+  7. mark completed + watermark·증분 상태 갱신 + Redis pub/sub 알림
 """
+import hashlib
 import json
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 from celery import Task
@@ -27,6 +30,7 @@ from app.shared.domain.exceptions.external import (
 from app.shared.domain.utils.period import today_in_tz
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.config.topic import TopicConfig
+from app.topic.domain.models.topic import SimilarChunk, TopicDigest
 from app.topic.domain.models.value_objects import DigestStatus
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
 from app.topic.infrastructure.persistence.repositories.chunk_repo import (
@@ -65,6 +69,70 @@ Requirements:
 """
 
 
+_INCREMENTAL_SYSTEM_PROMPT = """You are a concise personal productivity assistant.
+You are updating an existing markdown digest about a user's topic.
+You are given the existing digest, NEW excerpts from journal entries written or edited
+since it was generated, and the CURRENT list of related todos.
+
+Requirements:
+- Return the complete updated digest, not only the changes.
+- Preserve every fact in the existing digest unless the new content explicitly supersedes it.
+- Integrate the new information into the appropriate sections; add sections if needed.
+- Reflect the current todo statuses.
+- Use markdown headings, bullet points, and concise prose.
+- Write in the same language as the source content.
+- Do not invent information not present in the provided content.
+"""
+
+# 프롬프트를 바꾸면 올린다 — fingerprint 에 섞여 기존 digest 가 전체 재생성된다.
+_PROMPT_VERSION = "2"
+
+
+def _fingerprint(name: str, description: str | None, model: str, cfg: TopicConfig) -> str:
+    """이 값이 바뀌면 이전 본문은 다른 기준으로 만든 것이라 증분으로 이어 쓸 수 없다."""
+    raw = "|".join(
+        [
+            name,
+            description or "",
+            _PROMPT_VERSION,
+            model,
+            str(cfg.topic_similarity_threshold),
+            str(cfg.topic_search_limit),
+            str(cfg.topic_digest_neighbor_window),
+        ]
+    )
+    return hashlib.sha1(raw.encode()).hexdigest()
+
+
+def _static_full_reason(digest: TopicDigest, fingerprint: str, full_regen_every: int) -> str | None:
+    """DB 조회 없이 판정 가능한 전체 재생성 사유. None 이면 증분 후보."""
+    if digest.content is None or digest.last_generated_at is None:
+        return "initial"
+    if digest.full_fingerprint != fingerprint:
+        return "fingerprint_changed"
+    if digest.incremental_count >= full_regen_every:
+        return "periodic_reset"
+    return None
+
+
+async def _with_neighbors(
+    chunk_repo: EntryChunkRepository, user_id: str, chunks: list[SimilarChunk], window: int
+) -> list[SimilarChunk]:
+    """매칭 청크에 같은 회고의 앞뒤 청크를 붙인다 — 매칭 단락만 넣으면 맥락이 잘린다."""
+    if window <= 0 or not chunks:
+        return chunks
+    have = {(c.entry_id, c.chunk_index) for c in chunks}
+    wanted = {
+        (c.entry_id, c.chunk_index + d)
+        for c in chunks
+        for d in range(-window, window + 1)
+        if d != 0 and c.chunk_index + d >= 0
+    } - have
+    if not wanted:
+        return chunks
+    return chunks + await chunk_repo.find_by_entry_indices(user_id, sorted(wanted))
+
+
 def _source_total(chunks: list, todos: list) -> int:
     """진행률의 분모 — 회고는 청크가 아니라 엔트리 단위로 센다(FE 가 "회고 N개"로 표시)."""
     return len({c.entry_id for c in chunks}) + len(todos)
@@ -87,16 +155,30 @@ async def _build_prompt(
     chunks: list,
     todos: list,
     on_source: Callable[[int], Awaitable[None]] | None = None,
+    previous_content: str | None = None,
 ) -> str:
-    """프롬프트를 조립하며, 소스 하나를 접어 넣을 때마다 on_source(누적 처리 수)를 호출한다."""
-    lines = [_SYSTEM_PROMPT, "", f"## Topic: {topic_name}"]
+    """프롬프트를 조립하며, 소스 하나를 접어 넣을 때마다 on_source(누적 처리 수)를 호출한다.
+
+    `previous_content` 가 있으면 증분 — 기존 본문에 새 소스를 병합하도록 지시한다.
+    """
+    incremental = previous_content is not None
+    system_prompt = _INCREMENTAL_SYSTEM_PROMPT if incremental else _SYSTEM_PROMPT
+    lines = [system_prompt, "", f"## Topic: {topic_name}"]
     if topic_description:
         lines.append(f"Description: {topic_description}")
+    if previous_content is not None:
+        lines += ["", "### Existing Digest", previous_content]
 
     processed = 0
 
     if chunks:
-        lines += ["", "### Journal Entry Excerpts"]
+        # 매칭 청크와 앞뒤 문맥 청크가 겹칠 수 있다 — 같은 단락을 두 번 싣지 않는다.
+        unique: dict[tuple[str, int], Any] = {}
+        for chunk in chunks:
+            unique.setdefault((chunk.entry_id, chunk.chunk_index), chunk)
+        chunks = list(unique.values())
+        heading = "### New Journal Entry Excerpts" if incremental else "### Journal Entry Excerpts"
+        lines += ["", heading]
         # chunks 는 유사도(코사인 거리) 순으로 온다 — entry_id 로 묶여 있지 않다.
         # 정렬 없이 순서대로 훑으면, 이미 헤딩을 찍은 entry 의 뒤늦게 나온 청크가
         # 방금 헤딩을 찍은 "다른" entry 밑에 잘못 붙는다. entry 등장 순서(최초로
@@ -126,7 +208,12 @@ async def _build_prompt(
             if on_source is not None:
                 await on_source(processed)
 
-    lines += ["", "---", "", "Generate a markdown digest for this topic based on the above content."]
+    instruction = (
+        "Return the complete updated markdown digest for this topic."
+        if incremental
+        else "Generate a markdown digest for this topic based on the above content."
+    )
+    lines += ["", "---", "", instruction]
     return "\n".join(lines)
 
 
@@ -193,20 +280,59 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                 chunk_repo = EntryChunkRepository(session)
                 todo_emb_repo = TodoEmbeddingRepository(session)
 
-                chunks = await chunk_repo.search_similar(
-                    user_id=user_id,
-                    query_embedding=query_embedding,
-                    # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
-                    # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
-                    since_date_key=None,
-                    threshold=cfg.topic_similarity_threshold,
-                    limit=cfg.topic_search_limit,
+                fingerprint = _fingerprint(
+                    topic.name, topic.description, settings.ai.gemini_model, cfg
                 )
+                # 검색 "전"에 찍는다 — LLM 호출 중 임베딩된 청크가 다음 증분에서 빠지지 않게.
+                # (이번 검색과 겹쳐 한 번 더 읽히는 쪽이 영영 빠지는 쪽보다 낫다)
+                generated_at = datetime.now(timezone.utc)
+
+                full_reason = _static_full_reason(
+                    digest, fingerprint, cfg.topic_digest_full_regen_every
+                )
+                cursor = digest.last_generated_at
+                chunks: list[SimilarChunk] = []
+                if full_reason is None and cursor is not None:
+                    # 이미 본문에 반영된 회고가 수정·삭제됐으면 증분으로는 되돌릴 수 없다.
+                    if await chunk_repo.find_changed_entry_ids(
+                        user_id, digest.source_entry_ids, cursor
+                    ):
+                        full_reason = "sources_changed"
+                if full_reason is None:
+                    chunks = await chunk_repo.search_similar(
+                        user_id=user_id,
+                        query_embedding=query_embedding,
+                        since_date_key=None,
+                        threshold=cfg.topic_similarity_threshold,
+                        limit=cfg.topic_search_limit,
+                        created_after=cursor,
+                    )
+                    # 새 소스 없이 생성을 요청했다 = 현재 결과가 마음에 안 든다는 신호.
+                    if not chunks:
+                        full_reason = "no_new_sources"
+                if full_reason is not None:
+                    chunks = await chunk_repo.search_similar(
+                        user_id=user_id,
+                        query_embedding=query_embedding,
+                        since_date_key=None,
+                        threshold=cfg.topic_similarity_threshold,
+                        limit=cfg.topic_search_limit,
+                    )
+                incremental = full_reason is None
+                _log.info(
+                    "generate_digest.mode",
+                    digest_id=digest_id,
+                    mode="incremental" if incremental else "full",
+                    reason=full_reason,
+                )
+
+                chunks = await _with_neighbors(
+                    chunk_repo, user_id, chunks, cfg.topic_digest_neighbor_window
+                )
+                # 할일은 상태 변경을 추적할 시각이 없고 한 줄씩이라 증분이어도 전부 싣는다.
                 todos = await todo_emb_repo.search_similar(
                     user_id=user_id,
                     query_embedding=query_embedding,
-                    # 재생성도 최초 생성과 동일하게 주제 전체를 다시 읽는다 — watermark 이후
-                    # 증분만 읽으면 재생성할수록 문서가 최근 내용만 다루도록 좁아진다.
                     since_date_key=None,
                     threshold=cfg.topic_similarity_threshold,
                     limit=cfg.topic_search_limit,
@@ -229,7 +355,12 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
 
             await publish_progress(0)
             prompt = await _build_prompt(
-                topic.name, topic.description, chunks, todos, on_source=publish_progress
+                topic.name,
+                topic.description,
+                chunks,
+                todos,
+                on_source=publish_progress,
+                previous_content=digest.content if incremental else None,
             )
 
             # AI 호출 — DB transaction 밖
@@ -237,12 +368,25 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
             gemini = TopicGeminiClient(settings.ai)
             content = await gemini.generate(prompt)
 
-            # T2: complete + watermark. watermark 는 이제 "어디까지 읽었나"(증분 커서)가 아니라
-            # "이 문서가 언제 기준인가"를 뜻한다 — FE 배너/미반영 개수 계산의 기준점.
+            # T2: complete. watermark_date_key 는 "이 문서가 언제 기준인가"(FE 배너/미반영 개수
+            # 기준점)이고, 증분 커서는 시각인 last_generated_at 이 따로 맡는다.
+            new_entry_ids = list(dict.fromkeys(c.entry_id for c in chunks))
+            if incremental:
+                source_entry_ids = list(dict.fromkeys(digest.source_entry_ids + new_entry_ids))
+                incremental_count = digest.incremental_count + 1
+            else:
+                source_entry_ids = new_entry_ids
+                incremental_count = 0
             async with factory.begin() as session:
-                digest_repo = TopicDigestRepository(session)
-                await digest_repo.update_status(digest_id, DigestStatus.COMPLETED, content)
-                await digest_repo.update_watermark(digest_id, today_key)
+                await TopicDigestRepository(session).complete_generation(
+                    digest_id,
+                    content=content,
+                    watermark_date_key=today_key,
+                    generated_at=generated_at,
+                    incremental_count=incremental_count,
+                    full_fingerprint=fingerprint,
+                    source_entry_ids=source_entry_ids,
+                )
 
         except AIServiceUnavailableException as exc:
             countdown = get_exponential_backoff_interval(

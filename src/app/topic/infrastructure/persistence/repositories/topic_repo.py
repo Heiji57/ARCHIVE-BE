@@ -164,13 +164,29 @@ class TopicDigestRepository(ITopicDigestRepository):
             model.updated_at = datetime.now(timezone.utc)
             await self._session.flush()
 
-    async def update_watermark(self, digest_id: str, watermark_date_key: str) -> None:
+    async def complete_generation(
+        self,
+        digest_id: str,
+        *,
+        content: str,
+        watermark_date_key: str,
+        generated_at: datetime,
+        incremental_count: int,
+        full_fingerprint: str,
+        source_entry_ids: list[str],
+    ) -> None:
         result = await self._session.execute(
             select(TopicDigestModel).where(TopicDigestModel.id == digest_id)
         )
         model = result.scalar_one_or_none()
         if model:
+            model.status = DigestStatus.COMPLETED.value
+            model.content = content
             model.watermark_date_key = watermark_date_key
+            model.last_generated_at = generated_at
+            model.incremental_count = incremental_count
+            model.full_fingerprint = full_fingerprint
+            model.source_entry_ids = source_entry_ids
             model.updated_at = datetime.now(timezone.utc)
             await self._session.flush()
 
@@ -183,6 +199,10 @@ class TopicDigestRepository(ITopicDigestRepository):
             status=digest.status.value,
             content=digest.content,
             watermark_date_key=digest.watermark_date_key,
+            last_generated_at=digest.last_generated_at,
+            incremental_count=digest.incremental_count,
+            full_fingerprint=digest.full_fingerprint,
+            source_entry_ids=list(digest.source_entry_ids),
             created_at=digest.created_at,
             updated_at=digest.updated_at,
         )
@@ -196,6 +216,10 @@ class TopicDigestRepository(ITopicDigestRepository):
             status=DigestStatus(model.status),
             content=model.content,
             watermark_date_key=model.watermark_date_key,
+            last_generated_at=model.last_generated_at,
+            incremental_count=model.incremental_count,
+            full_fingerprint=model.full_fingerprint,
+            source_entry_ids=list(model.source_entry_ids or []),
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

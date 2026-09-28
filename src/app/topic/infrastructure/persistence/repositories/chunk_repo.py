@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, delete, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -150,10 +150,15 @@ class EntryChunkRepository(IEntryChunkRepository):
         since_date_key: str | None,
         threshold: float,
         limit: int,
+        created_after: datetime | None = None,
     ) -> list[SimilarChunk]:
         distance, conditions = self._match_clause(
             user_id, query_embedding, since_date_key, threshold
         )
+        if created_after is not None:
+            # 재임베딩은 청크를 지우고 created_at=now 로 다시 넣으므로, 이 조건이 곧
+            # "마지막 생성 이후 새로 쓰였거나 수정된 회고의 청크"다.
+            conditions.append(EntryChunkModel.created_at > created_after)
 
         # embedding 은 일부러 SELECT 하지 않는다 — 호출자(매칭/프롬프트 조립)가 쓰지 않는데
         # 행마다 768 float 을 실어오면 limit 만큼 그대로 낭비된다.
@@ -180,6 +185,53 @@ class EntryChunkRepository(IEntryChunkRepository):
                 date_key=row.date_key,
             )
             for row in rows
+        ]
+
+    async def find_by_entry_indices(
+        self, user_id: str, keys: list[tuple[str, int]]
+    ) -> list[SimilarChunk]:
+        if not keys:
+            return []
+        stmt = select(
+            EntryChunkModel.id,
+            EntryChunkModel.entry_id,
+            EntryChunkModel.chunk_index,
+            EntryChunkModel.text,
+            EntryChunkModel.date_key,
+        ).where(
+            EntryChunkModel.user_id == user_id,
+            tuple_(EntryChunkModel.entry_id, EntryChunkModel.chunk_index).in_(keys),
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [
+            SimilarChunk(
+                id=row.id,
+                entry_id=row.entry_id,
+                chunk_index=row.chunk_index,
+                text=row.text,
+                date_key=row.date_key,
+            )
+            for row in rows
+        ]
+
+    async def find_changed_entry_ids(
+        self, user_id: str, entry_ids: list[str], since: datetime
+    ) -> list[str]:
+        if not entry_ids:
+            return []
+        stmt = (
+            select(EntryChunkModel.entry_id, func.max(EntryChunkModel.created_at))
+            .where(
+                EntryChunkModel.user_id == user_id,
+                EntryChunkModel.entry_id.in_(entry_ids),
+            )
+            .group_by(EntryChunkModel.entry_id)
+        )
+        latest = {row[0]: row[1] for row in (await self._session.execute(stmt)).all()}
+        return [
+            entry_id
+            for entry_id in entry_ids
+            if entry_id not in latest or latest[entry_id] > since
         ]
 
 

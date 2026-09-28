@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -31,6 +32,16 @@ class TopicDigestModel(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     watermark_date_key: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    last_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    incremental_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    full_fingerprint: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_entry_ids: Mapped[list[str]] = mapped_column(
+        ARRAY(String), nullable=False, server_default=text("'{}'")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

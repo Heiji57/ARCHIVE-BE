@@ -48,8 +48,8 @@ class _DigestRepo:
     async def update_status(self, digest_id, status, content=None):
         self._state["status"] = status
 
-    async def update_watermark(self, digest_id, key):
-        pass
+    async def complete_generation(self, digest_id, **kw):
+        self._state["status"] = DigestStatus.COMPLETED
 
 
 class _TopicRepo:
