@@ -10,8 +10,8 @@ class TopicConfig(BaseSettings):
     topic_chunk_min_chars: int = 20
     topic_embed_batch_size: int = 20
     # digest 프롬프트에 넣을 소스 상한(종류별). 유사도 내림차순으로 자르므로 잘리더라도
-    # 가장 주제에 가까운 것부터 남는다. 재생성이 증분이 아니라 주제 전체를 다시 읽게 되면서
-    # 이 값이 곧 "문서가 커버하는 범위"가 됐다 — 단위가 회고가 아니라 **청크**(한 회고가 여러
+    # 가장 주제에 가까운 것부터 남는다. 전체 생성은 주제 전체를 다시 읽으므로
+    # 이 값이 곧 "문서가 커버하는 범위"다 — 단위가 회고가 아니라 **청크**(한 회고가 여러
     # 청크로 쪼개짐)라 50 이면 회고 15~25건 수준이라 부족해 200 으로 올렸다.
     topic_search_limit: int = 200
     # 통계/소스 목록용 매칭 상한 — 단위는 **회고**(할일은 원래 1:1). digest
@@ -22,6 +22,10 @@ class TopicConfig(BaseSettings):
     topic_stats_match_limit: int = 1000
     topic_stats_cache_ttl_seconds: int = 300
     topic_digest_progress_batch_size: int = 5
+    # 매칭 청크 앞뒤로 붙일 같은 회고의 청크 수 — 단락 단위 청크라 맥락이 인접 단락에 있다.
+    topic_digest_neighbor_window: int = 1
+    # 연속 증분 재생성 상한 — 넘으면 전체 재생성으로 요약 위 요약 drift 를 리셋한다.
+    topic_digest_full_regen_every: int = 5
     # 캐시 미스 시 stampede 방지용 락(SETNX, redis.lock) — 같은 topic 을 동시에 여러
     # 요청(다른 탭/중복 새로고침 등)이 미스하면, 한 요청만 임베딩+DB 계산을 하고 나머지는
     # 결과가 캐시에 쓰이길 기다렸다가 재사용한다. TTL 은 락 보유자가 죽었을 때(크래시,

@@ -1,4 +1,5 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from app.shared.domain.models.base import BaseEntity
 from app.topic.domain.models.value_objects import DigestStatus
@@ -18,6 +19,11 @@ class TopicDigest(BaseEntity):
     status: DigestStatus
     content: str | None = None
     watermark_date_key: str | None = None  # YYYY-MM-DD, last processed date
+    # 증분 커서 — 날짜가 아니라 시각이어야 정리 당일 이후에 쓴 회고도 다음 증분에 잡힌다.
+    last_generated_at: datetime | None = None
+    incremental_count: int = 0
+    full_fingerprint: str | None = None
+    source_entry_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(kw_only=True)

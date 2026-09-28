@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager
+from datetime import datetime
 from typing import Any
 
 from app.topic.domain.models.topic import (
@@ -60,7 +61,19 @@ class ITopicDigestRepository(ABC):
     ) -> None: ...
 
     @abstractmethod
-    async def update_watermark(self, digest_id: str, watermark_date_key: str) -> None: ...
+    async def complete_generation(
+        self,
+        digest_id: str,
+        *,
+        content: str,
+        watermark_date_key: str,
+        generated_at: datetime,
+        incremental_count: int,
+        full_fingerprint: str,
+        source_entry_ids: list[str],
+    ) -> None:
+        """생성 성공 — 본문과 다음 증분 판정에 쓸 상태를 한 번에 기록한다."""
+        ...
 
 
 class IEntryChunkRepository(ABC):
@@ -78,8 +91,26 @@ class IEntryChunkRepository(ABC):
         since_date_key: str | None,
         threshold: float,
         limit: int,
+        created_after: datetime | None = None,
     ) -> list[SimilarChunk]:
-        """청크 본문까지 필요한 경로(digest 프롬프트 조립)용."""
+        """청크 본문까지 필요한 경로(digest 프롬프트 조립)용.
+
+        `created_after` 는 증분 재생성용 — 그 시각 이후 (재)임베딩된 청크만.
+        """
+        ...
+
+    @abstractmethod
+    async def find_by_entry_indices(
+        self, user_id: str, keys: list[tuple[str, int]]
+    ) -> list[SimilarChunk]:
+        """(entry_id, chunk_index) 쌍으로 청크 조회 — 매칭 청크의 앞뒤 문맥 보강용."""
+        ...
+
+    @abstractmethod
+    async def find_changed_entry_ids(
+        self, user_id: str, entry_ids: list[str], since: datetime
+    ) -> list[str]:
+        """주어진 회고 중 청크가 사라졌거나(삭제) `since` 이후 재임베딩된(수정) 것."""
         ...
 
     @abstractmethod
