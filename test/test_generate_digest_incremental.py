@@ -133,7 +133,7 @@ async def test_incremental_prompt_carries_existing_digest() -> None:
     assert "### Existing Digest" in prompt and "# 기존 정리" in prompt
     assert "### New Journal Entry Excerpts" in prompt
     assert prompt.index("# 기존 정리") < prompt.index("새 회고")
-    assert "Preserve every fact in the existing digest" in prompt
+    assert "rewrite that statement in place" in prompt
 
 
 async def test_full_prompt_has_no_existing_digest_section() -> None:
@@ -256,11 +256,13 @@ async def test_incremental_merges_new_chunks_into_existing_digest(monkeypatch) -
         digest,
         changed=[],
         new_chunks=[_chunk("e_new", 0, "새 회고")],
-        all_chunks=[_chunk("e_old", 0)],
+        all_chunks=[_chunk("e_old", i, "긴 옛 회고 " * 200) for i in range(3)],
     )
     await digest_module.generate_digest_task.run("dig_1", "top_1", "usr_1")
 
-    assert calls["searches"] == [_T0], "증분은 마지막 생성 이후 청크만 읽어야 한다"
+    # 증분 검색 + 비용 비교용 전체 검색
+    assert calls["searches"] == [_T0, None]
+    assert "Existing Digest" in calls["prompt"]
     assert "# 기존 정리" in calls["prompt"] and "새 회고" in calls["prompt"]
     done = calls["completed"]
     assert done["incremental_count"] == 3
@@ -313,3 +315,20 @@ async def test_first_generation_is_full(monkeypatch) -> None:
     assert calls["searches"] == [None]
     assert calls["completed"]["source_entry_ids"] == ["e_a"]
     assert calls["completed"]["generated_at"] > _T0 - timedelta(days=1)
+
+
+async def test_full_is_chosen_when_cheaper_than_incremental(monkeypatch) -> None:
+    """소스가 적은 주제는 직전 본문이 원문 전체보다 길다 — 이때 증분은 오히려 비싸다."""
+    calls = _run_worker(
+        monkeypatch,
+        _digest(content="# 기존 정리\n" + "- 길게 불어난 요약 문장\n" * 200, incremental_count=1),
+        changed=[],
+        new_chunks=[_chunk("e_new", 0, "새 회고")],
+        all_chunks=[_chunk("e_old", 0, "짧은 회고"), _chunk("e_new", 0, "새 회고")],
+    )
+    await digest_module.generate_digest_task.run("dig_1", "top_1", "usr_1")
+
+    assert calls["searches"] == [_T0, None]
+    assert "Existing Digest" not in calls["prompt"]
+    assert calls["completed"]["incremental_count"] == 0
+    assert calls["completed"]["source_entry_ids"] == ["e_old", "e_new"]

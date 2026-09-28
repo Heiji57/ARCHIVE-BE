@@ -76,16 +76,23 @@ since it was generated, and the CURRENT list of related todos.
 
 Requirements:
 - Return the complete updated digest, not only the changes.
-- Preserve every fact in the existing digest unless the new content explicitly supersedes it.
-- Integrate the new information into the appropriate sections; add sections if needed.
-- Reflect the current todo statuses.
+- Keep every fact from the existing digest that is still true.
+- When the new content updates or supersedes an existing statement (e.g. a plan that is
+  now done, a value that changed), rewrite that statement in place. Never keep both the
+  old and the new version side by side.
+- Integrate the new information into the appropriate sections; add a section only when
+  nothing existing fits.
+- Reflect the current todo statuses inside the relevant sections; do not add a separate
+  todo list section.
+- Do not grow the digest beyond what the new content genuinely adds; merge duplicates and
+  keep the same level of detail as the existing digest.
 - Use markdown headings, bullet points, and concise prose.
 - Write in the same language as the source content.
 - Do not invent information not present in the provided content.
 """
 
 # 프롬프트를 바꾸면 올린다 — fingerprint 에 섞여 기존 digest 가 전체 재생성된다.
-_PROMPT_VERSION = "2"
+_PROMPT_VERSION = "3"
 
 
 def _fingerprint(name: str, description: str | None, model: str, cfg: TopicConfig) -> str:
@@ -291,7 +298,7 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                     digest, fingerprint, cfg.topic_digest_full_regen_every
                 )
                 cursor = digest.last_generated_at
-                chunks: list[SimilarChunk] = []
+                new_chunks: list[SimilarChunk] = []
                 if full_reason is None and cursor is not None:
                     # 이미 본문에 반영된 회고가 수정·삭제됐으면 증분으로는 되돌릴 수 없다.
                     if await chunk_repo.find_changed_entry_ids(
@@ -299,7 +306,7 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                     ):
                         full_reason = "sources_changed"
                 if full_reason is None:
-                    chunks = await chunk_repo.search_similar(
+                    new_chunks = await chunk_repo.search_similar(
                         user_id=user_id,
                         query_embedding=query_embedding,
                         since_date_key=None,
@@ -308,26 +315,21 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                         created_after=cursor,
                     )
                     # 새 소스 없이 생성을 요청했다 = 현재 결과가 마음에 안 든다는 신호.
-                    if not chunks:
+                    if not new_chunks:
                         full_reason = "no_new_sources"
-                if full_reason is not None:
-                    chunks = await chunk_repo.search_similar(
+
+                # 증분 후보여도 전체 검색은 한다 — 아래에서 어느 쪽이 더 싼지 비교해야 한다.
+                all_chunks = await _with_neighbors(
+                    chunk_repo,
+                    user_id,
+                    await chunk_repo.search_similar(
                         user_id=user_id,
                         query_embedding=query_embedding,
                         since_date_key=None,
                         threshold=cfg.topic_similarity_threshold,
                         limit=cfg.topic_search_limit,
-                    )
-                incremental = full_reason is None
-                _log.info(
-                    "generate_digest.mode",
-                    digest_id=digest_id,
-                    mode="incremental" if incremental else "full",
-                    reason=full_reason,
-                )
-
-                chunks = await _with_neighbors(
-                    chunk_repo, user_id, chunks, cfg.topic_digest_neighbor_window
+                    ),
+                    cfg.topic_digest_neighbor_window,
                 )
                 # 할일은 상태 변경을 추적할 시각이 없고 한 줄씩이라 증분이어도 전부 싣는다.
                 todos = await todo_emb_repo.search_similar(
@@ -336,6 +338,36 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                     since_date_key=None,
                     threshold=cfg.topic_similarity_threshold,
                     limit=cfg.topic_search_limit,
+                )
+
+                if full_reason is None:
+                    new_chunks = await _with_neighbors(
+                        chunk_repo, user_id, new_chunks, cfg.topic_digest_neighbor_window
+                    )
+                    # 증분은 직전 본문을 통째로 싣기 때문에, 소스가 적은 주제에선 원문 전체보다
+                    # 오히려 길다(실측: 회고 12건 주제에서 전체 대비 119~131%). 더 짧을 때만 증분.
+                    incremental_len = len(
+                        await _build_prompt(
+                            topic.name,
+                            topic.description,
+                            new_chunks,
+                            todos,
+                            previous_content=digest.content,
+                        )
+                    )
+                    full_len = len(
+                        await _build_prompt(topic.name, topic.description, all_chunks, todos)
+                    )
+                    if full_len <= incremental_len:
+                        full_reason = "full_cheaper"
+
+                incremental = full_reason is None
+                chunks = new_chunks if incremental else all_chunks
+                _log.info(
+                    "generate_digest.mode",
+                    digest_id=digest_id,
+                    mode="incremental" if incremental else "full",
+                    reason=full_reason,
                 )
 
             # 진행률 이벤트 — 소스를 프롬프트에 접어 넣는 실제 진척을 배치 단위로 흘린다.
