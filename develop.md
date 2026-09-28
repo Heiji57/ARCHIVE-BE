@@ -1694,6 +1694,30 @@ celery_app.conf.beat_schedule = {
 
 자동 dispatcher 의 chain 구조는 weekly → monthly → annual 순서로 enqueue 되므로, 하위 단계 결과가 상위 단계에서 자동 활용된다.
 
+**소스가 없는 기간**: strategy 의 `build_prompt` 가 `None` 을 돌려주면(주간 = 회고·in-progress/done 할일 0건 — 캘린더 일정만 있어도 해당, 월간/연간 = 사용 가능한 하위 요약·회고 0건) task 는 Gemini 를 부르지 않고 locale 별 안내 문구로 `complete(..., is_empty=True)` 하며 알림을 보내지 않는다(SSE completed 는 보냄). `is_empty` 하위 요약은 상위 요약의 입력에서 빠진다 — 월간은 그 주를 "주간 요약 없음" 으로 보고 회고 원문을 읽으므로, 나중에 과거 날짜로 쓴 회고도 반영된다.
+
+### AI 비용 관리 — 사용량 로깅·한도·운영 체크리스트
+
+**사용량 로그**: 모든 Gemini 호출은 `ai.usage` 이벤트를 남긴다(`shared/infrastructure/ai/usage.py`). 생성은 `input_tokens`/`output_tokens`/`thinking_tokens`/`cached_tokens`, 임베딩은 응답에 토큰 수가 없어 `input_count`/`input_chars`. `operation`(`gemini.summary.generate` / `gemini.digest.generate` / `gemini.embed_*`)과 contextvars 의 `user_id`(워커는 `generate_summary`·`generate_digest`·`embed_stale` 항목 단위로 바인드)·`summary_type` 이 붙는다. 비용(달러)은 로그에 넣지 않는다 — 단가가 바뀌면 코드 속 가격표가 조용히 틀리므로 조회 시점 단가로 계산한다.
+
+```bash
+# 기능별 토큰 합계
+docker-compose logs --no-log-prefix worker-ai worker-beat server \
+  | jq -rs 'map(select(.event=="ai.usage" and .input_tokens)) | group_by(.operation)[]
+            | [.[0].operation, (map(.input_tokens)|add), (map(.output_tokens)|add)] | @tsv'
+# 사용자별 추정 비용 상위 20 (gemini-2.5-flash 유료 단가: 입력 $0.30/M, 출력 $2.50/M — 가격표 확인 후 수정)
+docker-compose logs --no-log-prefix worker-ai server \
+  | jq -rs 'map(select(.event=="ai.usage" and .input_tokens)) | group_by(.user_id)
+            | map({user: .[0].user_id, usd: ((map(.input_tokens)|add)*0.30 + (map(.output_tokens)|add)*2.50)/1e6})
+            | sort_by(-.usd)[:20][] | [.user, .usd] | @tsv'
+```
+
+**한도**: 요약은 `summary_rate_limiter`(7일 weekly 10 / monthly 3 / annual 1), 주제 정리는 `DigestRateLimiter`(사용자별 24시간 10회, `TOPIC_DIGEST_RATE_LIMIT` / `TOPIC_DIGEST_RATE_WINDOW_SECONDS`). 둘 다 실제로 AI 호출이 큐에 들어가는 경로에서만 센다.
+
+**운영 체크리스트** (코드 밖):
+- 개발/운영 **GCP 프로젝트와 `GOOGLE_API_KEY` 를 분리**한다. 무료 티어 한도(모델당 일 20회 수준)는 프로젝트 단위라, 로컬 개발·테스트가 같은 키를 쓰면 운영 요약이 429 로 멈춘다. 운영 키는 **유료 티어**여야 한다 — 사용자 20명만 넘어도 월요일 자동 주간 요약이 무료 한도를 넘는다.
+- GCP 결제 **예산 알림**(50% / 90% / 100%)을 건다. 기준은 일 평균이 아니라 비용이 몰리는 날(월요일 = 주간, 매월 1일 = 월간, 1월 1일 = 연간 + 누락 주간·월간 보충)로 잡는다.
+
 ### Summary 생성 사전 점검 — `GET /summaries/readiness`
 
 monthly/annual 생성 직전에 FE 가 호출하는 사전 점검 API. **child summary 존재 여부가 아닌 entry 밀도** 기반.

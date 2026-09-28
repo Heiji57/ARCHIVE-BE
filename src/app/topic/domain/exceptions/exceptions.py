@@ -25,3 +25,17 @@ class DigestNotFoundException(BaseAppException):
 
 class DigestAlreadyInProgressException(BaseAppException):
     code = "TOPIC_DIGEST_ALREADY_IN_PROGRESS"
+
+
+class DigestRateLimitExceededException(BaseAppException):
+    code = "TOPIC_DIGEST_RATE_LIMIT_EXCEEDED"
+
+    def __init__(self, limit: int, window_seconds: int, retry_after_seconds: int) -> None:
+        super().__init__(
+            message="주제 정리 생성 한도 초과",
+            details=[{
+                "limit": limit,
+                "windowSeconds": window_seconds,
+                "retryAfterSeconds": retry_after_seconds,
+            }],
+        )

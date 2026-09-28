@@ -20,7 +20,8 @@ from app.retrospective.domain.exceptions.exceptions import (
     SummaryAlreadyInProgressException,
     SummaryInvalidStateException,
 )
-from app.retrospective.domain.models.value_objects import SummaryType
+from app.retrospective.domain.constants.summary_empty_defaults import empty_summary_text
+from app.retrospective.domain.models.value_objects import SummaryContent, SummaryType
 from app.retrospective.infrastructure.ai.gemini_client import GeminiSummaryClient
 from app.retrospective.infrastructure.ai.strategies import get_strategy
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import (
@@ -157,6 +158,9 @@ def _notification_payload(notif: Notification, extra: dict | None = None) -> dic
 async def generate_summary_task(
     self: Task, summary_id: str, user_id: str, send_notification: bool = True
 ) -> None:
+    # ai.usage 로그를 사용자별로 집계하기 위한 귀속. 태스크마다 asyncio Task(=context)가
+    # 따로라 다른 태스크로 새지 않는다.
+    structlog.contextvars.bind_contextvars(user_id=user_id)
     settings = get_settings()
     factory = get_worker_session_factory()
     redis = Redis.from_url(settings.redis.cache_url, decode_responses=True)
@@ -183,6 +187,7 @@ async def generate_summary_task(
 
             await summary_repo.save(summary)
             summary_type_cached = summary.summary_type
+            structlog.contextvars.bind_contextvars(summary_type=summary.summary_type.value)
 
             user_settings_repo = UserSettingsRepository(session)
             user_settings = await user_settings_repo.find_by_user_id(user_id)
@@ -209,42 +214,50 @@ async def generate_summary_task(
                 session, summary, user_template, locale
             )
 
-        # AI 호출 — DB transaction 밖
-        try:
-            gemini = GeminiSummaryClient(settings.ai)
-            content = await gemini.generate(prompt)
-        except AIServiceUnavailableException as exc:
-            # Gemini 일시 장애(5xx·네트워크·타임아웃) / 쿼터 초과 — 지수 백오프로 직접
-            # 재시도한다. 클라이언트가 SDK 예외를 shared AI 예외로 번역해 준다.
-            # RequestRejected(키·요청 형식) / EmptyResponse(safety) 는 재시도해도
-            # 같으므로 잡지 않는다 → 바깥 `except Exception:` 에서 FAILED 처리.
-            # `autoretry_for` 로 위임하지 않는 이유는 아래 데코레이터 주석 참고.
-            # 이 except 는 바깥 try 의 "body" 안에 중첩돼 있어야 한다 — 바깥
-            # try 의 형제 except 절 안에 두면, max_retries 소진 시 self.retry()
-            # 가 재발생시키는 원본 exc 가 이미 어느 except 블록 "안"이라 그 형제
-            # 절들(`except Retry:`/`except Exception:`)로 다시 매칭되지 않고
-            # 그냥 빠져나가 FAILED 마킹을 건너뛴 채 IN_PROGRESS 에 영구히
-            # 멈춘다 — 실제로 재현해 확인한 회귀.
-            countdown = get_exponential_backoff_interval(
-                factor=(
-                    _GEMINI_QUOTA_BACKOFF_FACTOR
-                    if isinstance(exc, AIQuotaExceededException)
-                    else _GEMINI_RETRY_BACKOFF_FACTOR
-                ),
-                retries=self.request.retries,
-                maximum=_GEMINI_RETRY_BACKOFF_MAX_SECONDS,
-                full_jitter=True,
-            )
-            raise self.retry(exc=exc, countdown=countdown) from exc
+        # 소스가 없는 기간 — AI 를 부르지 않고 안내 문구로 완료한다. 자동 요약은 활동 없는
+        # 사용자에게도 매 주기 돌기 때문에 이 분기가 곧 "사용자 수 × 주기" 만큼의 절감이다.
+        is_empty = prompt is None
+        if prompt is None:
+            _log.info("generate_summary.skipped_empty", summary_id=summary_id)
+            content = SummaryContent.from_text(empty_summary_text(locale))
+        else:
+            # AI 호출 — DB transaction 밖
+            try:
+                gemini = GeminiSummaryClient(settings.ai)
+                content = await gemini.generate(prompt)
+            except AIServiceUnavailableException as exc:
+                # Gemini 일시 장애(5xx·네트워크·타임아웃) / 쿼터 초과 — 지수 백오프로 직접
+                # 재시도한다. 클라이언트가 SDK 예외를 shared AI 예외로 번역해 준다.
+                # RequestRejected(키·요청 형식) / EmptyResponse(safety) 는 재시도해도
+                # 같으므로 잡지 않는다 → 바깥 `except Exception:` 에서 FAILED 처리.
+                # `autoretry_for` 로 위임하지 않는 이유는 아래 데코레이터 주석 참고.
+                # 이 except 는 바깥 try 의 "body" 안에 중첩돼 있어야 한다 — 바깥
+                # try 의 형제 except 절 안에 두면, max_retries 소진 시 self.retry()
+                # 가 재발생시키는 원본 exc 가 이미 어느 except 블록 "안"이라 그 형제
+                # 절들(`except Retry:`/`except Exception:`)로 다시 매칭되지 않고
+                # 그냥 빠져나가 FAILED 마킹을 건너뛴 채 IN_PROGRESS 에 영구히
+                # 멈춘다 — 실제로 재현해 확인한 회귀.
+                countdown = get_exponential_backoff_interval(
+                    factor=(
+                        _GEMINI_QUOTA_BACKOFF_FACTOR
+                        if isinstance(exc, AIQuotaExceededException)
+                        else _GEMINI_RETRY_BACKOFF_FACTOR
+                    ),
+                    retries=self.request.retries,
+                    maximum=_GEMINI_RETRY_BACKOFF_MAX_SECONDS,
+                    full_jitter=True,
+                )
+                raise self.retry(exc=exc, countdown=countdown) from exc
 
         # T2: complete + notify
         async with factory.begin() as session:
             summary_repo = RetroSummaryRepository(session)
             summary = await summary_repo.find_by_id(summary_id, user_id)
-            summary.complete(content)
+            summary.complete(content, is_empty=is_empty)
             await summary_repo.save(summary)
 
-            if send_notification:
+            # 빈 기간 알림은 "요약이 도착했다"는 소음일 뿐이라 보내지 않는다(SSE 완료는 보냄).
+            if send_notification and not is_empty:
                 text = _notification_text(locale, summary.summary_type)
                 notification = Notification.create(
                     user_id=user_id,

@@ -90,6 +90,7 @@ from app.shared.domain.exceptions.external import (
 from app.topic.domain.exceptions.exceptions import (
     DigestAlreadyInProgressException,
     DigestNotFoundException,
+    DigestRateLimitExceededException,
     TopicLimitReachedException,
     TopicNameDuplicatedException,
     TopicNotFoundException,
@@ -178,6 +179,7 @@ _STATUS_MAP: dict[str, int] = {
     # 429
     GitHubRateLimitedException.code: 429,
     SummaryRateLimitExceededException.code: 429,
+    DigestRateLimitExceededException.code: 429,
     LoginRateLimitExceededException.code: 429,
     # 502
     GitHubPushFailedException.code: 502,

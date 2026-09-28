@@ -183,6 +183,7 @@ from app.topic.application.use_cases.get_topic_stats import GetTopicStatsUseCase
 from app.topic.application.use_cases.get_topics import GetTopicsUseCase
 from app.topic.application.use_cases.update_topic import UpdateTopicUseCase
 from app.topic.domain.repositories.repository import (
+    IDigestRateLimiter,
     IEmbeddingQueueRepository,
     IEntryChunkRepository,
     ITopicDigestRepository,
@@ -191,6 +192,7 @@ from app.topic.domain.repositories.repository import (
     ITodoEmbeddingRepository,
 )
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
+from app.topic.infrastructure.cache.digest_rate_limiter import DigestRateLimiter
 from app.topic.infrastructure.cache.topic_stats_cache import TopicStatsCache
 from app.topic.infrastructure.persistence.repositories.chunk_repo import (
     EmbeddingQueueRepository,
@@ -307,6 +309,15 @@ class AppProvider(Provider):
         redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
         return CalendarOAuthStateCache(
             redis, config.google_calendar.calendar_state_ttl_seconds
+        )
+
+    @provide
+    def digest_rate_limiter(self, config: AppConfig) -> IDigestRateLimiter:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return DigestRateLimiter(
+            redis,
+            limit=config.topic.topic_digest_rate_limit,
+            window_seconds=config.topic.topic_digest_rate_window_seconds,
         )
 
     @provide
@@ -1131,8 +1142,9 @@ class RequestProvider(Provider):
         self,
         topic_repo: ITopicRepository,
         digest_repo: ITopicDigestRepository,
+        rate_limiter: IDigestRateLimiter,
     ) -> GenerateDigestUseCase:
-        return GenerateDigestUseCase(topic_repo, digest_repo)
+        return GenerateDigestUseCase(topic_repo, digest_repo, rate_limiter)
 
     @provide
     def get_digest_use_case(

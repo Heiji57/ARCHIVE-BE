@@ -5,6 +5,7 @@ from google.genai import types
 
 from app.shared.domain.exceptions.external import AIEmptyResponseException
 from app.shared.infrastructure.ai import errors as ai_errors
+from app.shared.infrastructure.ai.usage import log_embed_usage
 from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
@@ -30,6 +31,7 @@ class EmbeddingService:
                 config=_EMBED_CONFIG,
             ),
         )
+        log_embed_usage("gemini.embed_text", _EMBEDDING_MODEL, [text])
         if not response.embeddings or not response.embeddings[0].values:
             raise AIEmptyResponseException("Gemini returned no embedding.")
         return list(response.embeddings[0].values)
@@ -46,6 +48,7 @@ class EmbeddingService:
                 config=_EMBED_CONFIG,
             ),
         )
+        log_embed_usage("gemini.embed_batch", _EMBEDDING_MODEL, texts)
         if not response.embeddings:
             raise AIEmptyResponseException(f"Gemini returned no embeddings ({len(texts)} texts).")
         return [list(e.values or []) for e in response.embeddings]

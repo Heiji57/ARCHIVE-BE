@@ -1455,6 +1455,13 @@ paths:
         `{ summaryType, limit, windowSeconds, retryAfterSeconds }` 포함.
         FE 가 사전에 잔여 한도를 알고 싶으면 `GET /summaries/usage` 호출.
 
+        ### 소스가 없는 기간 (수동·자동 동일)
+        요약할 회고·할 일(월간/연간은 사용 가능한 하위 요약 포함)이 하나도 없으면 AI 를 호출하지
+        않고 `completed` + 안내 문구(`markdown`, locale 별 — 예: "이 기간에 기록된 회고가
+        없습니다.")로 완료한다. 캘린더 일정만 있는 기간도 여기에 해당한다. 이 경우 요약 완료
+        **알림은 보내지 않는다**(SSE `completed` 이벤트는 보냄). 이미 카운트된 호출 한도는
+        돌려주지 않는다. 이후 그 기간에 회고를 쓰고 `force=true` 로 재생성하면 정상 요약된다.
+
         ### 데이터 소스 정책 (수동·자동 동일)
         - **weekly** : 그 주의 일일 회고(JournalEntry) + 그 주의 **`in-progress` / `done` 상태 todo** 직접 사용.
           `not-start` todo 는 제외.
@@ -2012,6 +2019,12 @@ paths:
         생성에 성공했을 때만 덮어쓴다. FE 는 "정리 중 / 실패" 화면에서도 이전 문서를
         그대로 보여줄 수 있다.
 
+        **생성 한도**: 사용자별 24시간 sliding window 10회(`TOPIC_DIGEST_RATE_LIMIT`,
+        `TOPIC_DIGEST_RATE_WINDOW_SECONDS`). 실제로 생성이 큐에 들어갈 때만 센다 — 이미
+        생성 중이라 409 로 거절된 요청은 세지 않는다. 초과 시
+        `429 TOPIC_DIGEST_RATE_LIMIT_EXCEEDED`, `details[0]` 에
+        `{ limit, windowSeconds, retryAfterSeconds }`.
+
         **재생성 범위**: 서버가 자동으로 전체/증분을 고른다(요청 파라미터 없음).
         - **증분**: 직전 문서 본문 + 마지막 생성 이후 새로 쓰이거나 수정된 매칭 회고를 병합해
           문서 전체를 다시 쓴다. 직전 본문을 함께 넘기므로 문서가 최근 내용만 다루도록 좁아지지
@@ -2039,7 +2052,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiResponseTopicDigest" }
-      x-error-codes: [TOPIC_NOT_FOUND, TOPIC_DIGEST_ALREADY_IN_PROGRESS]
+        "429":
+          $ref: "#/components/responses/RateLimited_429"
+      x-error-codes: [TOPIC_NOT_FOUND, TOPIC_DIGEST_ALREADY_IN_PROGRESS, TOPIC_DIGEST_RATE_LIMIT_EXCEEDED]
 
   /topics/{topic_id}/digest:
     get:
@@ -3322,6 +3337,8 @@ components:
         - `GITHUB_RATE_LIMITED` — GitHub API rate limit 초과 (잠시 후 재시도)
         - `RETRO_SUMMARY_RATE_LIMIT_EXCEEDED` — 사용자별 AI 요약 생성 한도(7일 sliding window) 초과.
           `details[0]` 에 `{ summaryType, limit, windowSeconds, retryAfterSeconds }` 포함.
+        - `TOPIC_DIGEST_RATE_LIMIT_EXCEEDED` — 사용자별 주제 정리 생성 한도(24시간 sliding window) 초과.
+          `details[0]` 에 `{ limit, windowSeconds, retryAfterSeconds }` 포함.
         - `AUTH_LOGIN_RATE_LIMITED` — 로그인 실패 누적으로 일시 차단(brute-force 방어, email+IP 고정 윈도우). 잠시 후 재시도.
         - `AUTH_EMAIL_SEND_COOLDOWN` — [v2] 이메일 인증 코드 재발송 쿨다운
         - `AUTH_EMAIL_CODE_ATTEMPTS_EXCEEDED` — [v2] 인증 코드 오입력 한도 초과(코드 폐기, 새 코드 요청 필요)

@@ -76,6 +76,16 @@ class ITopicDigestRepository(ABC):
         ...
 
 
+class IDigestRateLimiter(ABC):
+    @abstractmethod
+    async def check_and_record(self, user_id: str) -> None:
+        """한도 검사 + 사용량 기록. 초과 시 DigestRateLimitExceededException.
+
+        실제로 생성 작업이 큐에 들어가는 경로에서만 호출한다(409 충돌은 세지 않는다).
+        """
+        ...
+
+
 class IEntryChunkRepository(ABC):
     @abstractmethod
     async def upsert_chunks(self, chunks: list[EntryChunk]) -> None: ...

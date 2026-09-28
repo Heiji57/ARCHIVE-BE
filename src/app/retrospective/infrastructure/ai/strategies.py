@@ -79,6 +79,16 @@ async def _fetch_calendar_inputs(
     ]
 
 
+def _usable(summary: RetroSummary | None) -> bool:
+    """상위 요약의 입력으로 쓸 수 있는 하위 요약인가 — 빈 기간 안내 문구는 입력이 아니다."""
+    return (
+        summary is not None
+        and summary.status == SummaryStatus.COMPLETED
+        and summary.content is not None
+        and not summary.is_empty
+    )
+
+
 class SummaryStrategy(ABC):
     @abstractmethod
     async def build_prompt(
@@ -87,7 +97,13 @@ class SummaryStrategy(ABC):
         summary: RetroSummary,
         user_template: str,
         locale: str | None = None,
-    ) -> str: ...
+    ) -> str | None:
+        """요약할 소스(회고·할일·하위 요약)가 하나도 없으면 None — 호출자는 AI 를 건너뛴다.
+
+        캘린더 일정만 있는 기간도 None 이다. 일정 목록만으로는 회고 요약이 되지 않고
+        LLM 이 없는 인사이트를 지어낼 위험이 있다.
+        """
+        ...
 
 
 class EntriesAndTodosStrategy(SummaryStrategy):
@@ -99,7 +115,7 @@ class EntriesAndTodosStrategy(SummaryStrategy):
         summary: RetroSummary,
         user_template: str,
         locale: str | None = None,
-    ) -> str:
+    ) -> str | None:
         entry_repo = JournalEntryRepository(session)
         todo_repo = TodoRepository(session)
 
@@ -117,6 +133,8 @@ class EntriesAndTodosStrategy(SummaryStrategy):
             t for t in todos_raw
             if t.status in (TaskStatus.IN_PROGRESS, TaskStatus.DONE)
         ]
+        if not entries and not todos:
+            return None
 
         calendar_events = await _fetch_calendar_inputs(session, summary)
 
@@ -132,7 +150,7 @@ class MonthlyHybridStrategy(SummaryStrategy):
         summary: RetroSummary,
         user_template: str,
         locale: str | None = None,
-    ) -> str:
+    ) -> str | None:
         entry_repo = JournalEntryRepository(session)
         summary_repo = RetroSummaryRepository(session)
 
@@ -144,11 +162,9 @@ class MonthlyHybridStrategy(SummaryStrategy):
                 summary.user_id, SummaryType.WEEKLY, w_start
             )
 
-            if (
-                weekly is not None
-                and weekly.status == SummaryStatus.COMPLETED
-                and weekly.content is not None
-            ):
+            # 빈 주간 요약은 없는 것으로 본다 — 그 뒤 과거 날짜로 쓴 회고가 아래 else 에서
+            # 원문으로 들어간다.
+            if weekly is not None and _usable(weekly):
                 weekly_ts = weekly.updated_at or weekly.created_at
                 all_entries = await entry_repo.find_by_period(
                     summary.user_id, w_start, w_end
@@ -177,6 +193,9 @@ class MonthlyHybridStrategy(SummaryStrategy):
                     )
                 )
 
+        if all(s.weekly_summary is None and not s.supplementary_entries for s in sections):
+            return None
+
         calendar_events = await _fetch_calendar_inputs(session, summary)
 
         return build_prompt_monthly_hybrid(
@@ -191,7 +210,7 @@ class AnnualHybridStrategy(SummaryStrategy):
         summary: RetroSummary,
         user_template: str,
         locale: str | None = None,
-    ) -> str:
+    ) -> str | None:
         summary_repo = RetroSummaryRepository(session)
 
         months = get_months_in_year(summary.period_start.year)
@@ -202,11 +221,7 @@ class AnnualHybridStrategy(SummaryStrategy):
                 summary.user_id, SummaryType.MONTHLY, m_start
             )
 
-            if (
-                monthly is not None
-                and monthly.status == SummaryStatus.COMPLETED
-                and monthly.content is not None
-            ):
+            if monthly is not None and _usable(monthly):
                 sections.append(
                     MonthSection(
                         month=idx,
@@ -215,9 +230,13 @@ class AnnualHybridStrategy(SummaryStrategy):
                     )
                 )
             else:
-                weeklies = await summary_repo.find_completed_in_range(
-                    summary.user_id, SummaryType.WEEKLY, m_start, m_end
-                )
+                weeklies = [
+                    w
+                    for w in await summary_repo.find_completed_in_range(
+                        summary.user_id, SummaryType.WEEKLY, m_start, m_end
+                    )
+                    if _usable(w)
+                ]
                 sections.append(
                     MonthSection(
                         month=idx,
@@ -225,6 +244,9 @@ class AnnualHybridStrategy(SummaryStrategy):
                         weekly_summaries=weeklies,
                     )
                 )
+
+        if all(s.monthly_summary is None and not s.weekly_summaries for s in sections):
+            return None
 
         calendar_events = await _fetch_calendar_inputs(session, summary)
 

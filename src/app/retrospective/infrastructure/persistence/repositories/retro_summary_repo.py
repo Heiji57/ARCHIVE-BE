@@ -197,6 +197,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             content=entity.content.text if entity.content else None,
             edited_content=entity.edited_content,
             folder_id=entity.folder_id,
+            is_empty=entity.is_empty,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -212,6 +213,7 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             content=SummaryContent.from_text(model.content) if model.content else None,
             edited_content=model.edited_content,
             folder_id=model.folder_id,
+            is_empty=model.is_empty,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

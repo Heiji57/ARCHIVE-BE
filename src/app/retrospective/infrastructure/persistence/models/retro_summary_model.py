@@ -1,6 +1,16 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -20,6 +30,7 @@ class RetroSummaryModel(Base):
     folder_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True
     )
+    is_empty: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

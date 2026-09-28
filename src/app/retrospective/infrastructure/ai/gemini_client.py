@@ -16,6 +16,7 @@ from google.genai import types
 from app.retrospective.domain.models.value_objects import SummaryContent
 from app.shared.domain.exceptions.external import AIEmptyResponseException
 from app.shared.infrastructure.ai import errors as ai_errors
+from app.shared.infrastructure.ai.usage import log_generate_usage
 from app.shared.infrastructure.config.ai import AIConfig
 
 _log = structlog.get_logger(__name__)
@@ -48,6 +49,7 @@ class GeminiSummaryClient:
                 config=config,
             ),
         )
+        log_generate_usage("gemini.summary.generate", self._model, response)
 
         text = response.text
         if text is None:
