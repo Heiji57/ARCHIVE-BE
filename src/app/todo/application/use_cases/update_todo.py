@@ -144,6 +144,15 @@ class UpdateTodoUseCase:
         from app.todo.domain.models.todo import RecurrenceRule
         from datetime import date, timedelta
 
+        # 첫 회차부터의 분리는 시리즈 전체 수정과 같다 — 새 base 를 만들면 옛 base 가
+        # 회차 0개(until < date_key)로 남는데, 이는 Google 의 RRULE 로 표현할 수 없어
+        # (UNTIL < DTSTART) 옛 GCal 이벤트가 영원히 반복되며 중복 일정을 만든다.
+        # 삭제 경로(_delete_following)와 같은 가드.
+        if from_slot <= master.date_key:
+            saved = await self._update_base(master, cmd)
+            await self._todo_repo.delete_all_exceptions(master.id, cmd.user_id)
+            return UpdateTodoOutcome(todo=saved)
+
         prev_date = (date.fromisoformat(from_slot) - timedelta(days=1)).isoformat()
 
         # 기존 base until 을 truncate

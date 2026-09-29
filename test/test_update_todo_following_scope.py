@@ -22,7 +22,8 @@ from app.todo.domain.models.value_objects import TaskStatus
 
 class FakeTodoRepo:
     """ITodoRepository 를 상속하지 않는 최소 fake — UpdateTodoUseCase 가 실제로 쓰는
-    메서드(save/find_by_id/find_series_base/delete_exceptions_from)만 구현한다."""
+    메서드(save/find_by_id/find_series_base/delete_exceptions_from/delete_all_exceptions)만
+    구현한다."""
 
     def __init__(self, seed: list[Todo]) -> None:
         self.by_id: dict[str, Todo] = {t.id: t for t in seed}
@@ -50,6 +51,12 @@ class FakeTodoRepo:
                 and t.user_id == user_id
                 and (t.original_date_key or t.date_key) >= from_date
             ):
+                del self.by_id[tid]
+                self.deleted_ids.append(tid)
+
+    async def delete_all_exceptions(self, series_id: str, user_id: str) -> None:
+        for tid, t in list(self.by_id.items()):
+            if t.series_id == series_id and t.user_id == user_id:
                 del self.by_id[tid]
                 self.deleted_ids.append(tid)
 
@@ -265,3 +272,57 @@ async def _run_all() -> bool:
 if __name__ == "__main__":
     passed = asyncio.run(_run_all())
     sys.exit(0 if passed else 1)
+
+
+async def test_following_from_first_slot_updates_series_in_place():
+    """첫 회차에서 "following" 분리 → 새 base 를 만들지 않고 시리즈 자체를 수정한다.
+
+    버그: 옛 base 가 until = date_key - 1일(회차 0개)로 남고, 이 규칙은 Google 에
+    UNTIL < DTSTART 라 표현할 수 없어 GCal 이벤트가 영원히 반복됐다(중복 일정).
+    삭제 경로(_delete_following)는 같은 상황을 "전체 삭제"로 처리하고 있었다.
+    """
+    master = _master()
+    master.calendar_push_status = "synced"
+    master.google_event_id = "gmaster"
+    exc = _materialized_exception(master, "2026-08-05")
+    repo = FakeTodoRepo([master, exc])
+
+    outcome = await UpdateTodoUseCase(repo).execute(
+        UpdateTodoCommand(
+            id=f"{master.id}::{master.date_key}",
+            user_id="user_1",
+            recurrence_scope="following",
+            title="Renamed",
+        )
+    )
+
+    assert outcome.todo.id == "todo_master", "새 base 가 아니라 master 가 수정돼야 함"
+    assert outcome.todo.title == "Renamed"
+    assert master.recurrence_rule is not None
+    assert master.recurrence_rule.until is None, "빈 시리즈(until < date_key)가 생기면 안 됨"
+    assert outcome.extra_push_todo_id is None
+    assert repo.marked_for_push_ids == ["todo_master"], "시리즈 본체가 재push 돼야 함"
+    assert "todo_exc1" not in repo.by_id, "시리즈 전체 수정이므로 예외 row 는 정리된다"
+
+
+async def test_following_from_later_slot_still_splits():
+    """가드가 뒤쪽 슬롯 분리 동작을 바꾸지 않는지 — 기존 동작 회귀 방지."""
+    master = _master()
+    master.calendar_push_status = "synced"
+    master.google_event_id = "gmaster"
+    repo = FakeTodoRepo([master])
+
+    outcome = await UpdateTodoUseCase(repo).execute(
+        UpdateTodoCommand(
+            id=f"{master.id}::2026-08-06",
+            user_id="user_1",
+            recurrence_scope="following",
+            title="Renamed",
+        )
+    )
+
+    assert outcome.todo.id != "todo_master"
+    assert outcome.todo.date_key == "2026-08-06"
+    assert master.recurrence_rule is not None
+    assert master.recurrence_rule.until == "2026-08-05"
+    assert outcome.extra_push_todo_id == "todo_master", "단축된 옛 base 재push 신호"
