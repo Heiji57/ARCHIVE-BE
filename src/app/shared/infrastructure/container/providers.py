@@ -243,7 +243,10 @@ class AppProvider(Provider):
             pool_size=config.db.pool_size,
             max_overflow=config.db.max_overflow,
             pool_timeout=config.db.pool_timeout,
-            echo=config.is_development,
+            # 개발 환경이라고 자동으로 켜지 않는다 — echo 는 SQL 파라미터(구글 access/
+            # refresh token 등)를 평문으로 로그에 흘린다. 켜도 값은 가린다.
+            echo=config.db.echo,
+            hide_parameters=True,
         )
         return async_sessionmaker(engine, expire_on_commit=False)
 
