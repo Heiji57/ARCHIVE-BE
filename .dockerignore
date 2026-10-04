@@ -1,0 +1,10 @@
+# 로컬 시크릿·가상환경이 이미지에 구워지지 않도록 빌드 컨텍스트에서 뺀다.
+.env
+.env.*
+!.env.example
+.venv
+.git
+**/__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache

@@ -19,8 +19,7 @@ fi
 # Local venv for pytest / ruff / mypy (3.12 = Dockerfile + pyproject target).
 # Explicit install: uv may have python-downloads=manual, and this is a no-op once installed.
 uv python install 3.12
-uv venv --python 3.12 --allow-existing .venv
-uv pip install --python .venv/bin/python -r requirements-dev.txt
+uv sync --locked --python 3.12
 
 # This workspace's free host ports + compose project name.
 python3 .superset/ports.py allocate "$PWD" > .superset/.generated/ports.env

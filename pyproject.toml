@@ -1,3 +1,58 @@
+[project]
+name = "archive-be"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+# 직접 의존성과 허용 범위만 선언한다. 실제 설치 버전(하위 의존성 포함)은 uv.lock 이 고정한다.
+# 상한은 다음 메이저 미만 — 단 sqlalchemy 는 2.1 이 greenlet 을 기본 의존성에서 빼면서
+# asyncio 엔진이 import 시점에 죽었던 전례가 있어, 검증 전까지 2.0.x 로 묶는다.
+dependencies = [
+    # Web
+    "fastapi>=0.115.0,<1",
+    "uvicorn[standard]>=0.32.0,<1",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.0,<2.1",
+    "alembic>=1.14.0,<2",
+    "asyncpg>=0.30.0,<1",
+    "pgvector>=0.3.0,<1",
+    # Cache / Queue
+    "redis>=5.2.0,<7",
+    "celery[redis]>=5.4.0,<6",
+    "celery-aio-pool==0.1.0rc8",
+    # SSE
+    "sse-starlette>=2.1.0,<4",
+    # IoC Container
+    "dishka>=0.14.0,<2",
+    # Settings
+    "pydantic[email]>=2.9.0,<3",
+    "pydantic-settings>=2.7.0,<3",
+    # Auth
+    "python-jose[cryptography]>=3.3.0,<4",
+    "pwdlib[argon2]>=0.2.1,<0.3",
+    # AI / External APIs
+    "google-genai>=1.0.0,<3",
+    "httpx>=0.28.0,<1",
+    # Email
+    "aiosmtplib>=3.0.0,<6",
+    "jinja2>=3.1.0,<4",
+    # UUID / Logging / Country·Timezone — calver 라 상한 없음 (lock 이 고정)
+    "uuid6>=2024.7.10",
+    "structlog>=24.4.0",
+    "pycountry>=24.6.1",
+    "pytz>=2024.2",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0,<1",
+    "mypy>=1.14.0,<3",
+    "pytest>=8.3.0,<10",
+    "pytest-asyncio>=0.24.0,<2",
+]
+
+[tool.uv]
+# 앱은 설치형 패키지가 아니라 PYTHONPATH=src 로 실행한다 — 프로젝트 자체는 venv 에 설치하지 않는다.
+package = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
