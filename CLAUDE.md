@@ -129,11 +129,15 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 ## Environment Setup
 
 ```powershell
-# 가상환경 활성화 (Windows)
+# 의존성 설치 (uv 필요 — .venv 생성 + uv.lock 그대로 설치, dev 그룹 포함)
+uv sync --locked
+
+# 가상환경 활성화 (Windows) — 또는 활성화 없이 `uv run <명령>`
 .venv\Scripts\Activate.ps1
 
-# 의존성 설치
-pip install -r requirements.txt
+# 의존성 추가 / 업그레이드 — pyproject.toml 과 uv.lock 을 함께 갱신하고 둘 다 커밋한다
+uv add "패키지>=하한,<상한"          # dev 도구는 `uv add --dev`
+uv lock --upgrade-package 패키지     # 특정 패키지만 올림 (전체 `uv lock --upgrade` 는 지양)
 
 # 서버 실행
 uvicorn app.main:app --reload

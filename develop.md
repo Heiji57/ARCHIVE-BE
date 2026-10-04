@@ -119,6 +119,20 @@ docker-compose exec server ruff format src/
 docker-compose exec server mypy src/
 ```
 
+### 의존성 관리 — uv + uv.lock
+
+- **선언**은 `pyproject.toml` 의 `[project].dependencies`(런타임) / `[dependency-groups].dev`(ruff·mypy·pytest) 에 **직접 의존성과 허용 범위**만 적는다. 상한은 다음 메이저 미만이 기본.
+- **실제 설치 버전**은 하위 의존성까지 `uv.lock` 이 고정한다. Dockerfile·`.superset/setup.sh` 모두 `uv sync --locked` 로 설치하므로, `pyproject.toml` 만 고치고 lock 을 갱신하지 않으면 빌드가 실패한다.
+- 왜 lock 인가: 범위만 있으면 `docker compose up --build` 할 때마다 최신 버전이 깔린다. SQLAlchemy 2.1 이 `greenlet` 을 기본 의존성에서 빼자 rebuild 만으로 api·worker 가 import 단계에서 전부 죽었다.
+
+```bash
+uv sync --locked                       # 로컬 .venv 를 lock 그대로 맞춤 (dev 포함)
+uv add "패키지>=하한,<상한"             # 런타임 의존성 추가 (dev 도구는 --dev)
+uv lock --upgrade-package 패키지        # 특정 패키지만 올림 — 올린 뒤 pytest/ruff/mypy 와 이미지 기동까지 확인
+```
+
+> 이미지의 venv 는 `/opt/venv`(`UV_PROJECT_ENVIRONMENT`) 에 있다. compose 의 `.:/app` bind mount 가 가리지 않도록 `/app/.venv` 로 옮기지 않는다.
+
 ---
 
 ## 4. 폴더 구조
