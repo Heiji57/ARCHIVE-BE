@@ -34,6 +34,9 @@ class CreateTodoUseCase:
             tags=cmd.tags,
             due_date_key=cmd.due_date_key,
         )
+        # 반복 base 는 start_time 로컬 날짜 == date_key 로 시작한다 (Todo.anchor_time_to_date).
+        if todo.is_series_base:
+            todo.anchor_time_to_date()
         saved = await self._todo_repo.save(todo)
 
         # 캘린더 push 여부 결정: 명시값 우선, 없으면 사용자 기본 설정.

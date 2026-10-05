@@ -318,7 +318,8 @@ class TaskStatus(StrEnum):
 
 > **반복 Todo 모델 (Google Calendar exception-based)**:
 > - `TaskStatus.CANCELLED` — 시리즈 단일 회차 취소 전용 (API 입력 불가, 내부 전용).
-> - `RecurrenceRule` — frozen dataclass `{unit: "day"|"week", interval: int, until: str|None}`.
+> - `RecurrenceRule` — frozen dataclass `{unit: "day"|"week"|"month"|"year", interval: int, until: str|None, weekdays: tuple[int,...]|None, month_week: int|None}`. 의미는 RFC 5545 RRULE(시작일 = DTSTART, 항상 첫 회차). `weekdays` 는 week 전용(0=월…6=일, None=시작일 요일), `month_week` 는 month 전용·필수(1~4, -1=마지막). 세부 정책은 `src/app/todo/CLAUDE.md`.
+> - 가상 인스턴스는 `recurrence_rule=None`(base 판별 유지) + 비영속 `series_rule`(소속 시리즈 규칙, 응답 `series_rule` 로 노출).
 > - **베이스 row**: `recurrence_rule IS NOT NULL AND series_id IS NULL`. 화면에 직접 노출 안 됨.
 > - **예외 row**: `series_id = base_id`. `original_date_key` = 커버하는 슬롯 날짜(불변 키).
 > - **가상 인스턴스**: DB row 없음, 조회 시 확장. ID 형식 `"{base_id}::{slot_date}"`.
@@ -327,7 +328,7 @@ class TaskStatus(StrEnum):
 > - race condition 방어: `ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL DO UPDATE`.
 > - `find_by_date_key`/`find_by_date_range` — 베이스 row 제외 필터 적용.
 > - `find_by_full_text` — 베이스 row + CANCELLED 예외 row 제외 (`status != 'cancelled'`).
-> - 반복 유틸리티: `todo/domain/utils/recurrence.py` (`generate_slots_from`, `make_virtual`, `build_gcal_instance_id`).
+> - 반복 유틸리티: `todo/domain/utils/recurrence.py` (`generate_slots_from`, `rule_to_rrule`, `make_virtual`, `build_gcal_instance_id`). `generate_slots_from` 과 `rule_to_rrule` 은 같은 날짜 집합을 만들어야 한다(테스트가 dateutil 로 교차 검증).
 
 ### 도메인 예외
 

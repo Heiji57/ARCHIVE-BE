@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from fastapi.exceptions import RequestValidationError
@@ -159,9 +159,8 @@ class UpdateTodoUseCase:
         old_rule = master.recurrence_rule
         if old_rule:
             new_until = prev_date if (old_rule.until is None or old_rule.until > prev_date) else old_rule.until
-            master.recurrence_rule = RecurrenceRule(
-                unit=old_rule.unit, interval=old_rule.interval, until=new_until
-            )
+            # replace — weekdays/month_week 등 나머지 필드는 그대로 보존한다.
+            master.recurrence_rule = replace(old_rule, until=new_until)
         await self._todo_repo.save(master)
 
         # GCal-linked 시리즈라면 단축된 RRULE(UNTIL) 을 옛 base 에 반영하도록 재푸시 예약.
@@ -183,10 +182,12 @@ class UpdateTodoUseCase:
             new_start = compute_instance_start(master.start_time, master.date_key, from_slot)
             new_end = compute_instance_end(master.end_time, master.date_key, from_slot)
         field_source = source or master
-        new_rule = RecurrenceRule(
-            unit=master.recurrence_rule.unit if master.recurrence_rule else (old_rule.unit if old_rule else "day"),
-            interval=master.recurrence_rule.interval if master.recurrence_rule else (old_rule.interval if old_rule else 1),
-            until=None,
+        # 새 시리즈는 기존 규칙을 (종료일 없이) 그대로 이어받는다 — 위에서 until 만 잘린
+        # master.recurrence_rule 기준. 규칙이 없는 비정상 master 면 매일 반복으로 폴백.
+        new_rule = (
+            replace(master.recurrence_rule, until=None)
+            if master.recurrence_rule
+            else RecurrenceRule(unit="day", interval=1)
         )
         if cmd.recurrence_rule:
             new_rule = cmd.recurrence_rule
@@ -208,6 +209,9 @@ class UpdateTodoUseCase:
             due_date_key=field_source.due_date_key,
         )
         self._apply_patch(new_base, cmd)
+        # source 가 다른 날로 옮겨 둔 예외 row 면 시간이 from_slot 과 어긋난다
+        # — base 불변식(start_time 로컬 날짜 == date_key)으로 맞춘다.
+        new_base.anchor_time_to_date()
         saved = await self._todo_repo.save(new_base)
         return UpdateTodoOutcome(todo=saved, extra_push_todo_id=extra_push_todo_id)
 
@@ -295,6 +299,11 @@ class UpdateTodoUseCase:
         )
         if cmd.date_key is None and time_changed and not todo.is_series_base:
             todo.align_date_to_time()
+        # base 는 반대로 시간을 date_key 에 맞춘다 — start_time 로컬 날짜(Google DTSTART)와
+        # date_key(슬롯 기준)가 어긋나면 BYDAY RRULE 이 Google 에서 하루 밀린다. 규칙만
+        # 바뀌는 경우도 포함(예전에 어긋난 채 저장된 base 가 요일 기반 규칙으로 바뀔 때).
+        if todo.is_series_base and (time_changed or cmd.recurrence_rule is not None):
+            todo.anchor_time_to_date()
         if cmd.tags is not UNSET:
             todo.tags = cmd.tags  # type: ignore[assignment]
         if cmd.due_date_key is not UNSET:

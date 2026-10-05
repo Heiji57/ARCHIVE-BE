@@ -201,3 +201,17 @@ async def _run_all() -> bool:
 if __name__ == "__main__":
     passed = asyncio.run(_run_all())
     sys.exit(0 if passed else 1)
+
+
+async def test_following_delete_preserves_month_week_on_truncated_master():
+    master = _master(linked=False)
+    master.recurrence_rule = RecurrenceRule(unit="month", interval=1, month_week=-1)
+    repo = FakeTodoRepo([master])
+
+    await DeleteTodoUseCase(repo).execute(
+        todo_id="todo_master::2026-09-30", user_id="user_1", recurrence_scope="following"
+    )
+
+    assert repo.by_id["todo_master"].recurrence_rule == RecurrenceRule(
+        unit="month", interval=1, month_week=-1, until="2026-09-29"
+    )

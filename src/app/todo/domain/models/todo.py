@@ -13,10 +13,15 @@ from app.todo.domain.models.value_objects import TaskStatus
 
 @dataclass(frozen=True)
 class RecurrenceRule:
-    """반복 주기 정의 — base event 에만 저장된다."""
-    unit: Literal["day", "week"]
+    """반복 주기 정의 — base event 에만 저장된다. 의미는 RFC 5545 RRULE 과 같다
+    (시작일 = DTSTART, 항상 첫 회차). 슬롯 계산은 domain/utils/recurrence.py."""
+    unit: Literal["day", "week", "month", "year"]
     interval: int  # 1~365
     until: str | None = None  # YYYY-MM-DD (inclusive) or None = indefinite
+    # unit=week 전용 — 반복 요일(0=월 … 6=일, 오름차순·중복 없음). None = 시작일 요일.
+    weekdays: tuple[int, ...] | None = None
+    # unit=month 전용·필수 — 1~4 = n번째, -1 = 마지막. 요일은 시작일(date_key) 요일.
+    month_week: int | None = None
 
 
 @dataclass(kw_only=True)
@@ -38,6 +43,9 @@ class Todo(BaseEntity):
     original_date_key: str | None = None  # 원래 슬롯 날짜 (이동해도 불변 — GCal instance key)
     original_start_time: datetime | None = None  # 슬롯 start_time (UTC, GCal instance ID 계산용)
     master_google_event_id: str | None = None  # base 의 GCal event id 스냅샷 (exception push용)
+    # 가상 인스턴스 전용(비영속) — 소속 시리즈 base 의 규칙. recurrence_rule 은 base 판별
+    # (is_series_base) 에 쓰이므로 가상 인스턴스엔 비워 두고, 응답 노출용으로 여기에 싣는다.
+    series_rule: RecurrenceRule | None = None
     tags: list[str] = field(default_factory=list)
     due_date_key: str | None = None  # YYYY-MM-DD (inclusive), must be >= date_key
     # ── Google Calendar push 상태 (읽기 전용 뷰) ────────────────────────────────
@@ -101,6 +109,16 @@ class Todo(BaseEntity):
         local_date = self._time_local_date()
         if local_date is not None:
             self.date_key = local_date.isoformat()
+
+    def anchor_time_to_date(self) -> None:
+        """시리즈 base 전용 — align_date_to_time 의 반대: 시간을 date_key 로 맞춘다.
+
+        base 의 date_key 는 시리즈 시작일(서버 슬롯 계산의 기준)이라 옮길 수 없다. 그런데
+        start_time 의 로컬 날짜가 date_key 와 어긋나면 Google 의 DTSTART 와 서버 슬롯 기준이
+        달라져, 요일 기반 RRULE(BYDAY — 주간 복수 요일, 월간 n번째 요일)이 Google 에서
+        서버 회차와 하루 어긋난 날짜로 펼쳐진다. 로컬 벽시계 시각과 start~end 일수는 유지.
+        """
+        self.move_to(self.date_key)
 
     def _time_local_date(self) -> date | None:
         """start(없으면 end)의 로컬 날짜 — date_key 와 일치해야 하는 기준."""

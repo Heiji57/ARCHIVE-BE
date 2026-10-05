@@ -326,3 +326,70 @@ async def test_following_from_later_slot_still_splits():
     assert master.recurrence_rule is not None
     assert master.recurrence_rule.until == "2026-08-05"
     assert outcome.extra_push_todo_id == "todo_master", "단축된 옛 base 재push 신호"
+
+
+async def test_following_split_preserves_weekdays_and_month_week():
+    """규칙을 복사할 때 unit/interval 만 옮기면 weekdays/month_week 가 사라져
+    월간 반복이 "시작일 기준" 으로, 맞춤 주간 반복이 단일 요일로 바뀐다."""
+    master = _master()
+    master.date_key = "2026-08-05"  # 첫 번째 수요일
+    master.recurrence_rule = RecurrenceRule(unit="month", interval=1, month_week=1)
+    repo = FakeTodoRepo([master])
+
+    outcome = await UpdateTodoUseCase(repo).execute(
+        UpdateTodoCommand(
+            id=f"{master.id}::2026-10-07",
+            user_id="user_1",
+            recurrence_scope="following",
+            title="Renamed",
+        )
+    )
+
+    # 옛 base: until 만 잘리고 month_week 는 유지.
+    assert repo.by_id["todo_master"].recurrence_rule == RecurrenceRule(
+        unit="month", interval=1, month_week=1, until="2026-10-06"
+    )
+    # 새 base: 규칙 그대로(until 없이) 이어받음.
+    assert outcome.todo.recurrence_rule == RecurrenceRule(unit="month", interval=1, month_week=1)
+
+    weekly = _master()
+    weekly.recurrence_rule = RecurrenceRule(unit="week", interval=2, weekdays=(0, 2))
+    repo = FakeTodoRepo([weekly])
+    outcome = await UpdateTodoUseCase(repo).execute(
+        UpdateTodoCommand(
+            id=f"{weekly.id}::2026-08-12",
+            user_id="user_1",
+            recurrence_scope="following",
+            title="Renamed",
+        )
+    )
+    assert repo.by_id["todo_master"].recurrence_rule.weekdays == (0, 2)
+    assert outcome.todo.recurrence_rule == RecurrenceRule(unit="week", interval=2, weekdays=(0, 2))
+
+
+async def test_following_from_moved_exception_anchors_new_base_time_to_slot():
+    """다른 날로 옮겨 둔 예외 row 에서 "following" 분리 → 새 base 는 원래 슬롯(from_slot)을
+    date_key 로 갖는다. 시간은 그 예외 row 것을 이어받되 date_key 로 맞춰야 한다 — 어긋나면
+    Google DTSTART 와 서버 슬롯 기준이 달라져 요일 기반 RRULE 이 하루 밀린다."""
+    master = _master()
+    master.date_key = "2026-08-05"  # 첫 번째 수요일
+    master.recurrence_rule = RecurrenceRule(unit="month", interval=1, month_week=1)
+    master.timezone = "Asia/Seoul"
+    exc = _materialized_exception(master, "2026-09-02")
+    exc.timezone = "Asia/Seoul"
+    # 09-02(수) 슬롯을 09-03(목) KST 10:00 으로 옮겨 둔 상태
+    exc.date_key = "2026-09-03"
+    exc.start_time = datetime(2026, 9, 3, 1, 0, tzinfo=timezone.utc)
+    repo = FakeTodoRepo([master, exc])
+
+    result = (
+        await UpdateTodoUseCase(repo).execute(
+            UpdateTodoCommand(
+                id=exc.id, user_id="user_1", recurrence_scope="following", title="v2"
+            )
+        )
+    ).todo
+
+    assert result.date_key == "2026-09-02"
+    # 벽시계 10:00 유지, 날짜는 from_slot(09-02) — KST 09-02 10:00 == 09-02 01:00Z
+    assert result.start_time == datetime(2026, 9, 2, 1, 0, tzinfo=timezone.utc)

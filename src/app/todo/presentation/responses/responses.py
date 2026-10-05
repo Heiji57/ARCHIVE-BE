@@ -8,13 +8,21 @@ from app.todo.domain.repositories.repository import TagCount, WeeklyTrendDay
 
 
 class RecurrenceRuleResponse(BaseModel):
-    unit: Literal["day", "week"]
+    unit: Literal["day", "week", "month", "year"]
     interval: int
     until: str | None
+    weekdays: list[int] | None
+    month_week: int | None
 
     @classmethod
     def from_domain(cls, rule: RecurrenceRule) -> "RecurrenceRuleResponse":
-        return cls(unit=rule.unit, interval=rule.interval, until=rule.until)
+        return cls(
+            unit=rule.unit,
+            interval=rule.interval,
+            until=rule.until,
+            weekdays=list(rule.weekdays) if rule.weekdays is not None else None,
+            month_week=rule.month_week,
+        )
 
 
 class TodoResponse(BaseModel):
@@ -40,6 +48,8 @@ class TodoResponse(BaseModel):
     series_id: str | None
     original_date_key: str | None
     recurrence_rule: RecurrenceRuleResponse | None
+    # 가상 인스턴스에만 — 소속 시리즈의 규칙 (FE 가 현재 규칙을 보여주는 용도). 그 외 null.
+    series_rule: RecurrenceRuleResponse | None
     tags: list[str]
     due_date_key: str | None
 
@@ -67,6 +77,11 @@ class TodoResponse(BaseModel):
             recurrence_rule=(
                 RecurrenceRuleResponse.from_domain(todo.recurrence_rule)
                 if todo.recurrence_rule
+                else None
+            ),
+            series_rule=(
+                RecurrenceRuleResponse.from_domain(todo.series_rule)
+                if todo.series_rule
                 else None
             ),
             tags=todo.tags,

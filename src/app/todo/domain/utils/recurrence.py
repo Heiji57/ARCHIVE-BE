@@ -1,12 +1,14 @@
 """반복 Todo 관련 순수 도메인 유틸리티.
 
 - generate_slots_from: base event 의 RecurrenceRule 로부터 슬롯 날짜(YYYY-MM-DD) 시퀀스 생성.
+- rule_to_rrule: RecurrenceRule → GCal RRULE 문자열 (generate_slots_from 과 같은 날짜 집합).
 - make_virtual: 슬롯 날짜 + base 로부터 가상 Todo 인스턴스 생성.
 - build_gcal_instance_id: GCal instance ID 계산 (base_event_id + originalStartTime UTC).
 - compute_instance_start/end: 슬롯에 맞게 base 의 start/end_time 을 보정.
 """
 from __future__ import annotations
 
+import calendar
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -16,49 +18,144 @@ if TYPE_CHECKING:
     from app.todo.domain.models.todo import RecurrenceRule, Todo
 
 
+_RRULE_WEEKDAYS = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+
+
 def generate_slots_from(
     rule: "RecurrenceRule",
-    series_start: str,   # base.date_key
+    series_start: str,   # base.date_key (= RRULE DTSTART)
     range_start: str,    # 조회 범위 시작 (포함)
     range_end: str,      # 조회 범위 끝 (포함)
 ) -> list[str]:
-    """series_start 에서 delta 씩 증가해 [range_start, range_end] 에 속하는 슬롯 반환."""
+    """rule 이 series_start 부터 만드는 회차 중 [range_start, range_end] 에 속하는 날짜를 반환.
+
+    의미는 RFC 5545 RRULE 과 같다 — GCal 로 push 되는 RRULE(rule_to_rrule)과 같은 날짜
+    집합이어야 중복/누락 일정이 생기지 않는다. series_start(DTSTART)는 규칙과 맞지 않아도
+    항상 첫 회차다. 각 단위는 조회 범위 시작점으로 곧장 점프한 뒤 생성한다 — 시작일이 먼
+    과거인 시리즈를 넓은 범위로 조회(stats range=all)해도 루프가 범위 크기에만 비례한다.
+    """
     if rule is None:
         return []
-    if rule.unit == "day":
-        delta = timedelta(days=rule.interval)
-    else:
-        delta = timedelta(weeks=rule.interval)
-
-    effective_end = range_end
-    if rule.until and rule.until < range_end:
-        effective_end = rule.until
-
-    # series_start 부터 delta 씩 증가해 range_start 이상인 첫 슬롯을 찾는다.
     s_date = date.fromisoformat(series_start)
     r_start = date.fromisoformat(range_start)
-    r_end = date.fromisoformat(effective_end)
-
-    if s_date > r_end:
+    r_end = date.fromisoformat(range_end)
+    if rule.until:
+        r_end = min(r_end, date.fromisoformat(rule.until))
+    if s_date > r_end or r_start > r_end:
         return []
 
-    # series_start 에서 몇 스텝 지나야 range_start 에 도달하는지 계산
-    if s_date < r_start:
-        diff = (r_start - s_date).days
-        if rule.unit == "day":
-            steps = (diff + rule.interval - 1) // rule.interval
-        else:
-            steps = (diff + rule.interval * 7 - 1) // (rule.interval * 7)
-        current = s_date + delta * steps
+    lo = max(s_date, r_start)
+    if rule.unit == "day":
+        slots = _day_slots(rule.interval, s_date, lo, r_end)
+    elif rule.unit == "week":
+        weekdays = rule.weekdays or (s_date.weekday(),)
+        slots = _week_slots(rule.interval, weekdays, s_date, lo, r_end)
+    elif rule.unit == "month":
+        month_week = rule.month_week if rule.month_week is not None else _month_week_of(s_date)
+        slots = _month_slots(rule.interval, month_week, s_date, lo, r_end)
     else:
-        current = s_date
+        slots = _year_slots(rule.interval, s_date, lo, r_end)
 
-    slots: list[str] = []
-    while current <= r_end:
-        if current >= r_start:
-            slots.append(current.isoformat())
-        current += delta
-    return slots
+    # DTSTART 는 항상 첫 회차 (맞춤 주간 반복에서 시작일 요일을 뺀 경우 등).
+    if r_start <= s_date and (not slots or slots[0] != s_date):
+        slots.insert(0, s_date)
+    return [d.isoformat() for d in slots]
+
+
+def _day_slots(interval: int, s_date: date, lo: date, hi: date) -> list[date]:
+    steps = -(-(lo - s_date).days // interval)  # ceil
+    current = s_date + timedelta(days=interval * steps)
+    out: list[date] = []
+    while current <= hi:
+        out.append(current)
+        current += timedelta(days=interval)
+    return out
+
+
+def _week_slots(
+    interval: int, weekdays: tuple[int, ...], s_date: date, lo: date, hi: date
+) -> list[date]:
+    # 주 경계 = 월요일 (RRULE WKST=MO 기본값). 시작일이 속한 주가 0번째 활성 주.
+    week0 = s_date - timedelta(days=s_date.weekday())
+    period = timedelta(weeks=interval)
+    lo_week = lo - timedelta(days=lo.weekday())
+    k = (lo_week - week0).days // (7 * interval)  # floor — lo 가 속한 주기부터
+    week_start = week0 + period * k
+    out: list[date] = []
+    while week_start <= hi:
+        for wd in sorted(weekdays):
+            d = week_start + timedelta(days=wd)
+            if lo <= d <= hi:
+                out.append(d)
+        week_start += period
+    return out
+
+
+def _month_week_of(d: date) -> int:
+    """d 가 그 달의 몇 번째 요일인지 (1~4). 5번째는 모든 달에 있지 않아 -1(마지막)."""
+    n = (d.day - 1) // 7 + 1
+    return -1 if n == 5 else n
+
+
+def _nth_weekday(year: int, month: int, weekday: int, month_week: int) -> date | None:
+    """year-month 의 month_week 번째(-1 = 마지막) weekday. 그 달에 없으면 None."""
+    if month_week == -1:
+        last = date(year, month, calendar.monthrange(year, month)[1])
+        return last - timedelta(days=(last.weekday() - weekday) % 7)
+    first = date(year, month, 1)
+    d = first + timedelta(days=(weekday - first.weekday()) % 7 + 7 * (month_week - 1))
+    return d if d.month == month else None
+
+
+def _month_slots(
+    interval: int, month_week: int, s_date: date, lo: date, hi: date
+) -> list[date]:
+    m0 = s_date.year * 12 + s_date.month - 1
+    lo_idx = lo.year * 12 + lo.month - 1
+    k = max(0, -(-(lo_idx - m0) // interval))  # ceil — lo 의 달 이후 첫 활성 달
+    idx = m0 + interval * k
+    out: list[date] = []
+    while True:
+        year, month = divmod(idx, 12)
+        if date(year, month + 1, 1) > hi:
+            break
+        d = _nth_weekday(year, month + 1, s_date.weekday(), month_week)
+        if d is not None and lo <= d <= hi:
+            out.append(d)
+        idx += interval
+    return out
+
+
+def _year_slots(interval: int, s_date: date, lo: date, hi: date) -> list[date]:
+    k = max(0, -(-(lo.year - s_date.year) // interval))
+    year = s_date.year + interval * k
+    out: list[date] = []
+    while date(year, 1, 1) <= hi:
+        try:
+            d = date(year, s_date.month, s_date.day)
+        except ValueError:  # 2/29 시작 → 평년은 건너뜀 (RRULE 과 동일)
+            year += interval
+            continue
+        if lo <= d <= hi:
+            out.append(d)
+        year += interval
+    return out
+
+
+def rule_to_rrule(rule: RecurrenceRule, series_start: str) -> str:
+    """RecurrenceRule → Google RRULE 문자열. 월간 BYDAY 요일은 시작일(series_start)에서 나온다."""
+    freq = {"day": "DAILY", "week": "WEEKLY", "month": "MONTHLY", "year": "YEARLY"}[rule.unit]
+    rrule = f"RRULE:FREQ={freq};INTERVAL={rule.interval}"
+    if rule.unit == "week" and rule.weekdays:
+        rrule += ";BYDAY=" + ",".join(_RRULE_WEEKDAYS[wd] for wd in sorted(rule.weekdays))
+    elif rule.unit == "month":
+        s_date = date.fromisoformat(series_start)
+        month_week = rule.month_week if rule.month_week is not None else _month_week_of(s_date)
+        rrule += f";BYDAY={month_week}{_RRULE_WEEKDAYS[s_date.weekday()]}"
+    if rule.until:
+        # GCal UNTIL 형식: YYYYMMDD (date-only)
+        rrule += f";UNTIL={rule.until.replace('-', '')}"
+    return rrule
 
 
 def compute_instance_start(base_start: datetime | None, base_date_key: str, slot_date: str) -> datetime | None:
@@ -106,6 +203,7 @@ def make_virtual(base: "Todo", slot_date: str) -> "Todo":
         completed_at=base.completed_at,
         # 반복 메타
         recurrence_rule=None,
+        series_rule=base.recurrence_rule,
         series_id=base.id,
         original_date_key=slot_date,
         original_start_time=inst_start,

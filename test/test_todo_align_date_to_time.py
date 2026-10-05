@@ -179,3 +179,74 @@ async def test_timezone_only_change_realigns_date_key() -> None:
     todo = await _update(repo, "todo_1", timezone="Pacific/Auckland")
     assert todo.start_time == _utc(2026, 9, 16, 14, 0)
     assert todo.date_key == "2026-09-17"
+
+
+async def test_series_base_time_crossing_midnight_is_anchored_to_date_key() -> None:
+    """시리즈 base 는 date_key(시리즈 시작일)를 옮기지 않는 대신 시간을 date_key 로 맞춘다.
+
+    그대로 두면 start_time 의 로컬 날짜(Google DTSTART)와 date_key(서버 슬롯 기준)가
+    하루 어긋나, 요일 기반 RRULE(BYDAY=1MO 등)이 Google 에서 서버 회차와 다른 날짜로 펼쳐진다.
+    """
+    from app.todo.domain.utils.recurrence import rule_to_rrule
+
+    master = _master()  # 2026-09-07(월) KST 23:00~23:30
+    master.recurrence_rule = RecurrenceRule(unit="month", interval=1, month_week=1)
+    repo = _Repo([master])
+    # KST 09-08(화) 01:00 으로 — 자정을 넘김
+    todo = await _update(
+        repo, "todo_master", recurrence_scope="all", start_time=_utc(2026, 9, 7, 16, 0)
+    )
+
+    assert todo.date_key == "2026-09-07"
+    # 벽시계 01:00 은 유지, 날짜는 시리즈 시작일(09-07)로 — KST 09-07 01:00 == 09-06 16:00Z
+    assert todo.start_time == _utc(2026, 9, 6, 16, 0)
+    assert todo._time_local_date().isoformat() == todo.date_key
+    assert rule_to_rrule(todo.recurrence_rule, todo.date_key).endswith("BYDAY=1MO")
+
+
+async def test_new_series_base_is_created_anchored_to_date_key() -> None:
+    """생성 시점에도 같은 불변식 — 반복 base 의 start_time 로컬 날짜 == date_key."""
+    from app.todo.application.dtos.commands import CreateTodoCommand
+    from app.todo.application.use_cases.create_todo import CreateTodoUseCase
+
+    class _Settings:
+        async def find_by_user_id(self, user_id: str) -> None:
+            return None
+
+    repo = _Repo([])
+    created = await CreateTodoUseCase(repo, _Settings()).execute(  # type: ignore[arg-type]
+        CreateTodoCommand(
+            user_id=_USER,
+            title="t",
+            date_key="2026-09-07",
+            # KST 09-08 01:00 — date_key 와 하루 어긋난 요청
+            start_time=_utc(2026, 9, 7, 16, 0),
+            end_time=None,
+            timezone="Asia/Seoul",
+            recurrence_rule=RecurrenceRule(unit="week", interval=1, weekdays=(0, 2)),
+        )
+    )
+    assert created.date_key == "2026-09-07"
+    assert created._time_local_date().isoformat() == "2026-09-07"
+
+
+async def test_plain_todo_creation_is_unchanged() -> None:
+    from app.todo.application.dtos.commands import CreateTodoCommand
+    from app.todo.application.use_cases.create_todo import CreateTodoUseCase
+
+    class _Settings:
+        async def find_by_user_id(self, user_id: str) -> None:
+            return None
+
+    repo = _Repo([])
+    created = await CreateTodoUseCase(repo, _Settings()).execute(  # type: ignore[arg-type]
+        CreateTodoCommand(
+            user_id=_USER,
+            title="t",
+            date_key="2026-09-07",
+            start_time=_utc(2026, 9, 7, 16, 0),
+            end_time=None,
+            timezone="Asia/Seoul",
+        )
+    )
+    assert created.start_time == _utc(2026, 9, 7, 16, 0)  # 비반복은 손대지 않음

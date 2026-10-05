@@ -5,8 +5,8 @@ from app.google_calendar.infrastructure.api.google_calendar_client import (
     CalendarEventWrite,
     GoogleCalendarApiClient,
 )
-from app.todo.domain.models.todo import RecurrenceRule, Todo
-from app.todo.domain.utils.recurrence import build_gcal_instance_id
+from app.todo.domain.models.todo import Todo
+from app.todo.domain.utils.recurrence import build_gcal_instance_id, rule_to_rrule
 
 PushKind = Literal["push_success", "delete_success", "failure"]
 
@@ -22,17 +22,6 @@ class PushOutcome:
     kind: PushKind
     result_gid: str | None = None
     newly_created: bool = False
-
-
-def _recurrence_rule_to_rrule(rule: RecurrenceRule) -> str:
-    """RecurrenceRule → Google RRULE 문자열."""
-    freq = "DAILY" if rule.unit == "day" else "WEEKLY"
-    parts = [f"RRULE:FREQ={freq};INTERVAL={rule.interval}"]
-    if rule.until:
-        # GCal UNTIL 형식: YYYYMMDD (date-only)
-        until_compact = rule.until.replace("-", "")
-        parts[0] += f";UNTIL={until_compact}"
-    return parts[0]
 
 
 class CalendarPushService:
@@ -106,7 +95,7 @@ class CalendarPushService:
     def _to_write(self, todo: Todo) -> CalendarEventWrite:
         recurrence = None
         if todo.is_series_base and todo.recurrence_rule:
-            recurrence = _recurrence_rule_to_rrule(todo.recurrence_rule)
+            recurrence = rule_to_rrule(todo.recurrence_rule, todo.date_key)
         return CalendarEventWrite(
             archive_todo_id=todo.id,
             title=todo.title,

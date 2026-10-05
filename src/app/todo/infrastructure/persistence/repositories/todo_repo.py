@@ -47,13 +47,26 @@ _PLAIN_TODO_FILTER = "series_id IS NULL AND recurrence_rule IS NULL"
 def _rule_to_dict(rule: RecurrenceRule | None) -> dict | None:
     if rule is None:
         return None
-    return {"unit": rule.unit, "interval": rule.interval, "until": rule.until}
+    d: dict[str, object] = {"unit": rule.unit, "interval": rule.interval, "until": rule.until}
+    # 신규 필드는 값이 있을 때만 저장 — 기존 day/week 규칙 JSON 모양을 그대로 유지한다.
+    if rule.weekdays is not None:
+        d["weekdays"] = list(rule.weekdays)
+    if rule.month_week is not None:
+        d["month_week"] = rule.month_week
+    return d
 
 
 def _dict_to_rule(d: dict | None) -> RecurrenceRule | None:
     if d is None:
         return None
-    return RecurrenceRule(unit=d["unit"], interval=d["interval"], until=d.get("until"))
+    weekdays = d.get("weekdays")
+    return RecurrenceRule(
+        unit=d["unit"],
+        interval=d["interval"],
+        until=d.get("until"),
+        weekdays=tuple(weekdays) if weekdays is not None else None,
+        month_week=d.get("month_week"),
+    )
 
 
 # tsquery 구문에서 의미를 갖는 특수문자 — 사용자 입력에 그대로 있으면 문법 오류가 나므로
