@@ -110,6 +110,16 @@ class Todo(BaseEntity):
         if local_date is not None:
             self.date_key = local_date.isoformat()
 
+    def anchor_time_to_date(self) -> None:
+        """시리즈 base 전용 — align_date_to_time 의 반대: 시간을 date_key 로 맞춘다.
+
+        base 의 date_key 는 시리즈 시작일(서버 슬롯 계산의 기준)이라 옮길 수 없다. 그런데
+        start_time 의 로컬 날짜가 date_key 와 어긋나면 Google 의 DTSTART 와 서버 슬롯 기준이
+        달라져, 요일 기반 RRULE(BYDAY — 주간 복수 요일, 월간 n번째 요일)이 Google 에서
+        서버 회차와 하루 어긋난 날짜로 펼쳐진다. 로컬 벽시계 시각과 start~end 일수는 유지.
+        """
+        self.move_to(self.date_key)
+
     def _time_local_date(self) -> date | None:
         """start(없으면 end)의 로컬 날짜 — date_key 와 일치해야 하는 기준."""
         anchor = self.start_time or self.end_time

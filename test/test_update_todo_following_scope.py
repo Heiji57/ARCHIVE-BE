@@ -365,3 +365,31 @@ async def test_following_split_preserves_weekdays_and_month_week():
     )
     assert repo.by_id["todo_master"].recurrence_rule.weekdays == (0, 2)
     assert outcome.todo.recurrence_rule == RecurrenceRule(unit="week", interval=2, weekdays=(0, 2))
+
+
+async def test_following_from_moved_exception_anchors_new_base_time_to_slot():
+    """다른 날로 옮겨 둔 예외 row 에서 "following" 분리 → 새 base 는 원래 슬롯(from_slot)을
+    date_key 로 갖는다. 시간은 그 예외 row 것을 이어받되 date_key 로 맞춰야 한다 — 어긋나면
+    Google DTSTART 와 서버 슬롯 기준이 달라져 요일 기반 RRULE 이 하루 밀린다."""
+    master = _master()
+    master.date_key = "2026-08-05"  # 첫 번째 수요일
+    master.recurrence_rule = RecurrenceRule(unit="month", interval=1, month_week=1)
+    master.timezone = "Asia/Seoul"
+    exc = _materialized_exception(master, "2026-09-02")
+    exc.timezone = "Asia/Seoul"
+    # 09-02(수) 슬롯을 09-03(목) KST 10:00 으로 옮겨 둔 상태
+    exc.date_key = "2026-09-03"
+    exc.start_time = datetime(2026, 9, 3, 1, 0, tzinfo=timezone.utc)
+    repo = FakeTodoRepo([master, exc])
+
+    result = (
+        await UpdateTodoUseCase(repo).execute(
+            UpdateTodoCommand(
+                id=exc.id, user_id="user_1", recurrence_scope="following", title="v2"
+            )
+        )
+    ).todo
+
+    assert result.date_key == "2026-09-02"
+    # 벽시계 10:00 유지, 날짜는 from_slot(09-02) — KST 09-02 10:00 == 09-02 01:00Z
+    assert result.start_time == datetime(2026, 9, 2, 1, 0, tzinfo=timezone.utc)

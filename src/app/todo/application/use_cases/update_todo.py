@@ -209,6 +209,9 @@ class UpdateTodoUseCase:
             due_date_key=field_source.due_date_key,
         )
         self._apply_patch(new_base, cmd)
+        # source 가 다른 날로 옮겨 둔 예외 row 면 시간이 from_slot 과 어긋난다
+        # — base 불변식(start_time 로컬 날짜 == date_key)으로 맞춘다.
+        new_base.anchor_time_to_date()
         saved = await self._todo_repo.save(new_base)
         return UpdateTodoOutcome(todo=saved, extra_push_todo_id=extra_push_todo_id)
 
@@ -296,6 +299,11 @@ class UpdateTodoUseCase:
         )
         if cmd.date_key is None and time_changed and not todo.is_series_base:
             todo.align_date_to_time()
+        # base 는 반대로 시간을 date_key 에 맞춘다 — start_time 로컬 날짜(Google DTSTART)와
+        # date_key(슬롯 기준)가 어긋나면 BYDAY RRULE 이 Google 에서 하루 밀린다. 규칙만
+        # 바뀌는 경우도 포함(예전에 어긋난 채 저장된 base 가 요일 기반 규칙으로 바뀔 때).
+        if todo.is_series_base and (time_changed or cmd.recurrence_rule is not None):
+            todo.anchor_time_to_date()
         if cmd.tags is not UNSET:
             todo.tags = cmd.tags  # type: ignore[assignment]
         if cmd.due_date_key is not UNSET:
