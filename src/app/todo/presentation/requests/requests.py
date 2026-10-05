@@ -31,9 +31,13 @@ def _validate_tags(v: list[str]) -> list[str]:
 
 
 class RecurrenceRuleRequest(BaseModel):
-    unit: Literal["day", "week"]
+    unit: Literal["day", "week", "month", "year"]
     interval: int
     until: str | None = None
+    # unit=week 전용 — 0=월 … 6=일, 1~7개·중복 없음. 생략/null = 시작일 요일.
+    weekdays: list[int] | None = None
+    # unit=month 전용·필수 — 1~4 = n번째, -1 = 마지막 (요일은 시작일 요일).
+    month_week: Literal[1, 2, 3, 4, -1] | None = None
 
     @field_validator("interval")
     @classmethod
@@ -49,8 +53,37 @@ class RecurrenceRuleRequest(BaseModel):
             raise ValueError("until must be in YYYY-MM-DD format")
         return v
 
+    @field_validator("weekdays")
+    @classmethod
+    def weekdays_values(cls, v: list[int] | None) -> list[int] | None:
+        if v is None:
+            return v
+        if not v:
+            raise ValueError("weekdays must not be empty")
+        if any(not (0 <= d <= 6) for d in v):
+            raise ValueError("weekdays items must be between 0 and 6")
+        if len(set(v)) != len(v):
+            raise ValueError("weekdays must not contain duplicates")
+        return sorted(v)
+
+    @model_validator(mode="after")
+    def unit_specific_fields(self) -> "RecurrenceRuleRequest":
+        if self.weekdays is not None and self.unit != "week":
+            raise ValueError("weekdays is only allowed when unit is 'week'")
+        if self.unit == "month" and self.month_week is None:
+            raise ValueError("month_week is required when unit is 'month'")
+        if self.month_week is not None and self.unit != "month":
+            raise ValueError("month_week is only allowed when unit is 'month'")
+        return self
+
     def to_domain(self) -> RecurrenceRule:
-        return RecurrenceRule(unit=self.unit, interval=self.interval, until=self.until)
+        return RecurrenceRule(
+            unit=self.unit,
+            interval=self.interval,
+            until=self.until,
+            weekdays=tuple(self.weekdays) if self.weekdays is not None else None,
+            month_week=self.month_week,
+        )
 
 
 class TodoCreateRequest(BaseModel):

@@ -326,3 +326,42 @@ async def test_following_from_later_slot_still_splits():
     assert master.recurrence_rule is not None
     assert master.recurrence_rule.until == "2026-08-05"
     assert outcome.extra_push_todo_id == "todo_master", "단축된 옛 base 재push 신호"
+
+
+async def test_following_split_preserves_weekdays_and_month_week():
+    """규칙을 복사할 때 unit/interval 만 옮기면 weekdays/month_week 가 사라져
+    월간 반복이 "시작일 기준" 으로, 맞춤 주간 반복이 단일 요일로 바뀐다."""
+    master = _master()
+    master.date_key = "2026-08-05"  # 첫 번째 수요일
+    master.recurrence_rule = RecurrenceRule(unit="month", interval=1, month_week=1)
+    repo = FakeTodoRepo([master])
+
+    outcome = await UpdateTodoUseCase(repo).execute(
+        UpdateTodoCommand(
+            id=f"{master.id}::2026-10-07",
+            user_id="user_1",
+            recurrence_scope="following",
+            title="Renamed",
+        )
+    )
+
+    # 옛 base: until 만 잘리고 month_week 는 유지.
+    assert repo.by_id["todo_master"].recurrence_rule == RecurrenceRule(
+        unit="month", interval=1, month_week=1, until="2026-10-06"
+    )
+    # 새 base: 규칙 그대로(until 없이) 이어받음.
+    assert outcome.todo.recurrence_rule == RecurrenceRule(unit="month", interval=1, month_week=1)
+
+    weekly = _master()
+    weekly.recurrence_rule = RecurrenceRule(unit="week", interval=2, weekdays=(0, 2))
+    repo = FakeTodoRepo([weekly])
+    outcome = await UpdateTodoUseCase(repo).execute(
+        UpdateTodoCommand(
+            id=f"{weekly.id}::2026-08-12",
+            user_id="user_1",
+            recurrence_scope="following",
+            title="Renamed",
+        )
+    )
+    assert repo.by_id["todo_master"].recurrence_rule.weekdays == (0, 2)
+    assert outcome.todo.recurrence_rule == RecurrenceRule(unit="week", interval=2, weekdays=(0, 2))

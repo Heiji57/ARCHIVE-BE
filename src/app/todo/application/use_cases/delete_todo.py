@@ -1,9 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 
 from app.shared.domain.utils.id import generate_id
 from app.todo.domain.exceptions.exceptions import TodoNotFoundException
-from app.todo.domain.models.todo import RecurrenceRule, Todo
+from app.todo.domain.models.todo import Todo
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.domain.utils.recurrence import (
@@ -158,9 +158,8 @@ class DeleteTodoUseCase:
         old_rule = master.recurrence_rule
         if old_rule:
             new_until = prev_date if (old_rule.until is None or old_rule.until > prev_date) else old_rule.until
-            master.recurrence_rule = RecurrenceRule(
-                unit=old_rule.unit, interval=old_rule.interval, until=new_until
-            )
+            # replace — weekdays/month_week 등 나머지 필드는 그대로 보존한다.
+            master.recurrence_rule = replace(old_rule, until=new_until)
             await self._todo_repo.save(master)
 
         # from_slot 이후 exception row 삭제
