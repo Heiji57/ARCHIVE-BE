@@ -58,7 +58,7 @@ class FolderRepository(IFolderRepository):
         result = await self._session.execute(
             select(FolderModel)
             .where(FolderModel.user_id == user_id)
-            .order_by(FolderModel.name.asc(), FolderModel.id.asc())
+            .order_by(FolderModel.name.asc(), FolderModel.created_at.asc())
             .limit(limit)
         )
         return [self._to_entity(m) for m in result.scalars()]
