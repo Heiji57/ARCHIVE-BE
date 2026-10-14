@@ -70,7 +70,7 @@ class FolderRepository(IFolderRepository):
             return []
         stmt = self._children_scope(user_id, parent_folder_id)
         result = await self._session.execute(
-            stmt.order_by(FolderModel.created_at.asc(), FolderModel.id.asc())
+            stmt.order_by(FolderModel.name.asc(), FolderModel.id.asc())
             .offset(offset)
             .limit(limit)
         )
