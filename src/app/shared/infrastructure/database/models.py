@@ -8,6 +8,7 @@ Alembic(`migrations/env.py`)이 시작할 때 이 모듈을 import 한다. 새 �
 
 import app.ai.infrastructure.persistence.models.ai_settings_model  # noqa: F401
 import app.ai.infrastructure.persistence.models.conversation_model  # noqa: F401
+import app.ai.infrastructure.persistence.models.learning_model  # noqa: F401
 import app.ai.infrastructure.persistence.models.suggestion_model  # noqa: F401
 import app.auth.infrastructure.persistence.models.oauth_connection_model  # noqa: F401
 import app.calendars.infrastructure.persistence.models.calendar_model  # noqa: F401

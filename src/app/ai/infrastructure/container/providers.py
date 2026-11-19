@@ -2,12 +2,14 @@ from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.application.ports import ChatModelPort, CommitPort, RetroPort, TodoPort
+from app.ai.application.services.learning import LearningService
 from app.ai.application.use_cases.ai_settings import AiSettingsUseCase
 from app.ai.application.use_cases.conversations import (
     ConversationsUseCase,
     PostMessageUseCase,
     RunAiTurnUseCase,
 )
+from app.ai.application.use_cases.learning import ResetLearningUseCase
 from app.ai.application.use_cases.proposals import ProposalsUseCase
 from app.ai.application.use_cases.suggestions import (
     ApplySuggestionUseCase,
@@ -21,6 +23,7 @@ from app.ai.domain.repositories.repository import (
     IAiRetentionRepository,
     IAiSettingsRepository,
     IAiUsageRepository,
+    IBehaviorRepository,
     IConversationRepository,
     IProposalRepository,
     ISuggestionRepository,
@@ -28,6 +31,7 @@ from app.ai.domain.repositories.repository import (
 from app.ai.infrastructure.adapters.commit_adapter import CommitAdapter
 from app.ai.infrastructure.adapters.retro_adapter import RetroAdapter
 from app.ai.infrastructure.adapters.todo_adapter import TodoAdapter
+from app.ai.infrastructure.adapters.todo_observer import LearningTodoObserver
 from app.ai.infrastructure.llm.gemini_chat import GeminiChatModel
 from app.ai.infrastructure.persistence.repositories.ai_settings_repo import (
     AiRetentionRepository,
@@ -37,11 +41,13 @@ from app.ai.infrastructure.persistence.repositories.conversation_repo import (
     ConversationRepository,
     ProposalRepository,
 )
+from app.ai.infrastructure.persistence.repositories.learning_repo import BehaviorRepository
 from app.ai.infrastructure.persistence.repositories.suggestion_repo import (
     AiUsageRepository,
     SuggestionRepository,
 )
 from app.shared.infrastructure.config.settings import AppConfig
+from app.todo.application.ports import TodoChangeObserver
 from app.user.domain.repositories.repository import IUserRepository
 
 
@@ -75,6 +81,15 @@ class AiProvider(Provider):
     @provide
     def ai_retention_repo(self, session: AsyncSession) -> IAiRetentionRepository:
         return AiRetentionRepository(session)
+
+    @provide
+    def behavior_repo(self, session: AsyncSession) -> IBehaviorRepository:
+        return BehaviorRepository(session)
+
+    learning = provide(LearningService)
+    reset_learning = provide(ResetLearningUseCase)
+    # 할 일 수정 알림 → 행동 학습 기록(할 일 모듈은 포트만 안다)
+    todo_observer = provide(LearningTodoObserver, provides=TodoChangeObserver)
 
     todo_port = provide(TodoAdapter, provides=TodoPort)
     commit_port = provide(CommitAdapter, provides=CommitPort)

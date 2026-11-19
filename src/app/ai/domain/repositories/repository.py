@@ -3,6 +3,7 @@ from datetime import date, datetime
 
 from app.ai.domain.models.ai_settings import AiMemory, AiSchedule, AiSettings
 from app.ai.domain.models.conversation import ChatMessage, Conversation, Proposal
+from app.ai.domain.models.learning import BehaviorEvent, BehaviorModel
 from app.ai.domain.models.suggestion import Suggestion
 
 
@@ -136,4 +137,39 @@ class IAiRetentionRepository(ABC):
     async def purge_older_than(self, user_id: str, before: datetime) -> int:
         """updated_at(없으면 created_at)이 before 이전인 대화를 지운다(메시지 함께). 적용 안 한
         제안(pending/dismissed)도 지운다 — 적용한 제안은 되돌리기 기록이라 남긴다. 지운 대화 수."""
+        ...
+
+
+class IBehaviorRepository(ABC):
+    """행동 학습 기록과 통계 캐시."""
+
+    @abstractmethod
+    async def add_event(
+        self, user_id: str, event: BehaviorEvent, mark_stale: bool = True
+    ) -> None:
+        """기록을 남기고(mark_stale 면) 통계 캐시를 stale 로 표시한다."""
+        ...
+
+    @abstractmethod
+    async def list_events_since(self, user_id: str, since: datetime) -> list[BehaviorEvent]:
+        """오래된 순."""
+        ...
+
+    @abstractmethod
+    async def find_model(self, user_id: str) -> tuple[BehaviorModel, datetime, bool] | None:
+        """(모델, 계산 시각, stale) 또는 없으면 None."""
+        ...
+
+    @abstractmethod
+    async def save_model(self, user_id: str, model: BehaviorModel, computed_at: datetime) -> None:
+        ...
+
+    @abstractmethod
+    async def reset(self, user_id: str) -> None:
+        """기록과 통계를 모두 지운다."""
+        ...
+
+    @abstractmethod
+    async def purge_before(self, before: datetime) -> int:
+        """모든 사용자의 before 이전 기록을 지운다(보관 기간). 지운 수."""
         ...

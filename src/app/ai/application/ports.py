@@ -26,8 +26,13 @@ class TodoPort(Protocol):
         """가상 반복 회차 id 도 받는다."""
         ...
 
-    async def apply_patch(self, user_id: str, todo_id: str, patch: dict[str, Any]) -> str:
-        """PATCH /todos/{id} 규칙으로 바꾼다. 바뀐 할 일 id(가상 회차면 새 예외 row id)."""
+    async def apply_patch(
+        self, user_id: str, todo_id: str, patch: dict[str, Any], observe: bool = True
+    ) -> str:
+        """PATCH /todos/{id} 규칙으로 바꾼다. 바뀐 할 일 id(가상 회차면 새 예외 row id).
+
+        observe=False 면 행동 학습에 알리지 않는다 — 되돌리기는 사용자의 새 행동이 아니라
+        앞선 적용을 지우는 것이라(옮김·시간 정함이 두 번 세지지 않게)."""
         ...
 
     async def list_range(self, user_id: str, from_key: str, to_key: str) -> list[TodoSnapshot]:
@@ -48,6 +53,10 @@ class TodoPort(Protocol):
 
     async def delete(self, user_id: str, todo_id: str) -> None:
         """DELETE /todos/{id}(이번 회차) 규칙으로 지운다(Google 일정 정리 포함)."""
+        ...
+
+    async def restore(self, user_id: str, todo_id: str) -> bool:
+        """휴지통에서 되살린다(휴지통 API 와 같은 후속 작업). 휴지통에 없으면 False."""
         ...
 
 

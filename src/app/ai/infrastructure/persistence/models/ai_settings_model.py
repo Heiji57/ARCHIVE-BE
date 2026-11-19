@@ -24,6 +24,9 @@ class AiSettingsModel(Base):
         Boolean, nullable=False, server_default=text("true")
     )
     retention_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("90"))
+    learning_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

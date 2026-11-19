@@ -136,6 +136,8 @@ def _todo_port(s) -> TodoAdapter:
         CreateTodoUseCase(repo, UserSettingsRepository(s), cal),
         DeleteTodoUseCase(repo),
         TodoEmbeddingRepository(s),
+        None,  # type: ignore[arg-type]  # 휴지통 되살리기 — 이 테스트에선 안 씀
+        None,  # type: ignore[arg-type]  # 행동 학습 알림 — 이 테스트에선 안 씀
     )
 
 

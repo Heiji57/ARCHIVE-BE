@@ -161,7 +161,10 @@ class ProposalsUseCase:
             if record["created"]:
                 await self._todos.delete(user_id, record["todo_id"])
             else:
-                await self._todos.apply_patch(user_id, record["todo_id"], record["previous"])
+                # 되돌림은 행동 학습에 새 옮김·시간 정함으로 세지 않는다(적용을 지우는 것)
+                await self._todos.apply_patch(
+                    user_id, record["todo_id"], record["previous"], observe=False
+                )
         now = datetime.now(UTC)
         saved = await self._repo.save(replace(proposal, status="undone", updated_at=now))
         return UndoResult(saved, skipped)

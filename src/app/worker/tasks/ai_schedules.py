@@ -6,7 +6,9 @@
   (링크 = 그 대화)으로 간다. 만들어진 제안은 사용자가 알림에서 열어 적용한다.
 - `worker.purge_ai_conversations`(하루): 사용자 `retention_days` 보다 오래된 대화와
   적용 안 한 제안을
-  지운다. 0(보관 안 함)은 하루 지난 것을 지운다.
+  지운다. 0(보관 안 함)은 하루 지난 것을 지운다. 행동 학습 기록은 대화 보관 기간과 따로
+  `EVENT_RETENTION_DAYS`(180일 — 반감기 30일이라 그보다 오래된 기록은 무게가 거의 없다)가
+  지나면 지운다.
 
 예약마다 요청 스코프(트랜잭션) 하나 — 한 예약의 실패가 다른 예약을 막지 않는다.
 """
@@ -21,7 +23,12 @@ from app.ai.application.use_cases.conversations import ConversationsUseCase, Pos
 from app.ai.application.use_cases.usage import AiUsageService
 from app.ai.domain.exceptions.exceptions import AiUsageLimitExceededException
 from app.ai.domain.models.ai_settings import AiSettings
-from app.ai.domain.repositories.repository import IAiRetentionRepository, IAiSettingsRepository
+from app.ai.domain.models.learning import EVENT_RETENTION_DAYS
+from app.ai.domain.repositories.repository import (
+    IAiRetentionRepository,
+    IAiSettingsRepository,
+    IBehaviorRepository,
+)
 from app.ai.domain.services.schedule_rules import schedule_due
 from app.user.domain.repositories.repository import IUserRepository
 from app.user.infrastructure.persistence.models.user_model import UserModel
@@ -109,6 +116,12 @@ async def purge_ai_conversations_task() -> None:
         except Exception:
             # 사용자별 격리 경계
             _log.exception("ai_retention.failed", user_id=user_id)
+    async with container() as request:
+        events = await (await request.get(IBehaviorRepository)).purge_before(
+            now - timedelta(days=EVENT_RETENTION_DAYS)
+        )
+    if events:
+        _log.info("ai_learning.purged", events=events)
 
 
 async def _user_ids(request) -> list[str]:  # type: ignore[no-untyped-def]
