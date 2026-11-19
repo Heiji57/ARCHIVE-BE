@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.shared.infrastructure.database.models  # noqa: F401  (FK 대상 테이블 등록)
+from app.ai.application.services.learning import LearningService
 from app.ai.application.use_cases.suggestions import (
     ApplySuggestionUseCase,
     DismissSuggestionUseCase,
@@ -35,16 +36,25 @@ from app.ai.domain.services.suggestion_rules import (
     texts,
 )
 from app.ai.infrastructure.adapters.todo_adapter import TodoAdapter
+from app.ai.infrastructure.adapters.todo_observer import LearningTodoObserver
+from app.ai.infrastructure.persistence.repositories.ai_settings_repo import AiSettingsRepository
+from app.ai.infrastructure.persistence.repositories.learning_repo import BehaviorRepository
 from app.ai.infrastructure.persistence.repositories.suggestion_repo import (
     AiUsageRepository,
     SuggestionRepository,
 )
+from app.calendars.infrastructure.persistence.repositories.calendar_repo import CalendarRepository
 from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
     UserSettingsRepository,
 )
 from app.todo.application.use_cases.batch_update_todos import BatchUpdateTodosUseCase
+from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
+from app.todo.application.use_cases.trash import TodoTrashUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
+from app.topic.infrastructure.persistence.repositories.chunk_repo import (
+    TodoEmbeddingRepository,
+)
 from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 
 _SEOUL = ZoneInfo("Asia/Seoul")
@@ -157,12 +167,28 @@ async def factory():
 def _svc(session) -> SuggestionService:
     todo_repo = TodoRepository(session)
     batch = BatchUpdateTodosUseCase(todo_repo, UpdateTodoUseCase(todo_repo))
+    learning = LearningService(BehaviorRepository(session), AiSettingsRepository(session))
     return SuggestionService(
         SuggestionRepository(session),
-        TodoAdapter(todo_repo, batch, _Queue(), None, None, None),  # type: ignore[arg-type]
+        TodoAdapter(  # type: ignore[arg-type]
+            todo_repo,
+            batch,
+            _Queue(),
+            None,
+            DeleteTodoUseCase(todo_repo),
+            TodoEmbeddingRepository(session),
+            TodoTrashUseCase(
+                todo_repo,
+                UserSettingsRepository(session),
+                CalendarRepository(session),
+                TodoEmbeddingRepository(session),
+            ),
+            LearningTodoObserver(learning, UserRepository(session)),
+        ),
         _NoCommits(),
         UserSettingsRepository(session),
         UserRepository(session),
+        learning,
     )
 
 

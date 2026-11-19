@@ -3,6 +3,7 @@
 할 일을 바꾸는 모든 경로(할 일 라우터, AI 제안 적용)가 같은 후속 작업을 하도록 한곳에 둔다.
 """
 
+from app.todo.application.ports import TodoChangeObserver
 from app.todo.domain.models.todo import Todo
 from app.topic.domain.repositories.repository import IEmbeddingQueueRepository
 
@@ -26,11 +27,19 @@ async def after_update(
     user_id: str,
     todo: Todo,
     extra_push_todo_id: str | None,
+    *,
+    before: Todo | None = None,
+    observer: TodoChangeObserver | None = None,
 ) -> None:
-    """수정 뒤 후속 작업 — Google Calendar push 예약, 임베딩 갱신 표시."""
+    """수정 뒤 후속 작업 — Google Calendar push 예약, 임베딩 갱신 표시, 변경 알림(행동 학습).
+
+    `before` 는 한 할 일(한 회차)을 고쳤을 때만 있다 — 시리즈 전체 수정은 알리지 않는다.
+    """
     if todo.calendar_push_status in ("pending", "pending_delete"):
         enqueue_push(user_id, todo.id)
     if extra_push_todo_id:
         enqueue_push(user_id, extra_push_todo_id)
     if not todo.is_series_base:
         await queue_repo.enqueue("todo", todo.id, user_id)
+    if before is not None and observer is not None:
+        await observer.changed(user_id, before, todo)

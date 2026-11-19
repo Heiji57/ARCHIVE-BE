@@ -43,6 +43,9 @@ class UpdateTodoOutcome:
     """
     todo: Todo
     extra_push_todo_id: str | None = None
+    # 한 회차·한 할 일을 고쳤을 때 고치기 전 값(가상 회차면 그 회차의 투영). 시리즈 전체·
+    # 이후 전체 수정은 None — 행동 학습(AI)이 "한 일을 옮김/끝냄" 만 기록하게 한다.
+    before: Todo | None = None
 
 
 class UpdateTodoUseCase:
@@ -74,7 +77,8 @@ class UpdateTodoUseCase:
                     await self._todo_repo.delete_all_exceptions(master.id, cmd.user_id)
                     return UpdateTodoOutcome(todo=saved)
         # 일반 exception row 또는 일반 todo
-        return UpdateTodoOutcome(todo=await self._update_real(todo, cmd))
+        before = replace(todo, tags=list(todo.tags))
+        return UpdateTodoOutcome(todo=await self._update_real(todo, cmd), before=before)
 
     # ── 가상 인스턴스 (DB 미저장) → 실체화 후 수정 ─────────────────────────────
 
@@ -92,7 +96,10 @@ class UpdateTodoUseCase:
         if scope == "following":
             return await self._update_following(master, slot_date, cmd)
         # "this" — exception row 생성/수정
-        return UpdateTodoOutcome(todo=await self._materialize_and_update(master, slot_date, cmd))
+        return UpdateTodoOutcome(
+            todo=await self._materialize_and_update(master, slot_date, cmd),
+            before=make_virtual(master, slot_date),
+        )
 
     async def _materialize_and_update(
         self, master: Todo, slot_date: str, cmd: UpdateTodoCommand

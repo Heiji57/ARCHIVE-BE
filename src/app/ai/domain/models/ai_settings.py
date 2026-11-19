@@ -24,6 +24,9 @@ class AiSettings:
     deep_search: bool = False  # L2
     memory_enabled: bool = True  # L3
     retention_days: int = 90  # L6
+    # 행동 학습 — 추천 반응·할 일 옮김/끝냄을 기록해 추천 순서·시각·길이에 쓴다.
+    # 끄면 기록도 안 한다.
+    learning_enabled: bool = True
 
     def enabled_sources(self) -> frozenset[str]:
         return frozenset(s for s in SOURCES if self.tools.get(s, True))

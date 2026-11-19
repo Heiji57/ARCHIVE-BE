@@ -20,6 +20,7 @@ from app.todo.application.dtos.queries import (
     GetTodoStatsQuery,
     SearchTagsQuery,
 )
+from app.todo.application.ports import TodoChangeObserver
 from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
 from app.todo.application.use_cases.batch_update_todos import BatchUpdateTodosUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
@@ -57,7 +58,10 @@ from app.todo.presentation.responses.responses import (
     TodoResponse,
     TodoStatsResponse,
 )
-from app.topic.domain.repositories.repository import IEmbeddingQueueRepository, ITodoEmbeddingRepository
+from app.topic.domain.repositories.repository import (
+    IEmbeddingQueueRepository,
+    ITodoEmbeddingRepository,
+)
 from app.user.domain.repositories.repository import IUserRepository
 
 router = APIRouter(prefix="/todos", tags=["todos"], route_class=DishkaRoute)
@@ -363,10 +367,18 @@ async def update_todo(
     body: TodoUpdateRequest,
     use_case: FromDishka[UpdateTodoUseCase],
     queue_repo: FromDishka[IEmbeddingQueueRepository],
+    observer: FromDishka[TodoChangeObserver],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[TodoResponse]:
     outcome = await use_case.execute(_to_update_command(todo_id, current_user.id, body))
-    await _after_update(queue_repo, current_user.id, outcome.todo, outcome.extra_push_todo_id)
+    await _after_update(
+        queue_repo,
+        current_user.id,
+        outcome.todo,
+        outcome.extra_push_todo_id,
+        before=outcome.before,
+        observer=observer,
+    )
     return ApiResponse.ok(TodoResponse.from_entity(outcome.todo))
 
 
@@ -379,6 +391,7 @@ async def batch_update_todos(
     body: TodoBatchRequest,
     use_case: FromDishka[BatchUpdateTodosUseCase],
     queue_repo: FromDishka[IEmbeddingQueueRepository],
+    observer: FromDishka[TodoChangeObserver],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[TodoBatchResponse]:
     """여러 todo 를 한 번에 수정 (전부 아니면 전무). 하나라도 실패하면 400 TODO_BATCH_FAILED."""
@@ -387,7 +400,14 @@ async def batch_update_todos(
         [_to_update_command(op.id, current_user.id, op.patch) for op in body.operations],
     )
     for outcome in result.outcomes:
-        await _after_update(queue_repo, current_user.id, outcome.todo, outcome.extra_push_todo_id)
+        await _after_update(
+            queue_repo,
+            current_user.id,
+            outcome.todo,
+            outcome.extra_push_todo_id,
+            before=outcome.before,
+            observer=observer,
+        )
     return ApiResponse.ok(
         TodoBatchResponse(
             todos=[TodoResponse.from_entity(o.todo) for o in result.outcomes],

@@ -12,12 +12,14 @@ from app.todo.application.dtos.queries import (
     GetTodosByRangeQuery,
     GetTodosFilteredQuery,
 )
+from app.todo.application.ports import TodoChangeObserver
 from app.todo.application.use_cases.batch_update_todos import BatchUpdateTodosUseCase
 from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
 from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
 from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
 from app.todo.application.use_cases.get_todos_filtered import GetTodosFilteredUseCase
+from app.todo.application.use_cases.trash import TodoTrashUseCase
 from app.todo.domain.models.todo import Todo
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.domain.utils.recurrence import is_virtual_id, make_virtual, parse_virtual_id
@@ -40,6 +42,8 @@ def to_snapshot(t: Todo) -> TodoSnapshot:
         end_time=t.end_time,
         timezone=t.timezone,
         due_date_key=t.due_date_key,
+        tags=tuple(t.tags),
+        recurring=t.series_id is not None or is_virtual_id(t.id) or t.is_series_base,
     )
 
 
@@ -73,6 +77,8 @@ class TodoAdapter:
         create_uc: CreateTodoUseCase,
         delete_uc: DeleteTodoUseCase,
         todo_emb_repo: ITodoEmbeddingRepository,
+        trash_uc: TodoTrashUseCase,
+        observer: TodoChangeObserver,
     ) -> None:
         self._repo = todo_repo
         self._batch = batch_uc
@@ -80,6 +86,8 @@ class TodoAdapter:
         self._create = create_uc
         self._delete = delete_uc
         self._emb = todo_emb_repo
+        self._trash = trash_uc
+        self._observer = observer
 
     async def list_on(self, user_id: str, date_key: str) -> list[TodoSnapshot]:
         todos = await GetTodosByDateUseCase(self._repo).execute(
@@ -110,10 +118,19 @@ class TodoAdapter:
         todo = await self._repo.find_by_id(todo_id, user_id)
         return to_snapshot(todo) if todo else None
 
-    async def apply_patch(self, user_id: str, todo_id: str, patch: dict[str, Any]) -> str:
+    async def apply_patch(
+        self, user_id: str, todo_id: str, patch: dict[str, Any], observe: bool = True
+    ) -> str:
         result = await self._batch.execute(user_id, [to_update_command(user_id, todo_id, patch)])
         outcome = result.outcomes[0]
-        await after_update(self._queue, user_id, outcome.todo, outcome.extra_push_todo_id)
+        await after_update(
+            self._queue,
+            user_id,
+            outcome.todo,
+            outcome.extra_push_todo_id,
+            before=outcome.before,
+            observer=self._observer if observe else None,
+        )
         return outcome.todo.id
 
     async def list_range(self, user_id: str, from_key: str, to_key: str) -> list[TodoSnapshot]:
@@ -156,3 +173,14 @@ class TodoAdapter:
         if outcome.push_todo_id:
             enqueue_push(user_id, outcome.push_todo_id)
         await self._emb.delete_by_todo(todo_id)
+
+    async def restore(self, user_id: str, todo_id: str) -> bool:
+        """휴지통 되살리기(`POST /trash/todo/{id}/restore`)와 같은 후속 작업 — push·임베딩."""
+        restored = await self._trash.restore(user_id, todo_id)
+        if restored is None:
+            return False
+        if restored.push:
+            enqueue_push(user_id, todo_id)
+        if not restored.todo.is_series_base:
+            await self._queue.enqueue("todo", todo_id, user_id)
+        return True
