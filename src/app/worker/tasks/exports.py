@@ -9,6 +9,7 @@
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from redis.asyncio import Redis
@@ -43,14 +44,25 @@ _DONE_TEXT = {
 }
 
 
-@celery_app.task(name="worker.build_export")
-async def build_export_task(export_id: str) -> None:
+# BackgroundTasks 는 이 스택(dishka 미들웨어)에서 요청 세션 커밋보다 먼저 돈다 — 워커가 아직
+# 커밋 안 된 행을 읽을 수 있으므로, 안 보이면 잠시 뒤 다시(요약 워커와 같은 방식, AsyncContextTask).
+_VISIBILITY_RETRIES = 5
+
+
+@celery_app.task(name="worker.build_export", bind=True, max_retries=_VISIBILITY_RETRIES)
+async def build_export_task(self: Any, export_id: str) -> None:
     settings = get_settings()
     storage = LocalExportStorage(settings.auth.export_dir)
     factory = get_worker_session_factory()
     async with factory.begin() as session:
         job = await ExportRepository(session).get(export_id)
-    if job is None or job.status != "pending":
+    if job is None:
+        if self.request.retries < _VISIBILITY_RETRIES:
+            raise self.retry(countdown=1)
+        # 끝까지 안 보이면 요청이 롤백된 것 — 만들 것이 없다.
+        _log.warning("export.row_not_visible", export_id=export_id)
+        return
+    if job.status != "pending":
         return
     structlog.contextvars.bind_contextvars(user_id=job.user_id)
     key = f"{job.id}.zip"

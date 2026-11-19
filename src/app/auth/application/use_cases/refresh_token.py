@@ -28,7 +28,7 @@ class RefreshTokenUseCase:
         rotated = await self._session_service.rotate(
             raw_refresh_token, RequestMeta(user_agent=device_info, ip=ip)
         )
-        # 지운 계정의 세션이 남아 있어도(커밋 뒤 세션 폐기가 실패한 경우) 새 토큰을 주지 않는다.
+        # 지운 계정의 세션이 남아 있어도(마무리 작업의 세션 폐기가 늦거나 실패한 경우) 새 토큰을 주지 않는다.
         if await self._user_repo.find_by_id(rotated.user_id) is None:
             await self._session_service.revoke(rotated.session_id, rotated.user_id)
             raise RefreshTokenInvalidException()

@@ -5,16 +5,13 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.auth.application.ports import (
+    AccountDeletionDispatcher,
     AvatarStorage,
     DeletedAccountMarker,
-    ExternalTokenRevoker,
 )
 from app.auth.application.services.session_service import SessionService
 from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
-from app.auth.application.use_cases.delete_account import (
-    DeleteAccountUseCase,
-    FinishAccountDeletionUseCase,
-)
+from app.auth.application.use_cases.delete_account import DeleteAccountUseCase
 from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
 from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
@@ -46,7 +43,7 @@ from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
 from app.auth.infrastructure.cache.password_reset import PasswordResetCache
 from app.auth.infrastructure.external.account_deletion import (
-    CeleryTokenRevoker,
+    CeleryAccountDeletionDispatcher,
     RedisDeletedAccountMarker,
 )
 from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
@@ -303,9 +300,9 @@ class AppProvider(Provider):
         return LocalAvatarStorage(config.auth.avatar_dir)
 
     @provide
-    def external_token_revoker(self, config: AppConfig) -> ExternalTokenRevoker:
+    def account_deletion_dispatcher(self, config: AppConfig) -> AccountDeletionDispatcher:
         redis = Redis.from_url(config.redis.auth_url, decode_responses=True)
-        return CeleryTokenRevoker(redis)
+        return CeleryAccountDeletionDispatcher(redis)
 
     @provide
     def deleted_account_marker(self, config: AppConfig) -> DeletedAccountMarker:
@@ -654,10 +651,8 @@ class RequestProvider(Provider):
         return UploadAvatarUseCase(user_repo, storage)
 
     @provide
-    def delete_avatar_use_case(
-        self, user_repo: IUserRepository, storage: AvatarStorage
-    ) -> DeleteAvatarUseCase:
-        return DeleteAvatarUseCase(user_repo, storage)
+    def delete_avatar_use_case(self, user_repo: IUserRepository) -> DeleteAvatarUseCase:
+        return DeleteAvatarUseCase(user_repo)
 
     @provide
     def delete_account_use_case(
@@ -667,16 +662,6 @@ class RequestProvider(Provider):
         calendar_repo: IGoogleCalendarConnectionRepository,
     ) -> DeleteAccountUseCase:
         return DeleteAccountUseCase(user_repo, oauth_repo, calendar_repo)
-
-    @provide
-    def finish_account_deletion_use_case(
-        self,
-        session_service: SessionService,
-        marker: DeletedAccountMarker,
-        storage: AvatarStorage,
-        revoker: ExternalTokenRevoker,
-    ) -> FinishAccountDeletionUseCase:
-        return FinishAccountDeletionUseCase(session_service, marker, storage, revoker)
 
     @provide
     def initiate_oauth_use_case(

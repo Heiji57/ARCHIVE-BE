@@ -130,7 +130,8 @@ class TodoRepository(ITodoRepository):
         due_today = await self._session.scalar(
             select(func.count())
             .select_from(TodoModel)
-            .where(*open_rows, TodoModel.due_date_key == today)
+            # 마감이 따로 없으면 그날(date_key)이 마감 — 지난 마감과 같은 기준.
+            .where(*open_rows, effective_due == today)
         )
         overdue = await self._session.scalar(
             select(func.count()).select_from(TodoModel).where(*open_rows, effective_due < today)
@@ -947,10 +948,11 @@ class TodoRepository(ITodoRepository):
         return {row.tag: row.cnt for row in result}
 
     async def replace_tag(self, user_id: str, old: str, new: str | None) -> list[str]:
+        # 휴지통의 할 일도 바꾼다 — 되살렸을 때 옛 이름·지운 태그가 돌아오지 않게.
         result = await self._session.execute(
-            select(TodoModel.id, TodoModel.tags).where(
-                TodoModel.user_id == user_id, TodoModel.tags.contains([old])
-            )
+            select(TodoModel.id, TodoModel.tags)
+            .where(TodoModel.user_id == user_id, TodoModel.tags.contains([old]))
+            .execution_options(**INCLUDE_DELETED)
         )
         changed: list[str] = []
         for todo_id, tags in result.all():
@@ -960,7 +962,10 @@ class TodoRepository(ITodoRepository):
                 if value is not None and value not in replaced:
                     replaced.append(value)
             await self._session.execute(
-                update(TodoModel).where(TodoModel.id == todo_id).values(tags=replaced)
+                update(TodoModel)
+                .where(TodoModel.id == todo_id)
+                .values(tags=replaced)
+                .execution_options(**INCLUDE_DELETED)
             )
             changed.append(todo_id)
         return changed

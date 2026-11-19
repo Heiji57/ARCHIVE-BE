@@ -6,6 +6,7 @@
 
 import asyncio
 import io
+import time
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -42,6 +43,13 @@ class LocalAvatarStorage:
 
     async def remove(self, key: str) -> None:
         await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
+
+    def stale_keys(self, older_than_seconds: float) -> list[str]:
+        """만든 지 older_than 이 지난 파일 키 — 고아 정리 후보(방금 올린 파일은 건드리지 않게)."""
+        if not self._dir.is_dir():
+            return []
+        cutoff = time.time() - older_than_seconds
+        return [p.name for p in self._dir.iterdir() if p.is_file() and p.stat().st_mtime < cutoff]
 
     def _path(self, key: str) -> Path:
         # 키는 서버가 만든 값이지만 경로 탈출은 한 번 더 막는다.

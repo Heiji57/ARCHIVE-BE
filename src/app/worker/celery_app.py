@@ -31,6 +31,7 @@ _TASK_ROUTES = {
     "worker.build_export": {"queue": "default"},
     "worker.purge_exports": {"queue": "default"},
     "worker.revoke_account_tokens": {"queue": "default"},
+    "worker.finish_account_deletion": {"queue": "default"},
     "worker.dispatch_summaries_for_tz": {"queue": "default"},
     "worker.embed_stale": {"queue": "default"},
     "worker.sync_all_calendars": {"queue": "calendar"},

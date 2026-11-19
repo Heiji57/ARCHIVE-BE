@@ -304,3 +304,22 @@ async def test_push_finalize_after_trash_is_a_noop(factory):
         await repo.soft_delete("todo_tr_push", _A)
         # 워커가 이미 claim 한 뒤 휴지통으로 — finalize 가 반영되지 않아 워커가 새 일정을 정리한다
         assert not await repo.finalize_push_success("todo_tr_push", _A, "att_1", "gcal_new")
+
+
+async def test_tag_rename_also_updates_trashed_todos(factory):
+    async with factory.begin() as s:
+        await _todo(s, "todo_tr_tag", tags=["work"])
+        repo = TodoRepository(s)
+        await repo.soft_delete("todo_tr_tag", _A)
+        changed = await repo.replace_tag(_A, "work", "job")
+        assert changed == ["todo_tr_tag"]  # 휴지통의 할 일도 바뀐다 — 되살려도 옛 이름이 안 돌아온다
+        await _trash(s).restore(_A, "todo", "todo_tr_tag")
+        assert (await repo.find_by_id("todo_tr_tag", _A)).tags == ["job"]
+
+
+async def test_due_today_counts_date_only_todos_like_overdue_does(factory):
+    async with factory.begin() as s:
+        await _todo(s, "todo_tr_due1", date_key="2026-11-16")  # 마감 없음 → 그날이 마감
+        await _todo(s, "todo_tr_due2", date_key="2026-11-10")  # 지난 마감
+        due_today, overdue = await TodoRepository(s).count_open_due(_A, "2026-11-16")
+        assert (due_today, overdue) == (1, 1)

@@ -61,12 +61,14 @@ class _Events:
 
 class _Api:
     async def list_events(self, *a, **kw):
-        return CalendarEventsPage([_cancelled("g1"), _cancelled("g2")], "next")
+        return CalendarEventsPage([_cancelled("g1"), _cancelled("g2"), _cancelled("g3")], "next")
 
 
 class _Todos:
     def __init__(self) -> None:
         self.trashed: list[tuple[str, bool]] = []
+        self.saved: list[Todo] = []
+        self.unlinked: list[str] = []
 
     async def find_by_google_event_ids(self, user_id, ids):
         return [
@@ -78,12 +80,21 @@ class _Todos:
                 date_key="2026-11-16",
                 created_at=_NOW,
                 google_event_id=g,
+                series_id="todo_base" if g == "g3" else None,
+                original_date_key="2026-11-16" if g == "g3" else None,
             )
             for g in ids
         ]
 
     async def soft_delete(self, id, user_id, *, with_series=False):
         self.trashed.append((id, with_series))
+
+    async def save(self, todo):
+        self.saved.append(todo)
+        return todo
+
+    async def clear_calendar_link(self, todo_id, user_id):
+        self.unlinked.append(todo_id)
 
 
 class _Settings:
@@ -118,3 +129,6 @@ async def test_cancelled_events_trash_todos_with_one_notification():
     await uc.execute("u", force=True)
     assert todos.trashed == [("todo_g1", False), ("todo_g2", False)]
     assert notice.calls == [2]
+    # 반복의 한 회차는 휴지통이 아니라 취소(회차 유일 인덱스를 휴지통 행이 차지하지 않게)
+    assert [(t.id, t.status) for t in todos.saved] == [("todo_g3", TaskStatus.CANCELLED)]
+    assert todos.unlinked == ["todo_g3"]

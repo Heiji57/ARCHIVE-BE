@@ -6,10 +6,7 @@ from app.retrospective.application.dtos.commands import CreateEntryCommand
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
-from app.topic.domain.repositories.repository import (
-    IEmbeddingQueueRepository,
-    IEntryChunkRepository,
-)
+from app.topic.domain.repositories.repository import IEmbeddingQueueRepository
 
 _EXCERPT = 300
 
@@ -21,13 +18,11 @@ class RetroAdapter:
         create_uc: CreateEntryUseCase,
         delete_uc: DeleteEntryUseCase,
         queue_repo: IEmbeddingQueueRepository,
-        chunk_repo: IEntryChunkRepository,
     ) -> None:
         self._entries = entry_repo
         self._create = create_uc
         self._delete = delete_uc
         self._queue = queue_repo
-        self._chunks = chunk_repo
 
     async def search(self, user_id: str, query: str, limit: int) -> list[dict[str, Any]]:
         entries, _ = await self._entries.find_by_full_text(user_id, query, page=1, size=limit)
@@ -56,5 +51,5 @@ class RetroAdapter:
         return {"id": entry.id, "content": entry.content} if entry else None
 
     async def delete(self, user_id: str, entry_id: str) -> None:
+        # 일반 삭제와 같이 휴지통으로 — 청크는 남긴다(매칭에서만 빠지고, 되살리면 그대로 쓰인다).
         await self._delete.execute(entry_id=entry_id, user_id=user_id)
-        await self._chunks.delete_by_entry(entry_id)

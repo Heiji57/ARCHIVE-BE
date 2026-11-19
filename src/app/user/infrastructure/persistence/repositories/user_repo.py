@@ -44,6 +44,24 @@ class UserRepository(IUserRepository):
             update(UserModel).where(UserModel.id == id).values(deleted_at=func.now())
         )
 
+    async def is_deleted(self, id: str) -> bool:
+        """deleted_at 이 커밋돼 보이면 True(계정 삭제 마무리 작업이 확인용으로)."""
+        result = await self._session.execute(
+            select(UserModel.id)
+            .where(UserModel.id == id, UserModel.deleted_at.is_not(None))
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def avatar_keys(self) -> set[str]:
+        """지운 계정까지 모든 사용자가 가리키는 사진 키 — 고아 사진 파일 정리용."""
+        result = await self._session.execute(
+            select(UserModel.avatar_key)
+            .where(UserModel.avatar_key.is_not(None))
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return {k for k in result.scalars() if k}
+
     async def find_deleted_before(self, before: datetime) -> list[User]:
         result = await self._session.execute(
             select(UserModel)

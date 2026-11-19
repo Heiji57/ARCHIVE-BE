@@ -57,7 +57,8 @@ async def request_export(
 ) -> ApiResponse[ExportCreatedResponse]:
     """사용자당 동시에 하나, 최근 24시간 3번. 완료되면 알림(category: system)."""
     job = await use_case.execute(current_user.id, body.scopes, body.format)
-    # 커밋 뒤에 넘긴다 — 워커가 아직 안 보이는 행을 읽지 않게.
+    # BackgroundTasks 는 이 스택에서 요청 커밋보다 먼저 돌 수 있다 — 워커가 행이 안 보이면
+    # 잠시 뒤 다시 시도한다(worker/tasks/exports.py).
     background_tasks.add_task(_enqueue_build, job.id)
     return ApiResponse.ok(ExportCreatedResponse(id=job.id))
 

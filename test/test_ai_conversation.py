@@ -50,10 +50,7 @@ from app.todo.application.use_cases.create_todo import CreateTodoUseCase
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
 from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
-from app.topic.infrastructure.persistence.repositories.chunk_repo import (
-    EntryChunkRepository,
-    TodoEmbeddingRepository,
-)
+from app.topic.infrastructure.persistence.repositories.chunk_repo import TodoEmbeddingRepository
 from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 
 _TEST_DB_URL = os.environ.get(
@@ -149,7 +146,6 @@ def _retro_port(s) -> RetroAdapter:
         CreateEntryUseCase(entries, UserSettingsRepository(s)),
         DeleteEntryUseCase(entries),
         _Queue(),  # type: ignore[arg-type]
-        EntryChunkRepository(s),
     )
 
 

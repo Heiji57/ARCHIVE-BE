@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -143,7 +144,15 @@ class SyncCalendarEventsUseCase:
                         auto_delete = bool(
                             user_settings and user_settings.calendar_auto_delete_todo
                         )
-                    if auto_delete:
+                    if auto_delete and linked.series_id is not None:
+                        # 반복의 한 회차(예외 row) — 휴지통이 아니라 "이 회차 삭제"와 같은 취소로.
+                        # 휴지통에 넣으면 회차 유일 인덱스를 계속 차지해, 그 회차를 다시 고칠 때
+                        # 휴지통 행에 덮어써져 사라진다(휴지통 목록에도 안 보인다).
+                        await self._todo_repo.save(
+                            replace(linked, status=TaskStatus.CANCELLED, updated_at=now)
+                        )
+                        await self._todo_repo.clear_calendar_link(linked.id, user_id)
+                    elif auto_delete:
                         # 휴지통으로(30일 안에 되살릴 수 있다). 시리즈 base 면 예외 row 까지.
                         await self._todo_repo.soft_delete(
                             linked.id, user_id, with_series=linked.is_series_base

@@ -4,9 +4,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.calendars.domain.exceptions.exceptions import CalendarNameDuplicateException
 from app.calendars.domain.models.calendar import Calendar
 from app.calendars.domain.repositories.repository import ICalendarRepository
 from app.calendars.infrastructure.persistence.models.calendar_model import CalendarModel
+from app.shared.infrastructure.database.errors import translate_unique_violations
 
 
 class CalendarRepository(ICalendarRepository):
@@ -51,8 +53,12 @@ class CalendarRepository(ICalendarRepository):
         return found
 
     async def save(self, calendar: Calendar) -> Calendar:
-        merged = await self._session.merge(self._to_model(calendar))
-        await self._session.flush()
+        # 사전 중복 검사를 동시 요청이 함께 통과해도 늦은 쪽은 500 이 아니라 409.
+        async with translate_unique_violations(
+            {"uq_calendars_user_name": CalendarNameDuplicateException}
+        ):
+            merged = await self._session.merge(self._to_model(calendar))
+            await self._session.flush()
         return self._to_entity(merged)
 
     async def delete(self, calendar_id: str, user_id: str) -> None:

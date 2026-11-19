@@ -1,6 +1,6 @@
 """auth 응용 계층이 바깥(파일 저장소·Redis·외부 토큰 철회)을 쓰는 좁은 포트."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -29,7 +29,20 @@ class ExternalToken:
     token: str
 
 
-class ExternalTokenRevoker(Protocol):
-    async def enqueue(self, tokens: list[ExternalToken]) -> None:
-        """GitHub·Google 토큰 철회를 작업으로 넘긴다(커밋 뒤에 부른다). 실패하면 3번 다시."""
+@dataclass(frozen=True)
+class DeletedAccount:
+    """계정 삭제 트랜잭션이 끝낸 뒤 마무리할 것."""
+
+    user_id: str
+    avatar_key: str | None = None
+    tokens: list[ExternalToken] = field(default_factory=list)
+
+
+class AccountDeletionDispatcher(Protocol):
+    async def dispatch(self, deleted: DeletedAccount) -> None:
+        """마무리(세션 폐기·토큰 표식·사진 파일·외부 토큰 철회)를 작업으로 넘긴다.
+
+        요청 커밋보다 먼저 불릴 수 있다 — 작업이 `users.deleted_at` 이 커밋된 것을 확인한 뒤에만
+        실행하고, 롤백됐으면 아무것도 하지 않는다.
+        """
         ...

@@ -25,12 +25,10 @@ from app.auth.application.dtos.commands import (
     SendEmailVerificationCommand,
     VerifyEmailCodeCommand,
 )
+from app.auth.application.ports import AccountDeletionDispatcher
 from app.auth.application.services.session_service import SessionService
 from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
-from app.auth.application.use_cases.delete_account import (
-    DeleteAccountUseCase,
-    FinishAccountDeletionUseCase,
-)
+from app.auth.application.use_cases.delete_account import DeleteAccountUseCase
 from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
 from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
@@ -358,14 +356,14 @@ async def delete_account(
     body: DeleteAccountRequest,
     background_tasks: BackgroundTasks,
     use_case: FromDishka[DeleteAccountUseCase],
-    finish: FromDishka[FinishAccountDeletionUseCase],
+    dispatcher: FromDishka[AccountDeletionDispatcher],
     current_user: UserContext = Depends(get_current_user),
 ) -> Response:
     """계정 삭제(soft delete). 10분 안에 로그인했어야 한다(아니면 403 AUTH_REAUTH_REQUIRED)."""
     deleted = await use_case.execute(current_user, body.confirm)
-    # 세션 폐기·토큰 표식·사진 파일·외부 토큰 철회는 요청 트랜잭션 커밋 뒤에 —
-    # 롤백되면 계정이 그대로인데 로그인만 막히는 일이 없게.
-    background_tasks.add_task(finish.execute, deleted)
+    # 세션 폐기·토큰 표식·사진 파일·외부 토큰 철회는 작업이 deleted_at 커밋을 확인한 뒤에 —
+    # BackgroundTasks 는 이 스택에서 요청 커밋보다 먼저 돌 수 있다.
+    background_tasks.add_task(dispatcher.dispatch, deleted)
     out = Response(status_code=status.HTTP_204_NO_CONTENT)
     _clear_refresh_cookie(out)
     return out

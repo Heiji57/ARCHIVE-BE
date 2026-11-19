@@ -5,7 +5,7 @@ import secrets
 
 from redis.asyncio import Redis
 
-from app.auth.application.ports import ExternalToken
+from app.auth.application.ports import DeletedAccount
 from app.shared.infrastructure.auth.jwt import DELETED_USER_KEY
 
 # 철회할 토큰은 Celery 인자(브로커·결과 저장소에 남는다)로 넘기지 않고 짧은 TTL Redis 키에 두고
@@ -23,16 +23,22 @@ class RedisDeletedAccountMarker:
         await self._redis.set(DELETED_USER_KEY.format(user_id=user_id), "1", ex=self._ttl)
 
 
-class CeleryTokenRevoker:
+class CeleryAccountDeletionDispatcher:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
-    async def enqueue(self, tokens: list[ExternalToken]) -> None:
-        from app.worker.tasks.account_cleanup import revoke_account_tokens_task
+    async def dispatch(self, deleted: DeletedAccount) -> None:
+        from app.worker.tasks.account_cleanup import finish_account_deletion_task
 
-        ref = secrets.token_urlsafe(18)
-        payload = [{"provider": t.provider, "token": t.token} for t in tokens]
-        await self._redis.set(
-            REVOKE_TOKENS_KEY.format(ref=ref), json.dumps(payload), ex=REVOKE_TOKENS_TTL_SECONDS
+        ref: str | None = None
+        if deleted.tokens:
+            ref = secrets.token_urlsafe(18)
+            payload = [{"provider": t.provider, "token": t.token} for t in deleted.tokens]
+            await self._redis.set(
+                REVOKE_TOKENS_KEY.format(ref=ref),
+                json.dumps(payload),
+                ex=REVOKE_TOKENS_TTL_SECONDS,
+            )
+        finish_account_deletion_task.apply_async(
+            args=[deleted.user_id, deleted.avatar_key, ref], queue="default"
         )
-        revoke_account_tokens_task.apply_async(args=[ref], queue="default")

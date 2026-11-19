@@ -1,9 +1,13 @@
 """계정 삭제 뒤 작업(01 §3).
 
+- `worker.finish_account_deletion`: users.deleted_at 커밋을 확인한 뒤 토큰 표식·세션 폐기·사진 파일
+  삭제, 외부 토큰 철회 작업 넘기기. 안 보이면 잠시 뒤 다시, 끝까지 안 보이면(롤백) 아무것도 안 한다.
 - `worker.revoke_account_tokens`: GitHub·Google 토큰 철회. 실패해도 3번 다시 시도한 뒤 끝낸다.
-- `worker.purge_deleted_accounts`(하루): 지운 지 30일 지난 계정을 완전히 지운다.
+- `worker.purge_deleted_accounts`(하루): 지운 지 30일 지난 계정을 완전히 지운다. 아무도 가리키지
+  않는 프로필 사진 파일도 정리한다.
 """
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -12,7 +16,13 @@ import httpx
 import structlog
 from redis.asyncio import Redis
 
-from app.auth.infrastructure.external.account_deletion import REVOKE_TOKENS_KEY
+from app.auth.application.services.session_service import SessionService
+from app.auth.application.use_cases.delete_account import FinishAccountDeletionUseCase
+from app.auth.infrastructure.cache.auth_token import AuthTokenCache
+from app.auth.infrastructure.external.account_deletion import (
+    REVOKE_TOKENS_KEY,
+    RedisDeletedAccountMarker,
+)
 from app.auth.infrastructure.storage.avatar_storage import LocalAvatarStorage
 from app.data.infrastructure.export.storage import LocalExportStorage
 from app.data.infrastructure.persistence.repositories.export_repo import ExportRepository
@@ -49,6 +59,39 @@ async def _revoke(client: httpx.AsyncClient, provider: str, token: str) -> bool:
         )
         return resp.status_code in (200, 400)  # 400 invalid_token = 이미 무효
     return True
+
+
+_FINISH_RETRIES = 5
+_ORPHAN_AVATAR_AGE_SECONDS = 86400  # 방금 올린(아직 커밋 전일 수 있는) 파일은 건드리지 않게
+
+
+@celery_app.task(name="worker.finish_account_deletion", bind=True, max_retries=_FINISH_RETRIES)
+async def finish_account_deletion_task(
+    self: Any, user_id: str, avatar_key: str | None, tokens_ref: str | None
+) -> None:
+    settings = get_settings()
+    async with get_worker_session_factory().begin() as session:
+        deleted = await UserRepository(session).is_deleted(user_id)
+    redis = Redis.from_url(settings.redis.auth_url, decode_responses=True)
+    try:
+        if not deleted:
+            # 요청 커밋보다 먼저 왔을 수 있다 — 잠시 뒤 다시(AsyncContextTask).
+            if self.request.retries < _FINISH_RETRIES:
+                raise self.retry(countdown=1)
+            # 끝까지 안 보이면 요청이 롤백된 것 — 계정은 그대로이니 아무것도 하지 않는다.
+            _log.warning("account.delete_not_committed", user_id=user_id)
+            if tokens_ref:
+                await redis.delete(REVOKE_TOKENS_KEY.format(ref=tokens_ref))
+            return
+        await FinishAccountDeletionUseCase(
+            SessionService(AuthTokenCache(redis, settings.auth), settings.auth),
+            RedisDeletedAccountMarker(redis, settings.auth.access_token_expire_minutes * 60),
+            LocalAvatarStorage(settings.auth.avatar_dir),
+        ).execute(user_id, avatar_key)
+    finally:
+        await redis.aclose()
+    if tokens_ref:
+        revoke_account_tokens_task.apply_async(args=[tokens_ref], queue="default")
 
 
 @celery_app.task(
@@ -107,3 +150,10 @@ async def purge_deleted_accounts_task() -> None:
         except Exception:
             # 계정별 격리 경계 — 한 계정의 실패가 다른 계정 정리를 막지 않게.
             _log.exception("account.purge_failed", user_id=user.id)
+
+    # 아무도 가리키지 않는 사진 파일(바꾼·지운 사진의 옛 파일) 정리.
+    async with factory.begin() as session:
+        referenced = await UserRepository(session).avatar_keys()
+    for key in await asyncio.to_thread(storage.stale_keys, _ORPHAN_AVATAR_AGE_SECONDS):
+        if key not in referenced:
+            await storage.remove(key)

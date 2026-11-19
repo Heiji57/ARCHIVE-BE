@@ -1,22 +1,24 @@
 """계정 삭제 — soft delete(01 §3).
 
-두 단계로 나눈다 — Redis·파일·외부 작업은 DB 커밋 뒤에만(롤백되면 아무것도 바뀌지 않게).
+두 단계로 나눈다 — Redis·파일·외부 작업은 DB 커밋이 확인된 뒤에만(롤백되면 아무것도 바뀌지 않게).
 1. `DeleteAccountUseCase`(요청 트랜잭션): users.deleted_at, OAuth·Google Calendar 연결 행 삭제
    (같은 GitHub·Google 계정으로 다시 가입할 수 있게), 프로필 사진 키 비우기.
-2. `FinishAccountDeletionUseCase`(커밋 뒤, 라우터 BackgroundTasks): 모든 refresh 세션 폐기,
-   남은 access token 표식, 사진 파일 삭제, 외부 토큰 철회 작업.
+2. `FinishAccountDeletionUseCase`(작업 `worker.finish_account_deletion` — deleted_at 커밋을 확인한
+   뒤): 남은 access token 표식, 모든 refresh 세션 폐기, 사진 파일 삭제. 외부 토큰 철회는 그 작업이
+   `worker.revoke_account_tokens` 로 넘긴다.
+   라우터 BackgroundTasks 는 이 스택에서 요청 커밋보다 먼저 돌 수 있어 직접 하지 않는다.
 데이터는 30일 뒤 worker.purge_deleted_accounts 가 지운다.
 """
 
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from app.auth.application.ports import (
     AvatarStorage,
+    DeletedAccount,
     DeletedAccountMarker,
     ExternalToken,
-    ExternalTokenRevoker,
 )
 from app.auth.application.services.session_service import SessionService
 from app.auth.domain.exceptions.exceptions import (
@@ -32,15 +34,6 @@ from app.user.domain.exceptions.exceptions import UserNotFoundException
 from app.user.domain.repositories.repository import IUserRepository
 
 REAUTH_WINDOW_SECONDS = 600
-
-
-@dataclass(frozen=True)
-class DeletedAccount:
-    """커밋 뒤 단계에 넘길 것."""
-
-    user_id: str
-    avatar_key: str | None = None
-    tokens: list[ExternalToken] = field(default_factory=list)
 
 
 class DeleteAccountUseCase:
@@ -87,24 +80,21 @@ class DeleteAccountUseCase:
 
 
 class FinishAccountDeletionUseCase:
-    """커밋 뒤 — 실패해도 계정은 이미 지워졌다(세션이 남으면 refresh 가 사용자 조회에서 막힌다)."""
+    """deleted_at 커밋이 확인된 뒤(워커). 실패해도 계정은 이미 지워졌다 — 세션이 남아도 refresh 가
+    사용자 조회로 지운 계정을 거절한다."""
 
     def __init__(
         self,
         session_service: SessionService,
         marker: DeletedAccountMarker,
         storage: AvatarStorage,
-        revoker: ExternalTokenRevoker,
     ) -> None:
         self._sessions = session_service
         self._marker = marker
         self._storage = storage
-        self._revoker = revoker
 
-    async def execute(self, deleted: DeletedAccount) -> None:
-        await self._marker.mark(deleted.user_id)
-        await self._sessions.revoke_all(deleted.user_id)
-        if deleted.avatar_key:
-            await self._storage.remove(deleted.avatar_key)
-        if deleted.tokens:
-            await self._revoker.enqueue(deleted.tokens)
+    async def execute(self, user_id: str, avatar_key: str | None) -> None:
+        await self._marker.mark(user_id)
+        await self._sessions.revoke_all(user_id)
+        if avatar_key:
+            await self._storage.remove(avatar_key)

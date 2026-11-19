@@ -53,28 +53,25 @@ class UploadAvatarUseCase:
         # 키에 사용자 id 를 넣지 않는다 — 사진 URL 로 사용자를 알 수 없게.
         key = f"{secrets.token_urlsafe(18)}.webp"
         await self._storage.put(key, data)
-        saved = await self._user_repo.save(
+        # 옛 파일은 여기서 지우지 않는다 — 커밋이 실패하면 옛 키가 남는데 파일이 없게 된다.
+        # 아무도 가리키지 않는 파일은 하루 한 번 정리한다(worker.purge_deleted_accounts).
+        return await self._user_repo.save(
             replace(user, avatar_key=key, updated_at=datetime.now(UTC))
         )
-        if user.avatar_key:
-            await self._storage.remove(user.avatar_key)
-        return saved
 
 
 class DeleteAvatarUseCase:
-    def __init__(self, user_repo: IUserRepository, storage: AvatarStorage) -> None:
+    def __init__(self, user_repo: IUserRepository) -> None:
         self._user_repo = user_repo
-        self._storage = storage
 
     async def execute(self, user_id: str) -> User:
         user = await _user(self._user_repo, user_id)
         if not user.avatar_key:
             return user
-        saved = await self._user_repo.save(
+        # 파일은 고아 정리가 지운다(커밋 전에 지우면 롤백 때 링크가 깨진다).
+        return await self._user_repo.save(
             replace(user, avatar_key=None, updated_at=datetime.now(UTC))
         )
-        await self._storage.remove(user.avatar_key)
-        return saved
 
 
 async def _user(repo: IUserRepository, user_id: str) -> User:

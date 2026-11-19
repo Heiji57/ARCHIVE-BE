@@ -99,7 +99,7 @@ def test_display_name_validation_strips_and_bounds():
 # ── 사진 ──────────────────────────────────────────────────────────────────
 
 
-async def test_avatar_resized_to_256_webp_replaces_old_and_deletes(tmp_path):
+async def test_avatar_resized_to_256_webp_and_old_files_left_for_sweep(tmp_path):
     storage = LocalAvatarStorage(str(tmp_path))
     users = _Users(_user())
     up = UploadAvatarUseCase(users, storage)  # type: ignore[arg-type]
@@ -108,9 +108,12 @@ async def test_avatar_resized_to_256_webp_replaces_old_and_deletes(tmp_path):
     with Image.open(tmp_path / first.avatar_key) as img:
         assert (img.format, img.size) == ("WEBP", (256, 256))
     second = await up.execute("usr_p", "image/png", _png(100, 300))
-    assert not (tmp_path / first.avatar_key).exists()  # 옛 사진은 지운다
-    gone = await DeleteAvatarUseCase(users, storage).execute("usr_p")  # type: ignore[arg-type]
-    assert gone.avatar_key is None and not (tmp_path / second.avatar_key).exists()
+    # 옛 파일은 요청에서 지우지 않는다(커밋 실패 때 링크가 깨지지 않게) — 고아 정리가 지운다
+    assert (tmp_path / first.avatar_key).exists() and users.user.avatar_key == second.avatar_key
+    gone = await DeleteAvatarUseCase(users).execute("usr_p")  # type: ignore[arg-type]
+    assert gone.avatar_key is None
+    assert set(storage.stale_keys(-1)) == {first.avatar_key, second.avatar_key}
+    assert storage.stale_keys(3600) == []  # 방금 만든 파일은 정리 대상이 아니다
 
 
 async def test_avatar_rejects_type_size_and_non_image(tmp_path):
@@ -189,14 +192,6 @@ class _Storage:
         self.removed.append(key)
 
 
-class _Revoker:
-    def __init__(self) -> None:
-        self.tokens: list = []
-
-    async def enqueue(self, tokens):
-        self.tokens += tokens
-
-
 async def test_delete_account_requires_recent_login_and_matching_confirm():
     users = _Users(_user(display_name="민수"))
     uc, _ = _delete_uc(users)
@@ -224,12 +219,12 @@ async def test_delete_account_db_step_then_post_commit_lockout():
         ("google", "g_refresh"),
     }
     # 커밋 뒤 단계: 표식·세션·사진 파일·외부 토큰
-    sessions, marker, storage, revoker = _Sessions(), _Marker(), _Storage(), _Revoker()
-    await FinishAccountDeletionUseCase(sessions, marker, storage, revoker).execute(  # type: ignore[arg-type]
-        deleted
+    sessions, marker, storage = _Sessions(), _Marker(), _Storage()
+    await FinishAccountDeletionUseCase(sessions, marker, storage).execute(  # type: ignore[arg-type]
+        deleted.user_id, deleted.avatar_key
     )
     assert sessions.revoked == ["usr_p"] and marker.marked == ["usr_p"]
-    assert storage.removed == ["old.webp"] and len(revoker.tokens) == 2
+    assert storage.removed == ["old.webp"]
 
 
 async def test_refresh_refuses_deleted_account():
@@ -342,6 +337,12 @@ async def test_deleted_account_is_gone_email_reusable_and_purged_after_30_days(f
             ),
             {"u": _IDS[0]},
         )
+        # 커밋된 deleted_at 이 보이는지(계정 삭제 마무리 작업의 확인), 사진 키는 지운 계정도 센다
+        assert await repo.is_deleted(_IDS[0]) and not await repo.is_deleted(_IDS[1])
+        await s.execute(
+            text("UPDATE users SET avatar_key='kept.webp' WHERE id = :id"), {"id": _IDS[2]}
+        )
+        assert "kept.webp" in await repo.avatar_keys()
         due = await repo.find_deleted_before(datetime.now(UTC) - ACCOUNT_RETENTION)
         assert [u.id for u in due if u.id in _IDS] == [_IDS[0]]  # 29일째는 남는다
         await purge_unlinked_user_data(s, _IDS[0])
