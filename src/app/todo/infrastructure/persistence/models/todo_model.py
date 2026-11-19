@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, SmallInteger, String, Text, 
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.shared.infrastructure.database import soft_delete
 from app.shared.infrastructure.database.base import Base
 
 
@@ -33,6 +34,12 @@ class TodoModel(Base):
         ARRAY(String(20)), nullable=False, server_default=text("'{}'")
     )
     due_date_key: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # 사용자 캘린더. NULL = 기본 캘린더. 캘린더를 지우면 SET NULL 로 기본 캘린더로 옮겨진다.
+    calendar_id: Mapped[str | None] = mapped_column(
+        String, ForeignKey("calendars.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # 휴지통 — 채워지면 모든 ORM 조회에서 빠진다(shared/infrastructure/database/soft_delete.py).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # ── Google Calendar push 상태 (쓰기는 타겟 SQL 전용, merge 관여 안 함) ────────
     calendar_push_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -44,6 +51,7 @@ class TodoModel(Base):
     )
 
     __table_args__ = (
+        Index("ix_todos_user_deleted", "user_id", "deleted_at"),
         Index("ix_todos_title_tsv", "title_tsv", postgresql_using="gin"),
         Index("ix_todos_user_id_date_key", "user_id", "date_key"),
         Index(
@@ -74,3 +82,6 @@ class TodoModel(Base):
             postgresql_where=text("series_id IS NOT NULL"),
         ),
     )
+
+
+soft_delete.register(TodoModel)

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.todo.domain.models.todo import Todo, TodoMeta
+from app.todo.domain.models.user_tag import UserTag
 
 
 @dataclass(frozen=True)
@@ -51,12 +52,86 @@ class ITodoRepository(ABC):
     ) -> list[Todo]: ...
 
     @abstractmethod
+    async def tag_counts(self, user_id: str) -> dict[str, int]:
+        """태그 → 그 태그가 붙은 할 일 수(실제 row 기준, 취소 회차 제외)."""
+        ...
+
+    @abstractmethod
+    async def replace_tag(self, user_id: str, old: str, new: str | None) -> list[str]:
+        """모든 할 일의 tags 에서 old 를 new 로 바꾸거나(None 이면 뺀다). 이미 new 가 있으면
+        합친다(중복 없음, 순서 유지). 바뀐 할 일 id 목록 — 임베딩 갱신 대상."""
+        ...
+
+    @abstractmethod
+    async def count_open_due(self, user_id: str, today: str) -> tuple[int, int]:
+        """(오늘 마감, 지난 마감) 개수 — 끝내지 않은 실제 row 만. 마감 알림용.
+
+        오늘 마감 = due_date_key == today, 지난 마감 = coalesce(due_date_key, date_key) < today.
+        """
+        ...
+
+    @abstractmethod
+    async def find_filtered(
+        self,
+        user_id: str,
+        *,
+        overdue_before: str | None = None,
+        due_from: str | None = None,
+        due_to: str | None = None,
+        push_status: str | None = None,
+        calendar_ids: list[str] | None = None,
+        include_default_calendar: bool = False,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[Todo]:
+        """기간 밖 조회 — 실제 row(일반 todo + 예외 row)만. 시리즈 base 와 CANCELLED 제외.
+
+        - overdue_before: 끝내지 않았고 마감(due_date_key, 없으면 date_key) < 이 날짜
+        - due_from/due_to: due_date_key 가 그 기간(포함)
+        - push_status: calendar_push_status 일치
+        - calendar_ids: 그 캘린더들만(include_default_calendar 면 calendar_id IS NULL 인
+          기본 캘린더 할 일도)
+        정렬: 마감(없으면 date_key) 오래된 순.
+        """
+        ...
+
+    @abstractmethod
     async def find_by_full_text(
         self, user_id: str, query: str, page: int, size: int
     ) -> tuple[list[Todo], int]: ...
 
     @abstractmethod
     async def delete(self, id: str, user_id: str) -> None: ...
+
+    # ── 휴지통 (soft delete) ──
+    @abstractmethod
+    async def soft_delete(self, id: str, user_id: str, *, with_series: bool = False) -> None:
+        """휴지통으로. with_series 면 시리즈 base 와 예외 row 를 함께."""
+        ...
+
+    @abstractmethod
+    async def list_trashed(self, user_id: str) -> list[Todo]:
+        """휴지통의 할 일(일반 + 시리즈 base, 최근 지운 순)."""
+        ...
+
+    @abstractmethod
+    async def find_trashed(self, id: str, user_id: str) -> Todo | None: ...
+
+    @abstractmethod
+    async def restore(self, id: str, user_id: str) -> None:
+        """시리즈면 예외 row 까지. Google 연동 흔적은 비운다(지울 때 Google 일정을 지웠으므로)."""
+        ...
+
+    @abstractmethod
+    async def purge(self, id: str, user_id: str) -> list[str]:
+        """영구 삭제 — 지운 row id(시리즈면 예외 row 까지)."""
+        ...
+
+    @abstractmethod
+    async def purge_trashed(self, user_id: str | None, before: datetime | None) -> list[str]:
+        """휴지통 비우기 — user_id 없으면 모든 사용자, before 있으면 그보다 먼저 지운 것만.
+        지운 row id 를 돌려준다(임베딩 정리용)."""
+        ...
 
     @abstractmethod
     async def find_by_google_event_id(
@@ -257,3 +332,17 @@ class ITodoRepository(ABC):
         query 정제 후 매칭 가능한 토큰이 하나도 없으면(특수문자만 입력 등) 빈 리스트.
         """
         ...
+
+
+class IUserTagRepository(ABC):
+    @abstractmethod
+    async def list_by_user(self, user_id: str) -> list[UserTag]: ...
+
+    @abstractmethod
+    async def find_by_name(self, user_id: str, name: str) -> UserTag | None: ...
+
+    @abstractmethod
+    async def save(self, tag: UserTag) -> UserTag: ...
+
+    @abstractmethod
+    async def delete_by_name(self, user_id: str, name: str) -> None: ...

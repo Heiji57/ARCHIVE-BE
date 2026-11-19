@@ -1,5 +1,6 @@
-import aiosmtplib
 from email.message import EmailMessage
+
+import aiosmtplib
 
 from app.shared.domain.exceptions.external import EmailDeliveryFailedException
 from app.shared.infrastructure.config.settings import get_settings

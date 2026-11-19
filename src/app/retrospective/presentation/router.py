@@ -32,7 +32,7 @@ from app.shared.domain.context.user_context import UserContext
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.presentation.schemas.response import ApiResponse
 from app.shared.presentation.validators import parse_date_range
-from app.topic.domain.repositories.repository import IEmbeddingQueueRepository, IEntryChunkRepository
+from app.topic.domain.repositories.repository import IEmbeddingQueueRepository
 
 router = APIRouter(prefix="/entries", tags=["entries"], route_class=DishkaRoute)
 
@@ -95,7 +95,7 @@ async def get_entries(
         )
     )
 
-    if current_user.is_developer() and await _is_github_connected(oauth_repo, current_user.id):
+    if await _is_github_connected(oauth_repo, current_user.id):
         push_map = await _push_map_for_entries(push_repo, current_user.id, entries)
         return ApiResponse.ok([
             EntryWithGithubResponse.from_entity(e, push_map.get(entry_to_period(e)))
@@ -149,9 +149,7 @@ async def get_entries_paginated(
         )
     )
 
-    is_dev_with_github = current_user.is_developer() and await _is_github_connected(
-        oauth_repo, current_user.id
-    )
+    has_github = await _is_github_connected(oauth_repo, current_user.id)
 
     # EntryPageResponse.items 는 항상 EntryWithGithubResponse 로 통일한다(github_push
     # nullable) — get_entries 와 달리 두 응답 클래스를 섞으면 pydantic 이 직접 생성
@@ -162,12 +160,12 @@ async def get_entries_paginated(
         summaries_mixed = [i for i in items_raw if not isinstance(i, JournalEntry)]
         push_map_e = (
             await _push_map_for_entries(push_repo, current_user.id, entries_mixed)
-            if is_dev_with_github
+            if has_github
             else {}
         )
         push_map_s = (
             await _push_map_for_summaries(push_repo, current_user.id, summaries_mixed)
-            if is_dev_with_github
+            if has_github
             else {}
         )
         items = [
@@ -179,9 +177,7 @@ async def get_entries_paginated(
     elif retro_type == RetroType.DAILY.value:
         entries: list[JournalEntry] = items_raw  # type: ignore[assignment]
         push_map_e = (
-            await _push_map_for_entries(push_repo, current_user.id, entries)
-            if is_dev_with_github
-            else {}
+            await _push_map_for_entries(push_repo, current_user.id, entries) if has_github else {}
         )
         items = [
             EntryWithGithubResponse.from_entity(e, push_map_e.get(entry_to_period(e)))
@@ -191,7 +187,7 @@ async def get_entries_paginated(
         summaries: list[RetroSummary] = items_raw  # type: ignore[assignment]
         push_map_s = (
             await _push_map_for_summaries(push_repo, current_user.id, summaries)
-            if is_dev_with_github
+            if has_github
             else {}
         )
         items = [
@@ -216,7 +212,7 @@ async def get_entry(
 ) -> ApiResponse[EntryWithGithubResponse]:
     entry = await use_case.execute(entry_id=entry_id, user_id=current_user.id)
 
-    if current_user.is_developer() and await _is_github_connected(oauth_repo, current_user.id):
+    if await _is_github_connected(oauth_repo, current_user.id):
         period_type, period_key = entry_to_period(entry)
         push = await push_repo.find_by_period(current_user.id, period_type, period_key)
         return ApiResponse.ok(EntryWithGithubResponse.from_entity(entry, push))
@@ -316,9 +312,7 @@ async def move_entry_to_folder(
 async def delete_entry(
     entry_id: str,
     use_case: FromDishka[DeleteEntryUseCase],
-    chunk_repo: FromDishka[IEntryChunkRepository],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[None]:
     await use_case.execute(entry_id=entry_id, user_id=current_user.id)
-    await chunk_repo.delete_by_entry(entry_id)
     return ApiResponse.ok(None)

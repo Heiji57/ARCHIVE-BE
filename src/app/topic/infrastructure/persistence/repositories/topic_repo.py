@@ -8,6 +8,7 @@ from app.topic.domain.exceptions.exceptions import (
     DigestAlreadyInProgressException,
     TopicNameDuplicatedException,
 )
+from app.topic.domain.models.structured_digest import StructuredDigest
 from app.topic.domain.models.topic import Topic, TopicDigest
 from app.topic.domain.models.value_objects import DigestStatus
 from app.topic.domain.repositories.repository import ITopicDigestRepository, ITopicRepository
@@ -79,6 +80,23 @@ class TopicRepository(ITopicRepository):
             )
         )
         return result.scalar_one()
+
+    async def search(self, user_id: str, query: str, limit: int) -> list[Topic]:
+        # 주제는 사용자당 수십 개 수준이라 인덱스 없는 부분 일치로 충분하다.
+        # LIKE 메타문자(%, _, \)는 그대로 찾도록 이스케이프.
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        result = await self._session.execute(
+            select(TopicModel)
+            .where(
+                TopicModel.user_id == user_id,
+                TopicModel.name.ilike(pattern, escape="\\")
+                | TopicModel.description.ilike(pattern, escape="\\"),
+            )
+            .order_by(TopicModel.name)
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
 
     @staticmethod
     def _to_model(topic: Topic) -> TopicModel:
@@ -174,6 +192,7 @@ class TopicDigestRepository(ITopicDigestRepository):
         incremental_count: int,
         full_fingerprint: str,
         source_entry_ids: list[str],
+        structured: StructuredDigest,
     ) -> None:
         result = await self._session.execute(
             select(TopicDigestModel).where(TopicDigestModel.id == digest_id)
@@ -187,6 +206,7 @@ class TopicDigestRepository(ITopicDigestRepository):
             model.incremental_count = incremental_count
             model.full_fingerprint = full_fingerprint
             model.source_entry_ids = source_entry_ids
+            model.structured = structured.to_dict()
             model.updated_at = datetime.now(timezone.utc)
             await self._session.flush()
 
@@ -203,6 +223,7 @@ class TopicDigestRepository(ITopicDigestRepository):
             incremental_count=digest.incremental_count,
             full_fingerprint=digest.full_fingerprint,
             source_entry_ids=list(digest.source_entry_ids),
+            structured=digest.structured.to_dict() if digest.structured else None,
             created_at=digest.created_at,
             updated_at=digest.updated_at,
         )
@@ -220,6 +241,7 @@ class TopicDigestRepository(ITopicDigestRepository):
             incremental_count=model.incremental_count,
             full_fingerprint=model.full_fingerprint,
             source_entry_ids=list(model.source_entry_ids or []),
+            structured=StructuredDigest.from_dict(model.structured) if model.structured else None,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

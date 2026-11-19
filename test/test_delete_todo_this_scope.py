@@ -22,9 +22,9 @@ import sys
 from datetime import datetime, timezone
 
 from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
+from app.todo.domain.exceptions.exceptions import TodoNotFoundException
 from app.todo.domain.models.todo import RecurrenceRule, Todo
 from app.todo.domain.models.value_objects import TaskStatus
-from app.todo.domain.exceptions.exceptions import TodoNotFoundException
 
 
 class FakeTodoRepo:
@@ -55,6 +55,13 @@ class FakeTodoRepo:
         if todo_id in self.by_id:
             del self.by_id[todo_id]
             self.deleted_ids.append(todo_id)
+
+    async def soft_delete(self, id: str, user_id: str, *, with_series: bool = False) -> None:
+        # 휴지통도 조회에서 빠지므로 테스트에선 지운 것과 같게 본다.
+        for tid, t in list(self.by_id.items()):
+            if tid == id or (with_series and t.series_id == id):
+                del self.by_id[tid]
+                self.deleted_ids.append(tid)
 
     async def delete_all_exceptions(self, series_id: str, user_id: str) -> None:
         for tid, t in list(self.by_id.items()):

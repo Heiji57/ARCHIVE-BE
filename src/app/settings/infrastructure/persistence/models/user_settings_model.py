@@ -24,9 +24,6 @@ class UserSettingsModel(Base):
     calendar_auto_delete_todo: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false"), default=False
     )
-    last_schedule_check_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
     last_summary_date_local: Mapped[date | None] = mapped_column(Date, nullable=True)
     github_push_target_repository_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("github_repositories.id", ondelete="SET NULL"), nullable=True
@@ -37,4 +34,27 @@ class UserSettingsModel(Base):
     active_retro_template_ids: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
     )
+    week_start: Mapped[str] = mapped_column(String(3), nullable=False, server_default="mon")
+    work_schedule: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+    default_todo_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("60")
+    )
+    day_end_reminder: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+    notification_prefs: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+    quiet_hours: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+    email_digest: Mapped[str] = mapped_column(String(10), nullable=False, server_default="off")
+    ui_preferences: Mapped[dict] = mapped_column(  # type: ignore[type-arg]
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+    last_due_reminder_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_day_end_reminder_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    last_weekly_email_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

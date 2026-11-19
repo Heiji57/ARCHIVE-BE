@@ -1,11 +1,13 @@
 import json
 import re
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.shared.infrastructure.database.soft_delete import INCLUDE_DELETED
 from app.todo.domain.models.todo import RecurrenceRule, Todo, TodoMeta
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import (
@@ -27,7 +29,7 @@ _TODO_RETURNING = (
     "todos.push_started_at, todos.sync_attempt_id, todos.push_retry_count, "
     "todos.recurrence_rule, todos.series_id, todos.original_date_key, "
     "todos.original_start_time, todos.master_google_event_id, todos.tags, "
-    "todos.due_date_key"
+    "todos.due_date_key, todos.calendar_id"
 )
 
 # base event 를 date_key 조회에서 제외하는 필터
@@ -118,6 +120,68 @@ class TodoRepository(ITodoRepository):
         )
         return [self._to_entity(m) for m in result.scalars()]
 
+    async def count_open_due(self, user_id: str, today: str) -> tuple[int, int]:
+        effective_due = func.coalesce(TodoModel.due_date_key, TodoModel.date_key)
+        open_rows = (
+            TodoModel.user_id == user_id,
+            text("NOT (series_id IS NULL AND recurrence_rule IS NOT NULL)"),
+            TodoModel.status.not_in([TaskStatus.DONE.value, TaskStatus.CANCELLED.value]),
+        )
+        due_today = await self._session.scalar(
+            select(func.count())
+            .select_from(TodoModel)
+            .where(*open_rows, TodoModel.due_date_key == today)
+        )
+        overdue = await self._session.scalar(
+            select(func.count()).select_from(TodoModel).where(*open_rows, effective_due < today)
+        )
+        return int(due_today or 0), int(overdue or 0)
+
+    async def find_filtered(
+        self,
+        user_id: str,
+        *,
+        overdue_before: str | None = None,
+        due_from: str | None = None,
+        due_to: str | None = None,
+        push_status: str | None = None,
+        calendar_ids: list[str] | None = None,
+        include_default_calendar: bool = False,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> list[Todo]:
+        effective_due = func.coalesce(TodoModel.due_date_key, TodoModel.date_key)
+        stmt = select(TodoModel).where(
+            TodoModel.user_id == user_id,
+            # 시리즈 base 는 회차가 아니라 규칙 템플릿 — 실체 row(일반 + 예외)만 본다.
+            text("NOT (series_id IS NULL AND recurrence_rule IS NOT NULL)"),
+            TodoModel.status != TaskStatus.CANCELLED.value,
+        )
+        if overdue_before is not None:
+            stmt = stmt.where(
+                TodoModel.status != TaskStatus.DONE.value,
+                effective_due < overdue_before,
+            )
+        if due_from is not None:
+            stmt = stmt.where(TodoModel.due_date_key >= due_from)
+        if due_to is not None:
+            stmt = stmt.where(TodoModel.due_date_key <= due_to)
+        if push_status is not None:
+            stmt = stmt.where(TodoModel.calendar_push_status == push_status)
+        if calendar_ids is not None:
+            in_calendars = TodoModel.calendar_id.in_(calendar_ids)
+            stmt = stmt.where(
+                or_(in_calendars, TodoModel.calendar_id.is_(None))
+                if include_default_calendar
+                else in_calendars
+            )
+        result = await self._session.execute(
+            stmt.order_by(effective_due, TodoModel.created_at, TodoModel.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
     async def find_by_date_key(self, user_id: str, date_key: str) -> list[Todo]:
         result = await self._session.execute(
             select(TodoModel)
@@ -160,6 +224,102 @@ class TodoRepository(ITodoRepository):
         if row:
             await self._session.delete(row)
 
+    # ── 휴지통 ────────────────────────────────────────────────────────────────
+    # 시리즈는 base 와 예외 row 가 함께 들어가고 함께 나온다(같은 deleted_at).
+
+    def _series_or_self(self, todo_id: str) -> Any:
+        return or_(TodoModel.id == todo_id, TodoModel.series_id == todo_id)
+
+    async def soft_delete(self, id: str, user_id: str, *, with_series: bool = False) -> None:
+        where = self._series_or_self(id) if with_series else TodoModel.id == id
+        # push 진행 표식도 비운다 — 이미 claim 한 워커의 finalize 가 sync_attempt_id 불일치로
+        # no-op 이 되고, 그 사이 새로 만든 Google 일정은 워커가 orphan 으로 지운다.
+        await self._session.execute(
+            update(TodoModel)
+            .where(where, TodoModel.user_id == user_id)
+            .values(
+                deleted_at=func.now(),
+                sync_attempt_id=None,
+                calendar_push_status=None,
+                push_intent=None,
+                push_started_at=None,
+            )
+        )
+
+    async def list_trashed(self, user_id: str) -> list[Todo]:
+        result = await self._session.execute(
+            select(TodoModel)
+            .where(
+                TodoModel.user_id == user_id,
+                TodoModel.deleted_at.is_not(None),
+                TodoModel.series_id.is_(None),  # 시리즈는 base 한 건으로 보인다
+            )
+            .order_by(TodoModel.deleted_at.desc())
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_trashed(self, id: str, user_id: str) -> Todo | None:
+        result = await self._session.execute(
+            select(TodoModel)
+            .where(
+                TodoModel.id == id,
+                TodoModel.user_id == user_id,
+                TodoModel.deleted_at.is_not(None),
+                TodoModel.series_id.is_(None),
+            )
+            .execution_options(**INCLUDE_DELETED)
+        )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
+    async def restore(self, id: str, user_id: str) -> None:
+        # 휴지통에 들어갈 때 Google 일정은 지웠다 — 연동 흔적을 비우고 필요하면 새로 보낸다.
+        await self._session.execute(
+            update(TodoModel)
+            .where(
+                self._series_or_self(id),
+                TodoModel.user_id == user_id,
+                TodoModel.deleted_at.is_not(None),
+            )
+            .values(
+                deleted_at=None,
+                google_event_id=None,
+                master_google_event_id=None,
+                calendar_push_status=None,
+                push_intent=None,
+                push_retry_count=0,
+            )
+            .execution_options(**INCLUDE_DELETED)
+        )
+
+    async def purge(self, id: str, user_id: str) -> list[str]:
+        result = await self._session.execute(
+            delete(TodoModel)
+            .where(
+                self._series_or_self(id),
+                TodoModel.user_id == user_id,
+                TodoModel.deleted_at.is_not(None),
+            )
+            .returning(TodoModel.id)
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return list(result.scalars())
+
+    async def purge_trashed(self, user_id: str | None, before: datetime | None) -> list[str]:
+        conditions: list[Any] = [TodoModel.deleted_at.is_not(None)]
+        if user_id is not None:
+            conditions.append(TodoModel.user_id == user_id)
+        if before is not None:
+            conditions.append(TodoModel.deleted_at < before)
+        result = await self._session.execute(
+            delete(TodoModel)
+            .where(*conditions)
+            .returning(TodoModel.id)
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return list(result.scalars())
+
     async def find_by_google_event_id(
         self, user_id: str, google_event_id: str
     ) -> Todo | None:
@@ -167,6 +327,7 @@ class TodoRepository(ITodoRepository):
             text(
                 f"SELECT {_TODO_RETURNING} FROM todos"
                 " WHERE user_id=:user_id AND google_event_id=:google_event_id"
+                "   AND deleted_at IS NULL"
                 " LIMIT 1"
             ),
             {"user_id": user_id, "google_event_id": google_event_id},
@@ -297,7 +458,7 @@ class TodoRepository(ITodoRepository):
             text(
                 "WITH candidates AS ("
                 "  SELECT id FROM todos"
-                "  WHERE user_id = :user_id"
+                "  WHERE user_id = :user_id AND deleted_at IS NULL"
                 "    AND calendar_push_status IN ('pending','pending_delete','failed','syncing')"
                 "    AND push_retry_count < :max_retries"
                 # v10: staleness 게이트는 'syncing' 에만 — pending/failed 등은 즉시 claim.
@@ -340,7 +501,7 @@ class TodoRepository(ITodoRepository):
             text(
                 "WITH candidates AS ("
                 "  SELECT id FROM todos"
-                "  WHERE id = :id AND user_id = :user_id"
+                "  WHERE id = :id AND user_id = :user_id AND deleted_at IS NULL"
                 "    AND calendar_push_status IN ('pending','pending_delete')"
                 "  FOR UPDATE SKIP LOCKED"
                 ")"
@@ -455,7 +616,7 @@ class TodoRepository(ITodoRepository):
         result = await self._session.execute(
             text(
                 "SELECT * FROM todos"
-                " WHERE user_id = :user_id"
+                " WHERE user_id = :user_id AND deleted_at IS NULL"
                 "   AND recurrence_rule IS NOT NULL"
                 "   AND series_id IS NULL"
                 "   AND date_key <= :to_date"
@@ -505,12 +666,13 @@ class TodoRepository(ITodoRepository):
                 "  id, user_id, title, status, date_key, description,"
                 "  start_time, end_time, timezone, created_at, updated_at, completed_at,"
                 "  recurrence_rule, series_id, original_date_key,"
-                "  original_start_time, master_google_event_id, tags, due_date_key"
+                "  original_start_time, master_google_event_id, tags, due_date_key, calendar_id"
                 ") VALUES ("
                 "  :id, :user_id, :title, :status, :date_key, :description,"
                 "  :start_time, :end_time, :timezone, :created_at, :updated_at, :completed_at,"
                 "  CAST(:recurrence_rule AS jsonb), :series_id, :original_date_key,"
-                "  :original_start_time, :master_google_event_id, :tags, :due_date_key"
+                "  :original_start_time, :master_google_event_id, :tags, :due_date_key,"
+                "  :calendar_id"
                 ") ON CONFLICT (series_id, original_date_key) WHERE series_id IS NOT NULL"
                 " DO UPDATE SET"
                 "  title=EXCLUDED.title, status=EXCLUDED.status, date_key=EXCLUDED.date_key,"
@@ -518,7 +680,8 @@ class TodoRepository(ITodoRepository):
                 "  end_time=EXCLUDED.end_time, timezone=EXCLUDED.timezone,"
                 "  updated_at=now(), completed_at=EXCLUDED.completed_at,"
                 "  master_google_event_id=EXCLUDED.master_google_event_id,"
-                "  tags=EXCLUDED.tags, due_date_key=EXCLUDED.due_date_key"
+                "  tags=EXCLUDED.tags, due_date_key=EXCLUDED.due_date_key,"
+                "  calendar_id=EXCLUDED.calendar_id"
                 f" RETURNING {_TODO_RETURNING}"
             ),
             {
@@ -541,6 +704,7 @@ class TodoRepository(ITodoRepository):
                 "master_google_event_id": todo.master_google_event_id,
                 "tags": todo.tags,
                 "due_date_key": todo.due_date_key,
+                "calendar_id": todo.calendar_id,
             },
         )
         row = result.first()
@@ -591,6 +755,7 @@ class TodoRepository(ITodoRepository):
             master_google_event_id=entity.master_google_event_id,
             tags=entity.tags,
             due_date_key=entity.due_date_key,
+            calendar_id=entity.calendar_id,
         )
 
     def _to_entity(self, model: TodoModel) -> Todo:
@@ -620,6 +785,8 @@ class TodoRepository(ITodoRepository):
             push_retry_count=model.push_retry_count,
             tags=model.tags,
             due_date_key=model.due_date_key,
+            calendar_id=model.calendar_id,
+            deleted_at=model.deleted_at,
         )
 
     def _row_to_entity(self, row: Row) -> Todo:
@@ -652,6 +819,7 @@ class TodoRepository(ITodoRepository):
             push_retry_count=m["push_retry_count"],
             tags=list(m["tags"]) if m["tags"] is not None else [],
             due_date_key=m.get("due_date_key"),
+            calendar_id=m.get("calendar_id"),
         )
 
     def _mapping_to_entity(self, m: dict) -> Todo:
@@ -686,6 +854,7 @@ class TodoRepository(ITodoRepository):
             push_retry_count=m.get("push_retry_count") or 0,
             tags=list(m.get("tags") or []),
             due_date_key=m.get("due_date_key"),
+            calendar_id=m.get("calendar_id"),
         )
 
     # ── Stats ──────────────────────────────────────────────────────────────────
@@ -699,7 +868,7 @@ class TodoRepository(ITodoRepository):
         week_to: str,
         tz: str,
     ) -> TodoStatsRaw:
-        _NOT_BASE = "NOT (recurrence_rule IS NOT NULL AND series_id IS NULL)"
+        _NOT_BASE = "NOT (recurrence_rule IS NOT NULL AND series_id IS NULL) AND deleted_at IS NULL"
 
         # 1) 상태별 카운트 (range 기준) — cancelled 제외 (get_todos_by_date 와 동일 정책)
         status_rows = await self._session.execute(
@@ -764,6 +933,38 @@ class TodoRepository(ITodoRepository):
 
     # ── 태그 자동완성 검색 ────────────────────────────────────────────────────────
 
+    async def tag_counts(self, user_id: str) -> dict[str, int]:
+        result = await self._session.execute(
+            text(
+                "SELECT tag, COUNT(*)::int AS cnt FROM todos, unnest(tags) AS tag"
+                # 예외 row 는 base 의 태그를 물려받은 같은 시리즈다 — 시리즈는 base 한 건으로 센다.
+                " WHERE user_id=:user_id AND status <> 'cancelled' AND series_id IS NULL"
+                "   AND deleted_at IS NULL"
+                " GROUP BY tag"
+            ),
+            {"user_id": user_id},
+        )
+        return {row.tag: row.cnt for row in result}
+
+    async def replace_tag(self, user_id: str, old: str, new: str | None) -> list[str]:
+        result = await self._session.execute(
+            select(TodoModel.id, TodoModel.tags).where(
+                TodoModel.user_id == user_id, TodoModel.tags.contains([old])
+            )
+        )
+        changed: list[str] = []
+        for todo_id, tags in result.all():
+            replaced: list[str] = []
+            for tag in tags:
+                value = new if tag == old else tag
+                if value is not None and value not in replaced:
+                    replaced.append(value)
+            await self._session.execute(
+                update(TodoModel).where(TodoModel.id == todo_id).values(tags=replaced)
+            )
+            changed.append(todo_id)
+        return changed
+
     async def search_tags(self, user_id: str, query: str, limit: int) -> list[str]:
         tsquery = _prefix_tsquery(query)
         if tsquery is None:
@@ -772,7 +973,7 @@ class TodoRepository(ITodoRepository):
         result = await self._session.execute(
             text(
                 "SELECT tag, COUNT(*)::int AS cnt FROM todos, unnest(tags) AS tag"
-                " WHERE user_id=:user_id"
+                " WHERE user_id=:user_id AND deleted_at IS NULL"
                 "   AND to_tsvector('simple', tag) @@ to_tsquery('simple', :tsquery)"
                 " GROUP BY tag"
                 " ORDER BY cnt DESC, tag ASC"

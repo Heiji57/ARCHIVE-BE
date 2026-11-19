@@ -2,11 +2,13 @@ from datetime import datetime, timezone
 
 from app.retrospective.application.dtos.summary_commands import RequestSummaryCommand
 from app.retrospective.domain.models.retro_summary import RetroSummary
-from app.retrospective.domain.models.value_objects import SummaryStatus
+from app.retrospective.domain.models.value_objects import SummaryStatus, SummaryType
 from app.retrospective.domain.repositories.repository import IRetroSummaryRepository
 from app.retrospective.domain.utils.summary_period import calculate_summary_period
 from app.retrospective.infrastructure.cache.summary_rate_limiter import SummaryRateLimiter
+from app.settings.domain.repositories.repository import IUserSettingsRepository
 from app.shared.domain.utils.id import generate_id
+from app.shared.domain.utils.period import WeekStart
 
 
 class RequestSummaryUseCase:
@@ -14,12 +16,20 @@ class RequestSummaryUseCase:
         self,
         summary_repo: IRetroSummaryRepository,
         rate_limiter: SummaryRateLimiter,
+        settings_repo: IUserSettingsRepository | None = None,
     ) -> None:
         self._summary_repo = summary_repo
         self._rate_limiter = rate_limiter
+        self._settings_repo = settings_repo
 
     async def execute(self, cmd: RequestSummaryCommand) -> RetroSummary:
-        period_start, period_end = calculate_summary_period(cmd.summary_type, cmd.period_start)
+        week_start: WeekStart = "mon"
+        if cmd.summary_type == SummaryType.WEEKLY and self._settings_repo is not None:
+            settings = await self._settings_repo.find_by_user_id(cmd.user_id)
+            week_start = settings.week_start if settings else "mon"
+        period_start, period_end = calculate_summary_period(
+            cmd.summary_type, cmd.period_start, week_start
+        )
 
         existing = await self._summary_repo.find_by_period(
             cmd.user_id, cmd.summary_type, period_start

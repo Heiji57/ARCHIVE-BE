@@ -1,32 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Final
 
+# 부분 수정 sentinel 은 공용 하나 — 모듈마다 클래스가 다르면 isinstance 판정이 어긋난다.
+from app.shared.domain.utils.unset import UNSET as UNSET
+from app.shared.domain.utils.unset import _Unset as _Unset
 from app.todo.domain.models.todo import RecurrenceRule
-
-
-class _Unset:
-    """Sentinel for 'field not provided' in partial-update commands.
-
-    omitted (UNSET)  → do not touch the existing value
-    explicit None    → clear the existing value
-    """
-
-    _instance: "_Unset | None" = None
-
-    def __new__(cls) -> "_Unset":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __repr__(self) -> str:
-        return "<UNSET>"
-
-    def __bool__(self) -> bool:
-        return False
-
-
-UNSET: Final[_Unset] = _Unset()
 
 
 @dataclass(frozen=True)
@@ -45,6 +23,7 @@ class CreateTodoCommand:
     recurrence_rule: RecurrenceRule | None = None
     tags: list[str] = field(default_factory=list)
     due_date_key: str | None = None
+    calendar_id: str | None = None  # None = 기본 캘린더
 
 
 @dataclass(frozen=True)
@@ -64,3 +43,5 @@ class UpdateTodoCommand:
     recurrence_rule: RecurrenceRule | None = None
     tags: list[str] | _Unset = UNSET
     due_date_key: str | None | _Unset = UNSET
+    # None = 기본 캘린더로 옮김, UNSET = 그대로
+    calendar_id: str | None | _Unset = UNSET

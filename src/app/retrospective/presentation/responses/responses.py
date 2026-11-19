@@ -83,7 +83,7 @@ class EntryResponse(BaseModel):
 
 
 class EntryWithGithubResponse(EntryResponse):
-    """개발자 계정 + GitHub 연결 사용자용 — githubPush 포함."""
+    """GitHub 연결 사용자용 — githubPush 포함."""
 
     github_push: GithubPushResponse | None = Field(
         default=None, serialization_alias="githubPush"

@@ -49,6 +49,13 @@ class FakeTodoRepo:
             del self.by_id[todo_id]
             self.deleted_ids.append(todo_id)
 
+    async def soft_delete(self, id: str, user_id: str, *, with_series: bool = False) -> None:
+        # 휴지통도 조회에서 빠지므로 테스트에선 지운 것과 같게 본다.
+        for tid, t in list(self.by_id.items()):
+            if tid == id or (with_series and t.series_id == id):
+                del self.by_id[tid]
+                self.deleted_ids.append(tid)
+
     async def delete_all_exceptions(self, series_id: str, user_id: str) -> None:
         for tid, t in list(self.by_id.items()):
             if t.series_id == series_id and t.user_id == user_id:

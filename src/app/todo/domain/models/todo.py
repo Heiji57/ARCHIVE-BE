@@ -48,6 +48,10 @@ class Todo(BaseEntity):
     series_rule: RecurrenceRule | None = None
     tags: list[str] = field(default_factory=list)
     due_date_key: str | None = None  # YYYY-MM-DD (inclusive), must be >= date_key
+    # 사용자 캘린더(개인·팀·스터디). None 이면 기본 캘린더 소속.
+    calendar_id: str | None = None
+    # 휴지통에 들어간 시각(읽기 전용 — 쓰기는 repo 의 soft_delete/restore).
+    deleted_at: datetime | None = None
     # ── Google Calendar push 상태 (읽기 전용 뷰) ────────────────────────────────
     # 이 필드들은 응답 노출 / claim 결과 매핑을 위해 엔티티가 실어 나르지만,
     # 쓰기는 repo 의 타겟 SQL(mark_for_push / claim / heartbeat / finalize / bulk_clear)

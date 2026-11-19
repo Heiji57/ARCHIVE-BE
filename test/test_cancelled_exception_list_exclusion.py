@@ -42,6 +42,7 @@ from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUse
 from app.todo.domain.models.todo import RecurrenceRule, Todo
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
+
 # users.id 를 참조하는 FK(ForeignKey("users.id"))가 SQLAlchemy MetaData 에서 resolve
 # 되려면 UserModel 이 import 되어 Base.metadata 에 users 테이블이 등록돼 있어야 한다
 # — todo 모듈만 import 하면 이 스크립트가 직접 실행될 때 매핑 에러가 난다.
@@ -70,8 +71,8 @@ class _Db:
         await self.session.execute(text("DELETE FROM users WHERE id = :id"), {"id": _TEST_USER_ID})
         await self.session.execute(
             text(
-                "INSERT INTO users (id, email, created_at, country, timezone, account_type)"
-                " VALUES (:id, :email, now(), 'US', 'UTC', 'user')"
+                "INSERT INTO users (id, email, created_at, country, timezone)"
+                " VALUES (:id, :email, now(), 'US', 'UTC')"
             ),
             {"id": _TEST_USER_ID, "email": _TEST_USER_EMAIL},
         )

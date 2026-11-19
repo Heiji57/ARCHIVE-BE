@@ -87,7 +87,7 @@ async def test_user_repo_save_race_on_email_is_409_exception():
         timezone="Asia/Seoul",
     )
     with pytest.raises(UserEmailDuplicatedException):
-        await UserRepository(_Session("users_email_key")).save(user)
+        await UserRepository(_Session("uq_users_email_active")).save(user)
 
 
 async def test_topic_and_digest_repos_use_their_own_mappings():

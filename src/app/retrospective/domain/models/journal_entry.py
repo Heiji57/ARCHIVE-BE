@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from app.retrospective.domain.models.value_objects import RetroType
 from app.shared.domain.models.base import BaseEntity
@@ -12,6 +13,8 @@ class JournalEntry(BaseEntity):
     content: str
     retro_type: RetroType
     folder_id: str | None = None
+    # 휴지통에 들어간 시각(읽기 전용 — 쓰기는 repo 의 soft_delete/restore).
+    deleted_at: datetime | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from app.notification.domain.models.value_objects import NotificationCategory, NotificationType
 from app.shared.domain.models.base import BaseEntity
@@ -14,6 +15,10 @@ class Notification(BaseEntity):
     title: str
     message: str
     is_read: bool = False
+    # 누르면 이동할 곳 — 예: {"kind": "todo", "id": "..."}, {"kind": "day_close"}
+    link: dict[str, Any] | None = None
+    # 방해 금지 중 만든 알림은 이 시각(UTC)까지 보내지 않는다. None 이면 바로 보낸다.
+    deliver_after: datetime | None = None
 
     def mark_read(self) -> None:
         self.is_read = True
@@ -26,6 +31,8 @@ class Notification(BaseEntity):
         category: NotificationCategory,
         title: str,
         message: str,
+        link: dict[str, Any] | None = None,
+        deliver_after: datetime | None = None,
     ) -> "Notification":
         now = datetime.now(timezone.utc)
         return cls(
@@ -36,5 +43,7 @@ class Notification(BaseEntity):
             title=title,
             message=message,
             is_read=False,
+            link=link,
+            deliver_after=deliver_after,
             created_at=now,
         )

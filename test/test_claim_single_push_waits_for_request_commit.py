@@ -40,8 +40,8 @@ class _Db:
             await s.execute(text("DELETE FROM users WHERE id = :id"), {"id": _USER})
             await s.execute(
                 text(
-                    "INSERT INTO users (id, email, created_at, country, timezone, account_type)"
-                    " VALUES (:id, :email, now(), 'US', 'UTC', 'user')"
+                    "INSERT INTO users (id, email, created_at, country, timezone)"
+                    " VALUES (:id, :email, now(), 'US', 'UTC')"
                 ),
                 {"id": _USER, "email": "test-claim-single-push+ci@example.invalid"},
             )

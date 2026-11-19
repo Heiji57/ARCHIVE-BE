@@ -136,3 +136,27 @@ class OAuthProviderUnavailableException(BaseAppException):
 class OAuthProviderResponseInvalidException(BaseAppException):
     """provider 응답이 예상 형식이 아니거나 우리 요청을 거부 (client 설정 오류 등)."""
     code = "AUTH_OAUTH_PROVIDER_RESPONSE_INVALID"
+
+
+class AvatarTooLargeException(BaseAppException):
+    """프로필 사진이 2MB 를 넘음."""
+
+    code = "AVATAR_TOO_LARGE"
+
+
+class AvatarUnsupportedTypeException(BaseAppException):
+    """png/jpeg/webp 가 아니거나 이미지로 읽을 수 없음."""
+
+    code = "AVATAR_UNSUPPORTED_TYPE"
+
+
+class ReauthRequiredException(BaseAppException):
+    """최근(10분 안) 로그인이 필요한 동작. 401 이 아니라 403 — FE 자동 refresh 와 겹치지 않게."""
+
+    code = "AUTH_REAUTH_REQUIRED"
+
+
+class AccountDeleteConfirmMismatchException(BaseAppException):
+    """계정 삭제 확인 값이 표시 이름·이메일과 다름."""
+
+    code = "AUTH_DELETE_CONFIRM_MISMATCH"

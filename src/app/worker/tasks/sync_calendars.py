@@ -21,27 +21,33 @@ from datetime import datetime, timedelta, timezone
 import structlog
 from redis.asyncio import Redis
 
-from app.google_calendar.domain.exceptions.exceptions import CalendarApiUnavailableException
 from app.google_calendar.application.use_cases.sync_calendar_events import (
     SyncCalendarEventsUseCase,
 )
+from app.google_calendar.domain.exceptions.exceptions import CalendarApiUnavailableException
 from app.google_calendar.infrastructure.api.google_calendar_client import (
     GoogleCalendarApiClient,
 )
-from app.worker.tasks.push_calendars import run_batch_push
+from app.google_calendar.infrastructure.notifications.trash_notice import NotifierTrashNotice
 from app.google_calendar.infrastructure.persistence.repositories.calendar_connection_repo import (
     GoogleCalendarConnectionRepository,
 )
 from app.google_calendar.infrastructure.persistence.repositories.calendar_event_repo import (
     CalendarEventRepository,
 )
+from app.notification.application.services.notifier import Notifier
+from app.notification.infrastructure.persistence.repositories.notification_repo import (
+    NotificationRepository,
+)
 from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
     UserSettingsRepository,
 )
 from app.shared.infrastructure.config.settings import get_settings
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
+from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
+from app.worker.tasks.push_calendars import run_batch_push
 
 _log = structlog.get_logger(__name__)
 
@@ -98,6 +104,14 @@ async def sync_user_calendar_task(user_id: str) -> None:
                 config=settings.google_calendar,
                 todo_repo=TodoRepository(session),
                 settings_repo=UserSettingsRepository(session),
+                trash_notice=NotifierTrashNotice(
+                    Notifier(
+                        NotificationRepository(session),
+                        UserSettingsRepository(session),
+                        UserRepository(session),
+                    ),
+                    UserSettingsRepository(session),
+                ),
             )
             await use_case.execute(user_id, force=True)
         # 2) ARCHIVE → Google push (pending/failed/stuck 배치 처리). pull-sync 뒤 실행 —

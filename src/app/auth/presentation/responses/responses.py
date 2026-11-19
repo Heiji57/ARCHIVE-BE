@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.auth.infrastructure.storage.avatar_storage import avatar_url
+from app.shared.infrastructure.config.settings import get_settings
 from app.user.domain.models.user import User
 
 
@@ -15,7 +17,8 @@ class UserResponse(BaseModel):
     country: str
     region: str | None = None
     timezone: str
-    account_type: str = Field(serialization_alias="accountType")
+    display_name: str | None = Field(default=None, serialization_alias="displayName")
+    avatar_url: str | None = Field(default=None, serialization_alias="avatarUrl")
 
     model_config = {"populate_by_name": True}
 
@@ -27,13 +30,13 @@ class UserResponse(BaseModel):
             country=user.country,
             region=user.region,
             timezone=user.timezone,
-            account_type=user.account_type,
+            display_name=user.display_name,
+            avatar_url=avatar_url(get_settings().auth.avatar_public_path, user.avatar_key),
         )
 
 
 class UpdateProfileResponse(BaseModel):
     user: UserResponse
-    access_token: str | None = Field(default=None, serialization_alias="accessToken")
 
     model_config = {"populate_by_name": True}
 

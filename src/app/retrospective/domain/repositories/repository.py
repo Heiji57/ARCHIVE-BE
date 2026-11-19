@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from datetime import date
+from datetime import date, datetime
 
 from app.retrospective.domain.models.folder import Folder
 from app.retrospective.domain.models.journal_entry import JournalEntry, JournalEntryMeta
@@ -107,6 +107,35 @@ class IJournalEntryRepository(ABC):
     @abstractmethod
     async def delete(self, id: str, user_id: str) -> None: ...
 
+    # ── 휴지통 (soft delete) ──
+    @abstractmethod
+    async def soft_delete(self, id: str, user_id: str) -> None: ...
+
+    @abstractmethod
+    async def soft_delete_in_folders(self, user_id: str, folder_ids: list[str]) -> list[str]:
+        """그 폴더들 안의 회고를 휴지통으로 — 휴지통에 넣은 id 를 돌려준다."""
+        ...
+
+    @abstractmethod
+    async def list_trashed(self, user_id: str) -> list[JournalEntry]: ...
+
+    @abstractmethod
+    async def find_trashed(self, id: str, user_id: str) -> JournalEntry | None: ...
+
+    @abstractmethod
+    async def restore(self, id: str, user_id: str) -> None:
+        """폴더가 없어졌으면 미분류로. 같은 날·종류의 회고가 이미 있으면
+        JournalEntryAlreadyExistsException."""
+        ...
+
+    @abstractmethod
+    async def purge(self, id: str, user_id: str) -> list[str]: ...
+
+    @abstractmethod
+    async def purge_trashed(self, user_id: str | None, before: datetime | None) -> list[str]:
+        """지운 회고 id 를 돌려준다(청크 정리용)."""
+        ...
+
 
 class IRetroSummaryRepository(ABC):
     @abstractmethod
@@ -132,6 +161,20 @@ class IRetroSummaryRepository(ABC):
     ) -> list[RetroSummary]:
         """find_by_period 의 batch 버전 — annual dispatch 처럼 여러 period 를 순회하며
         개별 조회(N+1)하는 대신 1회 IN 조회로 처리하기 위해 사용."""
+        ...
+
+    @abstractmethod
+    async def find_overlapping(
+        self, user_id: str, summary_type: SummaryType, start: date, end: date
+    ) -> list[RetroSummary]:
+        """기간이 [start, end] 와 하루라도 겹치는 요약."""
+        ...
+
+    @abstractmethod
+    async def find_latest_before(
+        self, user_id: str, summary_type: SummaryType, before: date
+    ) -> RetroSummary | None:
+        """period_start < before 인 것 중 가장 늦게 시작한 요약 — 주 시작 요일 전환 주 보정용."""
         ...
 
     @abstractmethod

@@ -13,6 +13,11 @@ import pytest
 import app.topic.infrastructure.ai.gemini_client as gemini_module
 import app.worker.tasks.generate_digest as digest_module
 from app.shared.infrastructure.config.topic import TopicConfig
+from app.topic.domain.models.structured_digest import (
+    DigestItem,
+    DigestTheme,
+    StructuredDigest,
+)
 from app.topic.domain.models.topic import SimilarChunk, TopicDigest
 from app.topic.domain.models.value_objects import DigestStatus
 from app.worker.tasks.generate_digest import (
@@ -36,6 +41,23 @@ def _chunk(entry_id: str, idx: int, text: str = "", date_key: str = "2026-09-01"
     )
 
 
+def _structured(themes: int = 1, items: int = 1, text: str = "옛 항목") -> StructuredDigest:
+    return StructuredDigest(
+        summary="기존 요약",
+        themes=[
+            DigestTheme(
+                key=f"t{n + 1}",
+                name=f"기존 주제{n}",
+                summary="",
+                items=[
+                    DigestItem("2026-08-30", f"{text} {i}", "entry", "e_old") for i in range(items)
+                ],
+            )
+            for n in range(themes)
+        ],
+    )
+
+
 def _digest(**kw) -> TopicDigest:
     base: dict = dict(
         id="dig_1",
@@ -47,6 +69,7 @@ def _digest(**kw) -> TopicDigest:
         incremental_count=0,
         full_fingerprint=_FP,
         source_entry_ids=["e_old"],
+        structured=_structured(),
         created_at=_T0,
     )
     base.update(kw)
@@ -60,6 +83,7 @@ def _digest(**kw) -> TopicDigest:
     ("overrides", "expected"),
     [
         ({"content": None}, "initial"),
+        ({"structured": None}, "unstructured"),
         ({"last_generated_at": None}, "initial"),
         ({"full_fingerprint": "other"}, "fingerprint_changed"),
         ({"full_fingerprint": None}, "fingerprint_changed"),
@@ -128,12 +152,14 @@ async def test_prompt_merges_neighbors_in_order_without_duplicates() -> None:
 
 async def test_incremental_prompt_carries_existing_digest() -> None:
     prompt = await _build_prompt(
-        "배포", "", [_chunk("e_new", 0, "새 회고")], [], previous_content="# 기존 정리"
+        "배포", "", [_chunk("e_new", 0, "새 회고")], [], previous=_structured()
     )
-    assert "### Existing Digest" in prompt and "# 기존 정리" in prompt
+    assert "### Existing Digest" in prompt and "기존 주제0" in prompt
     assert "### New Journal Entry Excerpts" in prompt
-    assert prompt.index("# 기존 정리") < prompt.index("새 회고")
-    assert "rewrite that statement in place" in prompt
+    assert prompt.index("기존 주제0") < prompt.index("새 회고")
+    assert "rewrite that item in place" in prompt
+    # 직전 구조의 근거도 UUID 가 아닌 표식으로 싣는다 (새 회고 E1, 직전에만 있는 회고 E2)
+    assert '"source": "E2"' in prompt and "e_old" not in prompt
 
 
 async def test_full_prompt_has_no_existing_digest_section() -> None:
@@ -213,9 +239,14 @@ def _run_worker(monkeypatch, digest: TopicDigest, *, changed: list[str], new_chu
         def __init__(self, ai) -> None:
             pass
 
-        async def generate(self, prompt):
+        async def generate_json(self, prompt, schema):
             calls["prompt"] = prompt
-            return "# 새 정리"
+            return {
+                "summary": "새 요약",
+                "themes": [
+                    {"name": "배포", "summary": "", "items": [{"source": "E1", "text": "새 정리"}]}
+                ],
+            }
 
     class _Topic:
         def __init__(self, session) -> None:
@@ -263,11 +294,12 @@ async def test_incremental_merges_new_chunks_into_existing_digest(monkeypatch) -
     # 증분 검색 + 비용 비교용 전체 검색
     assert calls["searches"] == [_T0, None]
     assert "Existing Digest" in calls["prompt"]
-    assert "# 기존 정리" in calls["prompt"] and "새 회고" in calls["prompt"]
+    assert "기존 주제0" in calls["prompt"] and "새 회고" in calls["prompt"]
     done = calls["completed"]
     assert done["incremental_count"] == 3
     assert done["source_entry_ids"] == ["e_old", "e_new"]
-    assert done["content"] == "# 새 정리"
+    assert done["content"] == "새 요약\n\n## 배포\n- 9/1 새 정리"
+    assert done["structured"].themes[0].items[0].source_id == "e_new"
     assert done["generated_at"] > _T0
 
 
@@ -321,7 +353,10 @@ async def test_full_is_chosen_when_cheaper_than_incremental(monkeypatch) -> None
     """소스가 적은 주제는 직전 본문이 원문 전체보다 길다 — 이때 증분은 오히려 비싸다."""
     calls = _run_worker(
         monkeypatch,
-        _digest(content="# 기존 정리\n" + "- 길게 불어난 요약 문장\n" * 200, incremental_count=1),
+        _digest(
+            structured=_structured(themes=6, items=12, text="길게 불어난 요약 " * 8),
+            incremental_count=1,
+        ),
         changed=[],
         new_chunks=[_chunk("e_new", 0, "새 회고")],
         all_chunks=[_chunk("e_old", 0, "짧은 회고"), _chunk("e_new", 0, "새 회고")],

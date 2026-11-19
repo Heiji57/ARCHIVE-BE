@@ -3,15 +3,17 @@ from datetime import datetime, timezone
 
 from fastapi.exceptions import RequestValidationError
 
+from app.calendars.domain.repositories.repository import ICalendarRepository
 from app.shared.domain.utils.id import generate_id
 from app.todo.application.dtos.commands import UNSET, UpdateTodoCommand
+from app.todo.application.services.calendar_guard import check_calendar_owned
 from app.todo.domain.exceptions.exceptions import TodoNotFoundException
 from app.todo.domain.models.todo import Todo
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import ITodoRepository
 from app.todo.domain.utils.recurrence import (
-    compute_instance_start,
     compute_instance_end,
+    compute_instance_start,
     generate_slots_from,
     is_virtual_id,
     make_virtual,
@@ -44,10 +46,15 @@ class UpdateTodoOutcome:
 
 
 class UpdateTodoUseCase:
-    def __init__(self, todo_repo: ITodoRepository) -> None:
+    def __init__(
+        self, todo_repo: ITodoRepository, calendar_repo: ICalendarRepository | None = None
+    ) -> None:
         self._todo_repo = todo_repo
+        self._calendar_repo = calendar_repo
 
     async def execute(self, cmd: UpdateTodoCommand) -> UpdateTodoOutcome:
+        if isinstance(cmd.calendar_id, str):
+            await check_calendar_owned(self._calendar_repo, cmd.user_id, cmd.calendar_id)
         if is_virtual_id(cmd.id):
             return await self._update_virtual(cmd)
         todo = await self._todo_repo.find_by_id(cmd.id, cmd.user_id)
@@ -113,6 +120,7 @@ class UpdateTodoUseCase:
             master_google_event_id=master.google_event_id,
             tags=master.tags,
             due_date_key=master.due_date_key,
+            calendar_id=master.calendar_id,
         )
         self._apply_patch(exc, cmd)
         saved = await self._todo_repo.upsert_exception(exc)
@@ -141,8 +149,9 @@ class UpdateTodoUseCase:
         분리할 땐 그 row 자신을 넘긴다 — master 대신 써야 그 회차가 이미 갖고 있던
         개별 수정 내용(예: 이전에 "this" 스코프로 바꾼 시간)을 분리 과정에서 잃지 않는다.
         """
-        from app.todo.domain.models.todo import RecurrenceRule
         from datetime import date, timedelta
+
+        from app.todo.domain.models.todo import RecurrenceRule
 
         # 첫 회차부터의 분리는 시리즈 전체 수정과 같다 — 새 base 를 만들면 옛 base 가
         # 회차 0개(until < date_key)로 남는데, 이는 Google 의 RRULE 로 표현할 수 없어
@@ -207,6 +216,7 @@ class UpdateTodoUseCase:
             recurrence_rule=new_rule,
             tags=field_source.tags,
             due_date_key=field_source.due_date_key,
+            calendar_id=field_source.calendar_id,
         )
         self._apply_patch(new_base, cmd)
         # source 가 다른 날로 옮겨 둔 예외 row 면 시간이 from_slot 과 어긋난다
@@ -306,6 +316,8 @@ class UpdateTodoUseCase:
             todo.anchor_time_to_date()
         if cmd.tags is not UNSET:
             todo.tags = cmd.tags  # type: ignore[assignment]
+        if cmd.calendar_id is not UNSET:
+            todo.calendar_id = cmd.calendar_id  # type: ignore[assignment]
         if cmd.due_date_key is not UNSET:
             if cmd.due_date_key is not None and cmd.due_date_key < todo.date_key:
                 raise RequestValidationError(

@@ -3,6 +3,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from typing import Any
 
+from app.topic.domain.models.structured_digest import StructuredDigest
 from app.topic.domain.models.topic import (
     EmbeddingQueueItem,
     EntryChunk,
@@ -33,6 +34,11 @@ class ITopicRepository(ABC):
 
     @abstractmethod
     async def count_by_user(self, user_id: str) -> int: ...
+
+    @abstractmethod
+    async def search(self, user_id: str, query: str, limit: int) -> list[Topic]:
+        """이름·설명에 query 가 들어간 주제 (대소문자 무시 부분 일치). 이름순."""
+        ...
 
 
 class ITopicDigestRepository(ABC):
@@ -71,8 +77,9 @@ class ITopicDigestRepository(ABC):
         incremental_count: int,
         full_fingerprint: str,
         source_entry_ids: list[str],
+        structured: StructuredDigest,
     ) -> None:
-        """생성 성공 — 본문과 다음 증분 판정에 쓸 상태를 한 번에 기록한다."""
+        """생성 성공 — 본문·구조와 다음 증분 판정에 쓸 상태를 한 번에 기록한다."""
         ...
 
 
@@ -87,6 +94,9 @@ class IDigestRateLimiter(ABC):
 
 
 class IEntryChunkRepository(ABC):
+    @abstractmethod
+    async def delete_by_entries(self, entry_ids: list[str]) -> None: ...
+
     @abstractmethod
     async def upsert_chunks(self, chunks: list[EntryChunk]) -> None: ...
 
@@ -137,6 +147,9 @@ class IEntryChunkRepository(ABC):
 
 
 class ITodoEmbeddingRepository(ABC):
+    @abstractmethod
+    async def delete_by_todos(self, todo_ids: list[str]) -> None: ...
+
     @abstractmethod
     async def upsert(self, embedding: TodoEmbedding) -> None: ...
 

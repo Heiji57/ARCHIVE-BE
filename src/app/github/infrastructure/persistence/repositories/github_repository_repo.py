@@ -7,7 +7,6 @@ from app.github.domain.repositories.repository import IGitHubRepositoryRepositor
 from app.github.infrastructure.persistence.models.github_repository_model import GitHubRepositoryModel
 from app.shared.infrastructure.database.errors import translate_unique_violations
 
-
 # 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
 _UNIQUE_VIOLATIONS = {
     "uq_github_repositories_user_repo": GitHubRepositoryAlreadyLinkedException,
