@@ -39,6 +39,9 @@ dependencies = [
     "structlog>=24.4.0",
     "pycountry>=24.6.1",
     "pytz>=2024.2",
+    # Profile avatar upload (multipart) + resize
+    "pillow>=11.0.0,<13",
+    "python-multipart>=0.0.18,<1",
 ]
 
 [dependency-groups]

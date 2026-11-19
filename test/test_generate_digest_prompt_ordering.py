@@ -31,8 +31,8 @@ async def test_interleaved_chunks_group_under_correct_entry_heading() -> None:
 
     # A 의 두 문단이 모두 "2026-09-01" 헤딩 아래 있어야 한다 — B 의 날짜 밑으로
     # 새지 않아야 한다.
-    a_heading_pos = prompt.index("**2026-09-01**")
-    b_heading_pos = prompt.index("**2026-09-05**")
+    a_heading_pos = prompt.index("[E1] 2026-09-01")
+    b_heading_pos = prompt.index("[E2] 2026-09-05")
     a_second_pos = prompt.index("A 둘째 문단")
 
     assert a_heading_pos < a_second_pos, "A 둘째 문단이 A 헤딩보다 앞에 있다"
@@ -42,8 +42,8 @@ async def test_interleaved_chunks_group_under_correct_entry_heading() -> None:
     )
 
     # 헤딩은 entry 당 정확히 한 번만 찍혀야 한다 (중복 헤딩 방지 회귀도 겸한다).
-    assert prompt.count("**2026-09-01**") == 1
-    assert prompt.count("**2026-09-05**") == 1
+    assert prompt.count("[E1] 2026-09-01") == 1
+    assert prompt.count("[E2] 2026-09-05") == 1
 
 
 async def test_entry_order_preserved_by_first_occurrence() -> None:
@@ -53,7 +53,7 @@ async def test_entry_order_preserved_by_first_occurrence() -> None:
         _Chunk(entry_id="e_second", chunk_index=0, text="그다음", date_key="2026-01-02"),
     ]
     prompt = await _build_prompt("배포", "", chunks, [])
-    assert prompt.index("**2026-01-01**") < prompt.index("**2026-01-02**")
+    assert prompt.index("[E1] 2026-01-01") < prompt.index("[E2] 2026-01-02")
 
 
 async def test_chunks_within_entry_ordered_by_chunk_index() -> None:

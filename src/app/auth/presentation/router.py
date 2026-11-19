@@ -7,9 +7,11 @@ from fastapi import (
     BackgroundTasks,
     Cookie,
     Depends,
+    File,
     Query,
     Request,
     Response,
+    UploadFile,
     status,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -23,37 +25,44 @@ from app.auth.application.dtos.commands import (
     SendEmailVerificationCommand,
     VerifyEmailCodeCommand,
 )
+from app.auth.application.ports import AccountDeletionDispatcher
 from app.auth.application.services.session_service import SessionService
 from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
+from app.auth.application.use_cases.delete_account import DeleteAccountUseCase
+from app.auth.application.use_cases.get_me import GetMeUseCase
+from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
+from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
 from app.auth.application.use_cases.initiate_oauth_link import InitiateOAuthLinkUseCase
 from app.auth.application.use_cases.list_sessions import ListSessionsUseCase
+from app.auth.application.use_cases.login import LoginUseCase
+from app.auth.application.use_cases.logout import LogoutUseCase
+from app.auth.application.use_cases.profile import (
+    AVATAR_MAX_BYTES,
+    DeleteAvatarUseCase,
+    UpdateProfileCommand,
+    UpdateProfileUseCase,
+    UploadAvatarUseCase,
+)
+from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
+from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.request_password_reset import RequestPasswordResetUseCase
-from app.shared.domain.exceptions.external import EmailDeliveryFailedException
-from app.shared.infrastructure.email.smtp import send_email
 from app.auth.application.use_cases.reset_password import ResetPasswordUseCase
 from app.auth.application.use_cases.revoke_session import (
     RevokeOtherSessionsUseCase,
     RevokeSessionUseCase,
 )
-from app.auth.application.use_cases.get_me import GetMeUseCase
-from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
-from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
-from app.auth.application.use_cases.login import LoginUseCase
-from app.auth.application.use_cases.logout import LogoutUseCase
-from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
-from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
-from app.auth.application.use_cases.update_profile import UpdateProfileCommand, UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
 from app.auth.domain.exceptions.exceptions import (
+    AvatarTooLargeException,
     OAuthProviderResponseInvalidException,
     OAuthProviderUnavailableException,
     OnboardingTokenInvalidException,
 )
-from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
-from app.shared.infrastructure.auth.jwt import create_access_token
 from app.auth.domain.models.value_objects import OAuthProvider
+from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.auth.presentation.requests.requests import (
+    DeleteAccountRequest,
     LoginRequest,
     OnboardingCompleteRequest,
     RegisterRequest,
@@ -76,8 +85,11 @@ from app.auth.presentation.responses.session_responses import (
 )
 from app.shared.domain.context.user_context import UserContext
 from app.shared.domain.exceptions.base import BaseAppException
+from app.shared.domain.exceptions.external import EmailDeliveryFailedException
+from app.shared.domain.utils.unset import UNSET
 from app.shared.infrastructure.auth.jwt import extract_refresh_token, get_current_user
 from app.shared.infrastructure.config.settings import get_settings
+from app.shared.infrastructure.email.smtp import send_email
 from app.shared.infrastructure.errors.handler import resolve_code
 from app.shared.infrastructure.logger.security import get_security_logger
 from app.shared.presentation.schemas.response import ApiResponse
@@ -329,21 +341,58 @@ async def update_profile(
     use_case: FromDishka[UpdateProfileUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[UpdateProfileResponse]:
+    fields = body.model_fields_set
     user = await use_case.execute(
         UpdateProfileCommand(
             user_id=current_user.id,
-            display_name=body.display_name,
-            account_type=body.account_type,
+            display_name=body.display_name if "display_name" in fields else UNSET,
         )
     )
-    new_token = (
-        create_access_token(user.id, user.account_type)
-        if body.account_type is not None
-        else None
-    )
-    return ApiResponse.ok(
-        UpdateProfileResponse(user=UserResponse.from_entity(user), access_token=new_token)
-    )
+    return ApiResponse.ok(UpdateProfileResponse(user=UserResponse.from_entity(user)))
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def delete_account(
+    body: DeleteAccountRequest,
+    background_tasks: BackgroundTasks,
+    use_case: FromDishka[DeleteAccountUseCase],
+    dispatcher: FromDishka[AccountDeletionDispatcher],
+    current_user: UserContext = Depends(get_current_user),
+) -> Response:
+    """계정 삭제(soft delete). 10분 안에 로그인했어야 한다(아니면 403 AUTH_REAUTH_REQUIRED)."""
+    deleted = await use_case.execute(current_user, body.confirm)
+    # 세션 폐기·토큰 표식·사진 파일·외부 토큰 철회는 작업이 deleted_at 커밋을 확인한 뒤에 —
+    # BackgroundTasks 는 이 스택에서 요청 커밋보다 먼저 돌 수 있다.
+    background_tasks.add_task(dispatcher.dispatch, deleted)
+    out = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _clear_refresh_cookie(out)
+    return out
+
+
+@router.post("/me/avatar", response_model=ApiResponse[UserResponse])
+async def upload_avatar(
+    request: Request,
+    use_case: FromDishka[UploadAvatarUseCase],
+    file: UploadFile = File(...),
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[UserResponse]:
+    """png/jpeg/webp, 2MB 이하. 256px 정사각형 webp 로 줄여 저장한다."""
+    # 본문을 다 받기 전 Content-Length 로 먼저 거른다(멀티파트 여유분 64KB). 최종 판정은 아래 읽기.
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > AVATAR_MAX_BYTES + 65536:
+        raise AvatarTooLargeException()
+    raw = await file.read(AVATAR_MAX_BYTES + 1)  # 상한보다 1바이트만 더 읽어 크기 초과를 판별
+    user = await use_case.execute(current_user.id, file.content_type, raw)
+    return ApiResponse.ok(UserResponse.from_entity(user))
+
+
+@router.delete("/me/avatar", response_model=ApiResponse[UserResponse])
+async def delete_avatar(
+    use_case: FromDishka[DeleteAvatarUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[UserResponse]:
+    user = await use_case.execute(current_user.id)
+    return ApiResponse.ok(UserResponse.from_entity(user))
 
 
 @router.get("/oauth/{provider}/authorize")

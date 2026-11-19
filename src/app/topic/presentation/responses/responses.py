@@ -1,9 +1,16 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
 from app.todo.presentation.responses.responses import TagCountResponse
 from app.topic.domain.models.value_objects import DigestStatus
+
+
+class TopicRecentItemResponse(BaseModel):
+    date_key: str
+    text: str
+    theme_key: str
 
 
 class TopicResponse(BaseModel):
@@ -16,6 +23,12 @@ class TopicResponse(BaseModel):
     entry_count: int | None = None
     todo_count: int | None = None
     digest_watermark_date_key: str | None = None
+    digest_status: str | None = None  # none | pending | in_progress | completed | failed
+    digest_summary: str | None = None  # 구조화 정리의 한 줄 요약
+    period_start_date_key: str | None = None
+    period_end_date_key: str | None = None
+    unreflected_entry_count: int | None = None
+    recent_items: list[TopicRecentItemResponse] | None = None  # ?include=recent 일 때만
 
     model_config = {"from_attributes": True}
 
@@ -50,6 +63,7 @@ class TopicSourceResponse(BaseModel):
     title: str
     date_key: str
     retro_type: str | None
+    status: str | None = None  # todo 만 — 현재 상태
 
 
 class TopicSourcePageResponse(BaseModel):
@@ -60,11 +74,24 @@ class TopicSourcePageResponse(BaseModel):
     digest_watermark_date_key: str | None
 
 
+class DigestSourceResponse(BaseModel):
+    kind: str  # "entry" | "todo"
+    title: str
+    date_key: str
+    retro_type: str | None = None
+    status: str | None = None
+
+
 class TopicDigestResponse(BaseModel):
     id: str
     topic_id: str
     status: DigestStatus
     content: str | None
+    # 구조화 정리 {version, summary, themes[{key, name, summary, items[{dateKey, text,
+    # source{kind,id}}]}]}. 구조화 도입 전 정리는 null — 다시 정리하면 채워진다.
+    structured: dict[str, Any] | None = None
+    # structured 가 가리키는 근거 id → 현재 정보. 지운 근거는 빠진다. GET /digest 에서만 채움.
+    sources: dict[str, DigestSourceResponse] | None = None
     watermark_date_key: str | None
     created_at: datetime
     updated_at: datetime | None

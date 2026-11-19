@@ -121,7 +121,7 @@ async def test_digest_empty_text_is_ai_empty_response_not_digest_not_found():
 
     client = _with_fake_response(TopicGeminiClient(_AI_CFG), SimpleNamespace(text=None))
     with pytest.raises(AIEmptyResponseException):
-        await client.generate("p")
+        await client.generate_json("p", {"type": "object"})
 
 
 async def test_empty_embedding_is_ai_empty_response():

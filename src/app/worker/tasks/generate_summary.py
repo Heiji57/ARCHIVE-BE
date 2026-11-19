@@ -11,16 +11,21 @@ from celery.exceptions import Retry
 from celery.utils.time import get_exponential_backoff_interval
 from redis.asyncio import Redis
 
+from app.notification.application.services.notifier import (
+    Notifier,
+    should_push_now,
+    stream_payload,
+)
 from app.notification.domain.models.notification import Notification
 from app.notification.domain.models.value_objects import NotificationCategory, NotificationType
 from app.notification.infrastructure.persistence.repositories.notification_repo import (
     NotificationRepository,
 )
+from app.retrospective.domain.constants.summary_empty_defaults import empty_summary_text
 from app.retrospective.domain.exceptions.exceptions import (
     SummaryAlreadyInProgressException,
     SummaryInvalidStateException,
 )
-from app.retrospective.domain.constants.summary_empty_defaults import empty_summary_text
 from app.retrospective.domain.models.value_objects import SummaryContent, SummaryType
 from app.retrospective.infrastructure.ai.gemini_client import GeminiSummaryClient
 from app.retrospective.infrastructure.ai.strategies import get_strategy
@@ -38,6 +43,7 @@ from app.shared.domain.exceptions.external import (
     AIServiceUnavailableException,
 )
 from app.shared.infrastructure.config.settings import get_settings
+from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 from app.worker.celery_app import celery_app
 from app.worker.db import get_worker_session_factory
 
@@ -125,21 +131,15 @@ def _notification_text(locale: str, summary_type: SummaryType) -> dict[str, str]
     return _NOTIFICATION_TEXT.get(base, _NOTIFICATION_TEXT["en"])[summary_type]
 
 
-def _notification_payload(notif: Notification, extra: dict | None = None) -> dict:
-    payload = {
-        "id": notif.id,
-        "type": notif.type.value,
-        "category": notif.category.value,
-        "title": notif.title,
-        "message": notif.message,
-        "is_read": notif.is_read,
-        "created_at": notif.created_at.isoformat(),
-    }
-    if extra:
-        # SUMMARY 알림에 한해 어떤 요약이 갱신됐는지 식별 정보를 덧붙인다.
-        # FE 가 /notifications/stream 구독만으로 해당 회고를 타깃 refetch 가능.
-        payload.update(extra)
-    return payload
+async def _notify(session, user_id: str, **kwargs) -> Notification | None:  # type: ignore[no-untyped-def]
+    """종류별 수신 설정·방해 금지를 적용해 저장.
+
+    꺼진 종류면 None, 보류 중이면 deliver_after 가 있다.
+    """
+    notifier = Notifier(
+        NotificationRepository(session), UserSettingsRepository(session), UserRepository(session)
+    )
+    return await notifier.notify(user_id, **kwargs)
 
 
 @celery_app.task(
@@ -259,20 +259,21 @@ async def generate_summary_task(
             # 빈 기간 알림은 "요약이 도착했다"는 소음일 뿐이라 보내지 않는다(SSE 완료는 보냄).
             if send_notification and not is_empty:
                 text = _notification_text(locale, summary.summary_type)
-                notification = Notification.create(
-                    user_id=user_id,
+                saved_notif = await _notify(
+                    session,
+                    user_id,
                     type=NotificationType.SUCCESS,
                     category=NotificationCategory.SUMMARY,
                     title=text["success_title"],
                     message=text["success_msg"],
+                    link={"kind": "summary", "id": summary_id},
                 )
-                saved_notif = await NotificationRepository(session).save(notification)
 
         await redis.publish(
             f"summary:{summary_id}",
             json.dumps({"status": "completed", "summary_id": summary_id}),
         )
-        if saved_notif is not None:
+        if saved_notif is not None and should_push_now(saved_notif):
             summary_meta = {
                 "resource": "summary",
                 "summaryId": summary_id,
@@ -283,7 +284,7 @@ async def generate_summary_task(
             }
             await redis.publish(
                 f"notifications:{user_id}",
-                json.dumps(_notification_payload(saved_notif, summary_meta)),
+                json.dumps(stream_payload(saved_notif, summary_meta)),
             )
 
     except Retry:
@@ -313,16 +314,17 @@ async def generate_summary_task(
 
             if send_notification and summary_type_cached is not None:
                 text = _notification_text(locale, summary_type_cached)
-                notification = Notification.create(
-                    user_id=user_id,
+                saved_notif = await _notify(
+                    session,
+                    user_id,
                     type=NotificationType.ERROR,
                     category=NotificationCategory.SUMMARY,
                     title=text["fail_title"],
                     message=text["fail_msg"],
+                    link={"kind": "summary", "id": summary_id},
                 )
-                saved_notif = await NotificationRepository(session).save(notification)
 
-        if saved_notif is not None:
+        if saved_notif is not None and should_push_now(saved_notif):
             summary_meta = {
                 "resource": "summary",
                 "summaryId": summary_id,
@@ -336,7 +338,7 @@ async def generate_summary_task(
                 summary_meta["periodEnd"] = failed_period_end.isoformat()
             await redis.publish(
                 f"notifications:{user_id}",
-                json.dumps(_notification_payload(saved_notif, summary_meta)),
+                json.dumps(stream_payload(saved_notif, summary_meta)),
             )
         await redis.publish(
             f"summary:{summary_id}",

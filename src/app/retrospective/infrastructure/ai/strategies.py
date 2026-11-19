@@ -38,6 +38,9 @@ from app.retrospective.infrastructure.persistence.repositories.journal_entry_rep
 from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import (
     RetroSummaryRepository,
 )
+from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
+    UserSettingsRepository,
+)
 from app.shared.domain.utils.period import get_months_in_year, weeks_owned_by_month
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
@@ -154,7 +157,12 @@ class MonthlyHybridStrategy(SummaryStrategy):
         entry_repo = JournalEntryRepository(session)
         summary_repo = RetroSummaryRepository(session)
 
-        weeks = weeks_owned_by_month(summary.period_start.year, summary.period_start.month)
+        # 주간 요약을 찾는 주 경계는 사용자 주 시작 요일을 따른다(주간 요약을 만든 기준과 같게).
+        user_settings = await UserSettingsRepository(session).find_by_user_id(summary.user_id)
+        week_start = user_settings.week_start if user_settings else "mon"
+        weeks = weeks_owned_by_month(
+            summary.period_start.year, summary.period_start.month, week_start
+        )
         sections: list[WeekSection] = []
 
         for idx, (w_start, w_end) in enumerate(weeks, start=1):

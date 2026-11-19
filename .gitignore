@@ -43,3 +43,7 @@ migrations/versions/*.pyc
 # OS
 .DS_Store
 Thumbs.db
+
+# 사용자 업로드·생성 파일 (프로필 사진, 내보내기 zip)
+static/avatars/
+exports/

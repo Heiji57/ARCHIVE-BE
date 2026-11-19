@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.shared.domain.models.base import BaseEntity
+from app.topic.domain.models.structured_digest import StructuredDigest
 from app.topic.domain.models.value_objects import DigestStatus
 
 
@@ -24,6 +25,8 @@ class TopicDigest(BaseEntity):
     incremental_count: int = 0
     full_fingerprint: str | None = None
     source_entry_ids: list[str] = field(default_factory=list)
+    # 구조화 정리(큰 주제·날짜별 한 일·근거). 구조화 도입 전 정리는 None — 다시 정리하면 채워진다.
+    structured: StructuredDigest | None = None
 
 
 @dataclass(kw_only=True)

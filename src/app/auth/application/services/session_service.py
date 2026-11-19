@@ -41,6 +41,7 @@ class RotatedSession:
     refresh_token: str
     session_id: str
     user_id: str
+    issued_at: float  # 세션 발급(로그인) 시각 epoch — access token 의 auth_time
 
 
 class SessionService:
@@ -109,6 +110,7 @@ class SessionService:
                 refresh_token=f"{record.session_id}.{new_secret}",
                 session_id=record.session_id,
                 user_id=record.user_id,
+                issued_at=record.issued_at,
             )
 
         # 2) 직전 RT 와 일치 AND grace 윈도 안 → 동시 refresh race
@@ -132,6 +134,7 @@ class SessionService:
                 refresh_token="",
                 session_id=record.session_id,
                 user_id=record.user_id,
+                issued_at=record.issued_at,
             )
 
         # 3) 그 외 — 폐기된 RT 재등장 → 탈취 의심 → 전 세션 폐기

@@ -92,6 +92,15 @@ def _patch_repos(monkeypatch, *, entries=(), todos=(), summaries=None, completed
     monkeypatch.setattr(strategies_module, "RetroSummaryRepository", _SummaryRepo)
     monkeypatch.setattr(strategies_module, "_fetch_calendar_inputs", calendar)
 
+    class _NoSettings:
+        def __init__(self, session) -> None:
+            pass
+
+        async def find_by_user_id(self, user_id):
+            return None  # 기본 주 시작(월)
+
+    monkeypatch.setattr(strategies_module, "UserSettingsRepository", _NoSettings)
+
 
 # ── 전략 ─────────────────────────────────────────────────────────
 

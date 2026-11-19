@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from sse_starlette.sse import EventSourceResponse
 
 from app.shared.domain.context.user_context import UserContext
+from app.shared.domain.utils.period import today_in_tz
 from app.shared.infrastructure.auth.jwt import get_current_user
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.presentation.schemas.response import ApiResponse
@@ -21,8 +22,8 @@ from app.topic.application.dtos.queries import (
     GetDigestByIdQuery,
     GetDigestQuery,
     GetTopicSourcesQuery,
-    GetTopicStatsQuery,
     GetTopicsQuery,
+    GetTopicStatsQuery,
 )
 from app.topic.application.use_cases.create_topic import CreateTopicUseCase
 from app.topic.application.use_cases.delete_topic import DeleteTopicUseCase
@@ -35,14 +36,17 @@ from app.topic.application.use_cases.update_topic import UpdateTopicUseCase
 from app.topic.domain.models.value_objects import DigestStatus
 from app.topic.presentation.requests.requests import CreateTopicRequest, UpdateTopicRequest
 from app.topic.presentation.responses.responses import (
+    DigestSourceResponse,
     EntryCountsResponse,
     TodoCountsResponse,
     TopicDigestResponse,
+    TopicRecentItemResponse,
     TopicResponse,
     TopicSourcePageResponse,
     TopicSourceResponse,
     TopicStatsResponse,
 )
+from app.user.domain.repositories.repository import IUserRepository
 
 router = APIRouter(prefix="/topics", tags=["topics"], route_class=DishkaRoute)
 
@@ -73,6 +77,16 @@ def _to_topic_summary_response(summary) -> TopicResponse:
     response.entry_count = summary.entry_count
     response.todo_count = summary.todo_count
     response.digest_watermark_date_key = summary.digest_watermark_date_key
+    response.digest_status = summary.digest_status
+    response.digest_summary = summary.digest_summary
+    response.period_start_date_key = summary.period_start_date_key
+    response.period_end_date_key = summary.period_end_date_key
+    response.unreflected_entry_count = summary.unreflected_entry_count
+    if summary.recent_items is not None:
+        response.recent_items = [
+            TopicRecentItemResponse(date_key=i.date_key, text=i.text, theme_key=i.theme_key)
+            for i in summary.recent_items
+        ]
     return response
 
 
@@ -82,6 +96,7 @@ def _to_digest_response(digest) -> TopicDigestResponse:
         topic_id=digest.topic_id,
         status=digest.status,
         content=digest.content,
+        structured=digest.structured.to_dict() if digest.structured else None,
         watermark_date_key=digest.watermark_date_key,
         created_at=digest.created_at,
         updated_at=digest.updated_at,
@@ -107,9 +122,17 @@ async def create_topic(
 @router.get("")
 async def get_topics(
     use_case: FromDishka[GetTopicsUseCase],
+    user_repo: FromDishka[IUserRepository],
     current_user: UserContext = Depends(get_current_user),
+    include: str | None = Query(default=None, pattern="^recent$"),
 ) -> ApiResponse[list[TopicResponse]]:
-    summaries = await use_case.execute(GetTopicsQuery(user_id=current_user.id))
+    today = None
+    if include == "recent":
+        user = await user_repo.find_by_id(current_user.id)
+        today = today_in_tz(user.timezone if user else "UTC").isoformat()
+    summaries = await use_case.execute(
+        GetTopicsQuery(user_id=current_user.id, include_recent=include == "recent", today=today)
+    )
     return ApiResponse.ok([_to_topic_summary_response(s) for s in summaries])
 
 
@@ -185,6 +208,7 @@ async def get_topic_sources(
                     title=s.title,
                     date_key=s.date_key,
                     retro_type=s.retro_type,
+                    status=s.status,
                 )
                 for s in result.items
             ],
@@ -230,7 +254,19 @@ async def get_digest(
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[TopicDigestResponse]:
     digest = await use_case.execute(GetDigestQuery(user_id=current_user.id, topic_id=topic_id))
-    return ApiResponse.ok(_to_digest_response(digest))
+    response = _to_digest_response(digest)
+    sources = await use_case.resolve_sources(digest)
+    response.sources = {
+        sid: DigestSourceResponse(
+            kind=s.kind,
+            title=s.title,
+            date_key=s.date_key,
+            retro_type=s.retro_type,
+            status=s.status,
+        )
+        for sid, s in sources.items()
+    }
+    return ApiResponse.ok(response)
 
 
 @router.get("/{topic_id}/digest/stream")

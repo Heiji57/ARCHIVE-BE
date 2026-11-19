@@ -39,7 +39,8 @@ class DeleteTodoUseCase:
         반복 Todo:
           - "this"      : 해당 슬롯만 취소(exception row CANCELLED 생성 또는 삭제)
           - "following" : 해당 슬롯 이후 전체 삭제 (base until 조정)
-          - "all"       : 시리즈 전체 삭제 (base + 모든 exception)
+          - "all"       : 시리즈 전체를 휴지통으로 (base + 모든 exception)
+        일반 Todo 는 휴지통으로. "this"·"following" 은 규칙 변경이라 휴지통을 거치지 않는다.
         """
         if is_virtual_id(todo_id):
             return await self._delete_virtual(todo_id, user_id, recurrence_scope)
@@ -74,9 +75,9 @@ class DeleteTodoUseCase:
             await self._todo_repo.delete(todo.id, user_id)
             return TodoDeleteOutcome(delete_google_event_id=gid)
 
-        # 일반(비반복) todo
+        # 일반(비반복) todo — 휴지통으로(30일 뒤 worker.purge_trash 가 완전히 지운다)
         gid = todo.google_event_id
-        await self._todo_repo.delete(todo_id, user_id)
+        await self._todo_repo.soft_delete(todo_id, user_id)
         return TodoDeleteOutcome(delete_google_event_id=gid)
 
     # ── 가상 인스턴스 삭제 ──────────────────────────────────────────────────────
@@ -139,9 +140,9 @@ class DeleteTodoUseCase:
     # ── "all" — 시리즈 전체 삭제 ───────────────────────────────────────────────
 
     async def _delete_all(self, master: Todo, user_id: str) -> TodoDeleteOutcome:
-        await self._todo_repo.delete_all_exceptions(master.id, user_id)
+        # 시리즈 전체 = base + 예외 row 를 함께 휴지통으로(복원도 함께).
         gid = master.google_event_id
-        await self._todo_repo.delete(master.id, user_id)
+        await self._todo_repo.soft_delete(master.id, user_id, with_series=True)
         return TodoDeleteOutcome(delete_google_event_id=gid)
 
     # ── "following" — 해당 슬롯 이후 삭제 ─────────────────────────────────────

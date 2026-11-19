@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
 
+from app.calendars.domain.repositories.repository import ICalendarRepository
 from app.settings.domain.repositories.repository import IUserSettingsRepository
 from app.shared.domain.utils.id import generate_id
 from app.todo.application.dtos.commands import CreateTodoCommand
+from app.todo.application.services.auto_push import auto_push_enabled
+from app.todo.application.services.calendar_guard import check_calendar_owned
 from app.todo.domain.models.todo import Todo
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import ITodoRepository
@@ -13,11 +16,14 @@ class CreateTodoUseCase:
         self,
         todo_repo: ITodoRepository,
         settings_repo: IUserSettingsRepository,
+        calendar_repo: ICalendarRepository | None = None,
     ) -> None:
         self._todo_repo = todo_repo
         self._settings_repo = settings_repo
+        self._calendar_repo = calendar_repo
 
     async def execute(self, cmd: CreateTodoCommand) -> Todo:
+        await check_calendar_owned(self._calendar_repo, cmd.user_id, cmd.calendar_id)
         now = datetime.now(timezone.utc)
         todo = Todo(
             id=generate_id("todo"),
@@ -33,6 +39,7 @@ class CreateTodoUseCase:
             recurrence_rule=cmd.recurrence_rule,
             tags=cmd.tags,
             due_date_key=cmd.due_date_key,
+            calendar_id=cmd.calendar_id,
         )
         # 반복 base 는 start_time 로컬 날짜 == date_key 로 시작한다 (Todo.anchor_time_to_date).
         if todo.is_series_base:
@@ -50,5 +57,6 @@ class CreateTodoUseCase:
     async def _should_push(self, cmd: CreateTodoCommand) -> bool:
         if cmd.push_to_calendar is not None:
             return cmd.push_to_calendar
-        settings = await self._settings_repo.find_by_user_id(cmd.user_id)
-        return bool(settings and settings.calendar_auto_push_todo)
+        return await auto_push_enabled(
+            self._settings_repo, self._calendar_repo, cmd.user_id, cmd.calendar_id
+        )

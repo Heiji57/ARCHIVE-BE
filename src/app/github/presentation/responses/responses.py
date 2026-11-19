@@ -2,12 +2,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.github.application.use_cases.get_connection_status import ConnectionStatus
 from app.github.application.use_cases.get_commits_by_date import (
     CommitItem,
     CommitsByDateResult,
     FailedRepository,
 )
+from app.github.application.use_cases.get_connection_status import ConnectionStatus
 from app.github.application.use_cases.push_retrospective import PushOutcome
 from app.github.domain.models.github_repository import GitHubRepository
 from app.github.infrastructure.api.github_api_client import GitHubRepoData
@@ -97,6 +97,7 @@ class CommitResponse(BaseModel):
     html_url: str = Field(serialization_alias="htmlUrl")
     author: str
     committed_at: datetime = Field(serialization_alias="committedAt")
+    date_key: str = Field(serialization_alias="dateKey")  # 사용자 tz 기준 커밋 날짜
 
     model_config = {"populate_by_name": True}
 
@@ -110,13 +111,14 @@ class CommitResponse(BaseModel):
             html_url=c.html_url,
             author=c.author,
             committed_at=c.committed_at,
+            date_key=c.date_key,
         )
 
 
 class FailedRepositoryResponse(BaseModel):
     repository_id: str = Field(serialization_alias="repositoryId")
     full_name: str = Field(serialization_alias="fullName")
-    reason: str  # 'not_found' | 'unknown'
+    reason: str  # 'not_found' | 'rate_limited' | 'unknown'
 
     model_config = {"populate_by_name": True}
 

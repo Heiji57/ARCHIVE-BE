@@ -7,10 +7,13 @@ from app.retrospective.domain.exceptions.exceptions import SummaryAlreadyInProgr
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import SummaryContent, SummaryStatus, SummaryType
 from app.retrospective.domain.repositories.repository import IRetroSummaryRepository
-from app.retrospective.infrastructure.persistence.models.folder_model import FolderModel  # noqa: F401
-from app.retrospective.infrastructure.persistence.models.retro_summary_model import RetroSummaryModel
+from app.retrospective.infrastructure.persistence.models.folder_model import (
+    FolderModel,  # noqa: F401
+)
+from app.retrospective.infrastructure.persistence.models.retro_summary_model import (
+    RetroSummaryModel,
+)
 from app.shared.infrastructure.database.errors import translate_unique_violations
-
 
 # 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
 _UNIQUE_VIOLATIONS = {
@@ -70,6 +73,35 @@ class RetroSummaryRepository(IRetroSummaryRepository):
             )
         )
         return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_overlapping(
+        self, user_id: str, summary_type: SummaryType, start: date, end: date
+    ) -> list[RetroSummary]:
+        result = await self._session.execute(
+            select(RetroSummaryModel).where(
+                RetroSummaryModel.user_id == user_id,
+                RetroSummaryModel.summary_type == summary_type.value,
+                RetroSummaryModel.period_start <= end,
+                RetroSummaryModel.period_end >= start,
+            )
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_latest_before(
+        self, user_id: str, summary_type: SummaryType, before: date
+    ) -> RetroSummary | None:
+        result = await self._session.execute(
+            select(RetroSummaryModel)
+            .where(
+                RetroSummaryModel.user_id == user_id,
+                RetroSummaryModel.summary_type == summary_type.value,
+                RetroSummaryModel.period_start < before,
+            )
+            .order_by(RetroSummaryModel.period_start.desc())
+            .limit(1)
+        )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
 
     async def find_all_by_type(self, user_id: str, summary_type: SummaryType) -> list[RetroSummary]:
         result = await self._session.execute(

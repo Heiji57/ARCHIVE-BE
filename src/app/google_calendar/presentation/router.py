@@ -14,7 +14,6 @@ from app.google_calendar.application.use_cases.get_calendar_events import (
 from app.google_calendar.application.use_cases.get_connection_status import (
     GetCalendarConnectionStatusUseCase,
 )
-from app.google_calendar.domain.repositories.repository import ICalendarEventRepository
 from app.google_calendar.application.use_cases.handle_calendar_callback import (
     HandleCalendarCallbackUseCase,
 )
@@ -24,6 +23,7 @@ from app.google_calendar.application.use_cases.initiate_calendar_connect import 
 from app.google_calendar.application.use_cases.sync_calendar_events import (
     SyncCalendarEventsUseCase,
 )
+from app.google_calendar.domain.repositories.repository import ICalendarEventRepository
 from app.google_calendar.presentation.responses.responses import (
     CalendarConnectInitResponse,
     CalendarConnectionResponse,

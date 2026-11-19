@@ -1,8 +1,7 @@
 from datetime import date, timedelta
 
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
-from app.shared.domain.utils.period import monday_of_week
-from app.shared.domain.utils.period import today_in_tz
+from app.shared.domain.utils.period import WeekStart, today_in_tz, week_start_of
 from app.todo.application.dtos.queries import GetTodoStatsQuery
 from app.todo.domain.models.value_objects import TaskStatus
 from app.todo.domain.repositories.repository import (
@@ -18,22 +17,21 @@ from app.todo.presentation.responses.responses import (
     WeeklyTrendDayResponse,
 )
 
-
 # range=all 의 하한. 서비스 개시 이전을 넉넉히 덮으면서, 반복 Todo 가상 슬롯 생성이
 # 유계로 끝나도록(1일 간격이어도 1만 슬롯 미만) 잡은 값.
 _ALL_RANGE_FLOOR = date(2000, 1, 1)
 
 
-def _iso_week_bounds(today: date) -> tuple[date, date]:
-    monday = monday_of_week(today)
-    return monday, monday + timedelta(days=6)
+def _week_bounds(today: date, week_start: WeekStart) -> tuple[date, date]:
+    start = week_start_of(today, week_start)
+    return start, start + timedelta(days=6)
 
 
-def _range_bounds(today: date, range_: str) -> tuple[date, date]:
+def _range_bounds(today: date, range_: str, week_start: WeekStart = "mon") -> tuple[date, date]:
     if range_ == "today":
         return today, today
     if range_ == "week":
-        return _iso_week_bounds(today)
+        return _week_bounds(today, week_start)
     if range_ == "all":
         # 상한은 today — "이미 쌓인" 개수이므로 아직 오지 않은 반복 발생은 세지 않는다.
         # 상한을 date.max 로 두면 종료일(until) 없는 반복 Todo 마다 가상 슬롯 생성 루프가
@@ -73,8 +71,8 @@ class GetTodoStatsUseCase:
     async def execute(self, query: GetTodoStatsQuery) -> TodoStatsResponse:
         today = today_in_tz(query.tz)
 
-        range_from, range_to = _range_bounds(today, query.range)
-        week_from, week_to = _iso_week_bounds(today)
+        range_from, range_to = _range_bounds(today, query.range, query.week_start)
+        week_from, week_to = _week_bounds(today, query.week_start)
 
         raw: TodoStatsRaw = await self._todo_repo.get_todo_stats(
             user_id=query.user_id,

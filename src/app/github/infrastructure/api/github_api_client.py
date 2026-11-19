@@ -20,7 +20,10 @@ _GITHUB_API = "https://api.github.com"
 _PAGE_SIZE = 100
 _MAX_PAGES = 20  # safety guard — 2000 repos cap
 _COMMITS_PAGE_SIZE = 100
-_COMMITS_MAX_PAGES = 5  # 500 commits per repo per day max
+_COMMITS_MAX_PAGES = 5  # 한 번의 list_commits 호출(= repo·branch·기간) 당 최대 500 commits
+
+# 이 수만큼 받았으면 더 오래된 커밋이 잘렸을 수 있다(최신순 응답) — 호출자가 판단한다.
+COMMITS_FETCH_CAP = _COMMITS_MAX_PAGES * _COMMITS_PAGE_SIZE
 
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
 

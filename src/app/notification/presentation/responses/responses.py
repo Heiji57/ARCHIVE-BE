@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -12,6 +13,7 @@ class NotificationResponse(BaseModel):
     title: str
     message: str
     is_read: bool
+    link: dict[str, Any] | None = None
     created_at: datetime
 
     @classmethod
@@ -23,5 +25,6 @@ class NotificationResponse(BaseModel):
             title=n.title,
             message=n.message,
             is_read=n.is_read,
+            link=n.link,
             created_at=n.created_at,
         )

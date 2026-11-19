@@ -5,13 +5,14 @@
   2. 사용자의 embedding_queue 잔여 항목 사전 동기화
   3. 토픽 쿼리 벡터 생성
   4. 전체/증분 판정 후 entry chunk(+앞뒤 청크) / todo embedding 유사도 검색
-  5. 프롬프트 조립 — 소스를 접어 넣으며 in_progress 진행률 pub/sub 발행
-  6. Gemini 로 마크다운 다이제스트 생성
-  7. mark completed + watermark·증분 상태 갱신 + Redis pub/sub 알림
+  5. 프롬프트 조립 — 근거마다 짧은 표식(E1, T1)을 붙여 싣고, 진행률 pub/sub 발행
+  6. Gemini 로 구조화 정리(JSON) 생성 → 표식을 실제 id 로 바꾸고 검증(한 번 재요청)
+  7. mark completed(구조 + 구조에서 만든 markdown) + watermark·증분 상태 갱신 + 알림
 """
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,12 +31,22 @@ from app.shared.domain.exceptions.external import (
 from app.shared.domain.utils.period import today_in_tz
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.config.topic import TopicConfig
+from app.topic.domain.models.structured_digest import (
+    MAX_ITEM_TEXT,
+    MAX_ITEMS_PER_THEME,
+    MAX_SUMMARY,
+    MAX_THEME_NAME,
+    MAX_THEMES,
+    SourceRef,
+    StructuredDigest,
+    normalize,
+)
 from app.topic.domain.models.topic import SimilarChunk, TopicDigest
 from app.topic.domain.models.value_objects import DigestStatus
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
 from app.topic.infrastructure.persistence.repositories.chunk_repo import (
-    EntryChunkRepository,
     EmbeddingQueueRepository,
+    EntryChunkRepository,
     TodoEmbeddingRepository,
 )
 from app.topic.infrastructure.persistence.repositories.topic_repo import (
@@ -56,43 +67,84 @@ _AI_RETRY_BACKOFF_FACTOR = 2
 _AI_QUOTA_BACKOFF_FACTOR = 30  # 429 쿼터는 분 단위 윈도우 — generate_summary 와 동일 정책
 _AI_RETRY_BACKOFF_MAX_SECONDS = 300
 
-_SYSTEM_PROMPT = """You are a concise personal productivity assistant.
-Given a user's topic and relevant excerpts from their journal entries and todos,
-generate a markdown digest summarizing what they have been doing related to this topic.
-
-Requirements:
-- Use markdown headings, bullet points, and concise prose.
-- Group information meaningfully (e.g., by subtask, theme, or time period).
-- Keep it actionable and relevant.
+_OUTPUT_RULES = f"""Output: JSON only, matching the response schema.
+- "summary": one sentence (max {MAX_SUMMARY} chars) on where the user stands on this topic now.
+- "themes": the larger sub-themes of the work, 2 to {MAX_THEMES} (a single theme is fine when
+  there are 3 or fewer sources). Each theme has a short "name" (max {MAX_THEME_NAME} chars),
+  a one-sentence "summary" (max {MAX_SUMMARY} chars) and "items".
+- "items": what the user actually did, one per source per theme (max {MAX_ITEMS_PER_THEME} per
+  theme). "source" is the label of the source it comes from (e.g. "E3", "T5") — use only labels
+  given below, never invent one. "text" (max {MAX_ITEM_TEXT} chars) states the concrete thing done.
+- The same source may appear under several themes when it really belongs to both.
+- Do not output dates; the server takes each item's date from its source.
 - Write in the same language as the source content.
 - Do not invent information not present in the provided content.
 """
 
+_SYSTEM_PROMPT = f"""You are a concise personal productivity assistant.
+Given a user's topic and labeled excerpts from their journal entries ([E…]) and todos ([T…]),
+organize what they have been doing on this topic into themes and dated items.
 
-_INCREMENTAL_SYSTEM_PROMPT = """You are a concise personal productivity assistant.
-You are updating an existing markdown digest about a user's topic.
-You are given the existing digest, NEW excerpts from journal entries written or edited
-since it was generated, and the CURRENT list of related todos.
+{_OUTPUT_RULES}"""
 
-Requirements:
+
+_INCREMENTAL_SYSTEM_PROMPT = f"""You are a concise personal productivity assistant.
+You are updating an existing structured digest about a user's topic.
+You are given the existing digest (JSON, sources as labels), NEW labeled excerpts from journal
+entries written or edited since it was generated, and the CURRENT list of related todos.
+
+Update rules:
 - Return the complete updated digest, not only the changes.
-- Keep every fact from the existing digest that is still true.
-- When the new content updates or supersedes an existing statement (e.g. a plan that is
-  now done, a value that changed), rewrite that statement in place. Never keep both the
-  old and the new version side by side.
-- Integrate the new information into the appropriate sections; add a section only when
-  nothing existing fits.
-- Reflect the current todo statuses inside the relevant sections; do not add a separate
-  todo list section.
-- Do not grow the digest beyond what the new content genuinely adds; merge duplicates and
-  keep the same level of detail as the existing digest.
-- Use markdown headings, bullet points, and concise prose.
-- Write in the same language as the source content.
-- Do not invent information not present in the provided content.
-"""
+- Keep the existing theme names and their order. Put each new source into the theme it fits;
+  create a new theme only when nothing existing fits.
+- Keep every existing item that is still true. When new content updates or supersedes an item
+  (e.g. a plan that is now done), rewrite that item in place — never keep both versions.
+- Reflect the current todo statuses in the items.
+- Rewrite the overall "summary" so it reflects the latest state.
+
+{_OUTPUT_RULES}"""
+
+_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "themes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "source": {"type": "string"},
+                                "text": {"type": "string"},
+                            },
+                            "required": ["source", "text"],
+                        },
+                    },
+                },
+                "required": ["name", "summary", "items"],
+            },
+        },
+    },
+    "required": ["summary", "themes"],
+}
+
+# 모델 출력이 JSON 이 아니거나 근거를 하나도 가리키지 못하면 한 번 더 묻는다.
+_MAX_STRUCTURE_ATTEMPTS = 2
 
 # 프롬프트를 바꾸면 올린다 — fingerprint 에 섞여 기존 digest 가 전체 재생성된다.
-_PROMPT_VERSION = "3"
+_PROMPT_VERSION = "4"
+
+
+class DigestInvalidOutputError(Exception):
+    """모델 출력이 두 번 모두 구조 검증에 실패 — 정리 실패(DIGEST_INVALID_OUTPUT)."""
+
+    code = "DIGEST_INVALID_OUTPUT"
 
 
 def _fingerprint(name: str, description: str | None, model: str, cfg: TopicConfig) -> str:
@@ -115,6 +167,9 @@ def _static_full_reason(digest: TopicDigest, fingerprint: str, full_regen_every:
     """DB 조회 없이 판정 가능한 전체 재생성 사유. None 이면 증분 후보."""
     if digest.content is None or digest.last_generated_at is None:
         return "initial"
+    if digest.structured is None:
+        # 구조화 도입 전 markdown 정리 — 이어 쓸 구조가 없다.
+        return "unstructured"
     if digest.full_fingerprint != fingerprint:
         return "fingerprint_changed"
     if digest.incremental_count >= full_regen_every:
@@ -156,52 +211,123 @@ def _watermark_key_for_user(user: User | None) -> str:
     return today_in_tz(user.timezone if user is not None else "UTC").isoformat()
 
 
+@dataclass(frozen=True)
+class SourceLabels:
+    """프롬프트의 근거 표식 ↔ 실제 대상. 모델은 표식으로만 근거를 가리킨다."""
+
+    by_label: dict[str, SourceRef]
+    entry_label: dict[str, str]  # entry_id -> "E1"
+    todo_label: dict[str, str]  # todo_id -> "T1"
+
+
+def _label_sources(
+    chunks: list[Any], todos: list[Any], previous: StructuredDigest | None = None
+) -> SourceLabels:
+    """회고는 E1.., 할 일은 T1.. — 프롬프트에 싣는 순서대로, 이어서 직전 정리에만 있는 근거."""
+    by_label: dict[str, SourceRef] = {}
+    entry_label: dict[str, str] = {}
+    todo_label: dict[str, str] = {}
+
+    def add_entry(entry_id: str, date_key: str) -> None:
+        if entry_id not in entry_label:
+            label = f"E{len(entry_label) + 1}"
+            entry_label[entry_id] = label
+            by_label[label] = SourceRef("entry", entry_id, date_key)
+
+    def add_todo(todo_id: str, date_key: str) -> None:
+        if todo_id not in todo_label:
+            label = f"T{len(todo_label) + 1}"
+            todo_label[todo_id] = label
+            by_label[label] = SourceRef("todo", todo_id, date_key)
+
+    for c in _ordered_chunks(chunks):
+        add_entry(c.entry_id, c.date_key)
+    for t in todos:
+        add_todo(t.todo_id, t.date_key)
+    if previous is not None:
+        for theme in previous.themes:
+            for item in theme.items:
+                if item.source_kind == "entry":
+                    add_entry(item.source_id, item.date_key)
+                else:
+                    add_todo(item.source_id, item.date_key)
+    return SourceLabels(by_label, entry_label, todo_label)
+
+
+def _ordered_chunks(chunks: list[Any]) -> list[Any]:
+    """중복 제거 후, 회고 등장 순서(가장 유사한 청크 기준)를 지키며 회고 안에서는 chunk_index 순.
+
+    chunks 는 유사도(코사인 거리) 순으로 오고 entry_id 로 묶여 있지 않다 — 그대로 훑으면
+    한 회고의 뒤늦은 청크가 다른 회고 밑에 잘못 붙는다. 매칭 청크와 앞뒤 문맥 청크가
+    겹칠 수 있어 같은 단락을 두 번 싣지 않는다.
+    """
+    unique: dict[tuple[str, int], Any] = {}
+    for chunk in chunks:
+        unique.setdefault((chunk.entry_id, chunk.chunk_index), chunk)
+    entry_order: dict[str, int] = {}
+    for chunk in unique.values():
+        entry_order.setdefault(chunk.entry_id, len(entry_order))
+    return sorted(unique.values(), key=lambda c: (entry_order[c.entry_id], c.chunk_index))
+
+
+def _previous_as_labeled_json(previous: StructuredDigest, labels: SourceLabels) -> str:
+    """직전 구조를 표식으로 바꿔 싣는다 — 모델이 UUID 를 보지도 되돌려주지도 않게."""
+
+    def label_of(kind: str, source_id: str) -> str:
+        return (labels.entry_label if kind == "entry" else labels.todo_label)[source_id]
+
+    return json.dumps(
+        {
+            "summary": previous.summary,
+            "themes": [
+                {
+                    "name": t.name,
+                    "summary": t.summary,
+                    "items": [
+                        {"source": label_of(i.source_kind, i.source_id), "text": i.text}
+                        for i in t.items
+                    ],
+                }
+                for t in previous.themes
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
 async def _build_prompt(
     topic_name: str,
     topic_description: str,
-    chunks: list,
-    todos: list,
+    chunks: list[Any],
+    todos: list[Any],
     on_source: Callable[[int], Awaitable[None]] | None = None,
-    previous_content: str | None = None,
+    previous: StructuredDigest | None = None,
+    labels: SourceLabels | None = None,
 ) -> str:
     """프롬프트를 조립하며, 소스 하나를 접어 넣을 때마다 on_source(누적 처리 수)를 호출한다.
 
-    `previous_content` 가 있으면 증분 — 기존 본문에 새 소스를 병합하도록 지시한다.
+    `previous` 가 있으면 증분 — 직전 구조에 새 소스를 병합하도록 지시한다.
+    `labels` 는 응답을 되돌릴 때 같은 표식을 써야 하므로 호출자가 만들어 넘긴다.
     """
-    incremental = previous_content is not None
+    incremental = previous is not None
+    labels = labels or _label_sources(chunks, todos, previous)
     system_prompt = _INCREMENTAL_SYSTEM_PROMPT if incremental else _SYSTEM_PROMPT
     lines = [system_prompt, "", f"## Topic: {topic_name}"]
     if topic_description:
         lines.append(f"Description: {topic_description}")
-    if previous_content is not None:
-        lines += ["", "### Existing Digest", previous_content]
+    if previous is not None:
+        lines += ["", "### Existing Digest", _previous_as_labeled_json(previous, labels)]
 
     processed = 0
 
     if chunks:
-        # 매칭 청크와 앞뒤 문맥 청크가 겹칠 수 있다 — 같은 단락을 두 번 싣지 않는다.
-        unique: dict[tuple[str, int], Any] = {}
-        for chunk in chunks:
-            unique.setdefault((chunk.entry_id, chunk.chunk_index), chunk)
-        chunks = list(unique.values())
         heading = "### New Journal Entry Excerpts" if incremental else "### Journal Entry Excerpts"
         lines += ["", heading]
-        # chunks 는 유사도(코사인 거리) 순으로 온다 — entry_id 로 묶여 있지 않다.
-        # 정렬 없이 순서대로 훑으면, 이미 헤딩을 찍은 entry 의 뒤늦게 나온 청크가
-        # 방금 헤딩을 찍은 "다른" entry 밑에 잘못 붙는다. entry 등장 순서(최초로
-        # 나온 순 = 그 entry 의 가장 유사한 청크 기준)는 그대로 보존하고, 같은
-        # entry 안에서만 chunk_index 로 정렬해 재배치한다.
-        entry_order: dict[str, int] = {}
-        for chunk in chunks:
-            entry_order.setdefault(chunk.entry_id, len(entry_order))
-        chunks = sorted(chunks, key=lambda c: (entry_order[c.entry_id], c.chunk_index))
-
-        # Group by entry_id to avoid repeating date_key
-        seen: dict[str, str] = {}  # entry_id -> date_key
-        for chunk in chunks:
+        seen: set[str] = set()
+        for chunk in _ordered_chunks(chunks):
             if chunk.entry_id not in seen:
-                seen[chunk.entry_id] = chunk.date_key
-                lines.append(f"\n**{chunk.date_key}**")
+                seen.add(chunk.entry_id)
+                lines.append(f"\n[{labels.entry_label[chunk.entry_id]}] {chunk.date_key}")
                 processed += 1
                 if on_source is not None:
                     await on_source(processed)
@@ -210,18 +336,44 @@ async def _build_prompt(
     if todos:
         lines += ["", "### Related Todos"]
         for todo in todos:
-            lines.append(f"- [{todo.status}] ({todo.date_key}) {todo.text}")
+            label = labels.todo_label[todo.todo_id]
+            lines.append(f"- [{label}] {todo.date_key} {todo.status} {todo.text}")
             processed += 1
             if on_source is not None:
                 await on_source(processed)
 
     instruction = (
-        "Return the complete updated markdown digest for this topic."
+        "Return the complete updated digest as JSON."
         if incremental
-        else "Generate a markdown digest for this topic based on the above content."
+        else "Generate the structured digest for this topic as JSON."
     )
     lines += ["", "---", "", instruction]
     return "\n".join(lines)
+
+
+async def _generate_structured(
+    gemini: Any, prompt: str, labels: SourceLabels, digest_id: str
+) -> StructuredDigest:
+    """JSON 생성 → 표식 치환·검증. 근거가 있는데 항목이 하나도 안 남으면 한 번 더 묻는다."""
+    for attempt in range(1, _MAX_STRUCTURE_ATTEMPTS + 1):
+        try:
+            raw = await gemini.generate_json(prompt, _RESPONSE_SCHEMA)
+        except ValueError:
+            _log.warning("generate_digest.invalid_json", digest_id=digest_id, attempt=attempt)
+            continue
+        if not isinstance(raw, dict):
+            _log.warning("generate_digest.invalid_shape", digest_id=digest_id, attempt=attempt)
+            continue
+        structured = normalize(raw, labels.by_label)
+        if structured.themes or not labels.by_label:
+            return structured
+        _log.warning(
+            "generate_digest.no_valid_items",
+            digest_id=digest_id,
+            attempt=attempt,
+            raw_preview=json.dumps(raw, ensure_ascii=False)[:500],
+        )
+    raise DigestInvalidOutputError("Model output failed structure validation twice.")
 
 
 @celery_app.task(
@@ -354,7 +506,7 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                             topic.description,
                             new_chunks,
                             todos,
-                            previous_content=digest.content,
+                            previous=digest.structured,
                         )
                     )
                     full_len = len(
@@ -388,19 +540,22 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
                 )
 
             await publish_progress(0)
+            previous = digest.structured if incremental else None
+            labels = _label_sources(chunks, todos, previous)
             prompt = await _build_prompt(
                 topic.name,
                 topic.description,
                 chunks,
                 todos,
                 on_source=publish_progress,
-                previous_content=digest.content if incremental else None,
+                previous=previous,
+                labels=labels,
             )
 
             # AI 호출 — DB transaction 밖
             from app.topic.infrastructure.ai.gemini_client import TopicGeminiClient
             gemini = TopicGeminiClient(settings.ai)
-            content = await gemini.generate(prompt)
+            structured = await _generate_structured(gemini, prompt, labels, digest_id)
 
             # T2: complete. watermark_date_key 는 "이 문서가 언제 기준인가"(FE 배너/미반영 개수
             # 기준점)이고, 증분 커서는 시각인 last_generated_at 이 따로 맡는다.
@@ -414,12 +569,13 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
             async with factory.begin() as session:
                 await TopicDigestRepository(session).complete_generation(
                     digest_id,
-                    content=content,
+                    content=structured.to_markdown(),
                     watermark_date_key=today_key,
                     generated_at=generated_at,
                     incremental_count=incremental_count,
                     full_fingerprint=fingerprint,
                     source_entry_ids=source_entry_ids,
+                    structured=structured,
                 )
 
         except AIServiceUnavailableException as exc:
@@ -445,7 +601,11 @@ async def generate_digest_task(self: Task, digest_id: str, topic_id: str, user_i
         raise
     except Exception as exc:
         # 태스크 최상위 경계 — 어떤 실패든 FAILED 로 확정해야 영구 IN_PROGRESS 를 막는다.
-        _log.exception("generate_digest.failed", digest_id=digest_id)
+        _log.exception(
+            "generate_digest.failed",
+            digest_id=digest_id,
+            error_code=getattr(exc, "code", type(exc).__name__),
+        )
         try:
             async with factory.begin() as session:
                 await TopicDigestRepository(session).update_status(digest_id, DigestStatus.FAILED)

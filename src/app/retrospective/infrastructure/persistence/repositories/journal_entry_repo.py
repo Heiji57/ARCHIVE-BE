@@ -1,16 +1,21 @@
-from datetime import date
+from datetime import date, datetime
+from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.retrospective.domain.exceptions.exceptions import JournalEntryAlreadyExistsException
 from app.retrospective.domain.models.journal_entry import JournalEntry, JournalEntryMeta
 from app.retrospective.domain.models.value_objects import RetroType
 from app.retrospective.domain.repositories.repository import IJournalEntryRepository
-from app.retrospective.infrastructure.persistence.models.folder_model import FolderModel  # noqa: F401
-from app.retrospective.infrastructure.persistence.models.journal_entry_model import JournalEntryModel
+from app.retrospective.infrastructure.persistence.models.folder_model import (
+    FolderModel,  # noqa: F401
+)
+from app.retrospective.infrastructure.persistence.models.journal_entry_model import (
+    JournalEntryModel,
+)
 from app.shared.infrastructure.database.errors import translate_unique_violations
-
+from app.shared.infrastructure.database.soft_delete import INCLUDE_DELETED
 
 # 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
 _UNIQUE_VIOLATIONS = {
@@ -64,8 +69,12 @@ class JournalEntryRepository(IJournalEntryRepository):
         ]
 
     async def id_exists(self, id: str) -> bool:
+        # 휴지통의 회고도 센다 — 다른 사용자가 같은 id 로 PUT 해 덮지 못하게(IDOR 가드).
         result = await self._session.execute(
-            select(JournalEntryModel.id).where(JournalEntryModel.id == id).limit(1)
+            select(JournalEntryModel.id)
+            .where(JournalEntryModel.id == id)
+            .limit(1)
+            .execution_options(**INCLUDE_DELETED)
         )
         return result.scalar_one_or_none() is not None
 
@@ -206,7 +215,11 @@ class JournalEntryRepository(IJournalEntryRepository):
 
     async def count_all_by_user_id(self, user_id: str) -> int:
         result = await self._session.scalar(
-            select(func.count()).where(JournalEntryModel.user_id == user_id)
+            # select_from 이 있어야 휴지통 조건(with_loader_criteria)이 붙는다 — 엔티티가 FROM 에
+            # 명시되지 않은 count 는 ORM 엔티티 문장으로 취급되지 않는다.
+            select(func.count())
+            .select_from(JournalEntryModel)
+            .where(JournalEntryModel.user_id == user_id)
         )
         return result or 0
 
@@ -219,6 +232,94 @@ class JournalEntryRepository(IJournalEntryRepository):
         row = result.scalar_one_or_none()
         if row:
             await self._session.delete(row)
+
+    # ── 휴지통 ────────────────────────────────────────────────────────────────
+
+    async def soft_delete(self, id: str, user_id: str) -> None:
+        await self._session.execute(
+            update(JournalEntryModel)
+            .where(JournalEntryModel.id == id, JournalEntryModel.user_id == user_id)
+            .values(deleted_at=func.now())
+        )
+
+    async def soft_delete_in_folders(self, user_id: str, folder_ids: list[str]) -> list[str]:
+        if not folder_ids:
+            return []
+        result = await self._session.execute(
+            update(JournalEntryModel)
+            .where(
+                JournalEntryModel.user_id == user_id,
+                JournalEntryModel.folder_id.in_(folder_ids),
+            )
+            .values(deleted_at=func.now())
+            .returning(JournalEntryModel.id)
+        )
+        return list(result.scalars())
+
+    async def list_trashed(self, user_id: str) -> list[JournalEntry]:
+        result = await self._session.execute(
+            select(JournalEntryModel)
+            .where(JournalEntryModel.user_id == user_id, JournalEntryModel.deleted_at.is_not(None))
+            .order_by(JournalEntryModel.deleted_at.desc())
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_trashed(self, id: str, user_id: str) -> JournalEntry | None:
+        result = await self._session.execute(
+            select(JournalEntryModel)
+            .where(
+                JournalEntryModel.id == id,
+                JournalEntryModel.user_id == user_id,
+                JournalEntryModel.deleted_at.is_not(None),
+            )
+            .execution_options(**INCLUDE_DELETED)
+        )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
+    async def restore(self, id: str, user_id: str) -> None:
+        # 폴더가 지워졌으면 folder_id 는 FK(SET NULL)로 이미 비어 "미분류"로 돌아온다.
+        # 같은 날 같은 종류의 새 회고가 이미 있으면 부분 유니크 인덱스가 막는다 → 409.
+        async with translate_unique_violations(_UNIQUE_VIOLATIONS):
+            await self._session.execute(
+                update(JournalEntryModel)
+                .where(
+                    JournalEntryModel.id == id,
+                    JournalEntryModel.user_id == user_id,
+                    JournalEntryModel.deleted_at.is_not(None),
+                )
+                .values(deleted_at=None)
+                .execution_options(**INCLUDE_DELETED)
+            )
+            await self._session.flush()
+
+    async def purge(self, id: str, user_id: str) -> list[str]:
+        result = await self._session.execute(
+            delete(JournalEntryModel)
+            .where(
+                JournalEntryModel.id == id,
+                JournalEntryModel.user_id == user_id,
+                JournalEntryModel.deleted_at.is_not(None),
+            )
+            .returning(JournalEntryModel.id)
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return list(result.scalars())
+
+    async def purge_trashed(self, user_id: str | None, before: datetime | None) -> list[str]:
+        conditions: list[Any] = [JournalEntryModel.deleted_at.is_not(None)]
+        if user_id is not None:
+            conditions.append(JournalEntryModel.user_id == user_id)
+        if before is not None:
+            conditions.append(JournalEntryModel.deleted_at < before)
+        result = await self._session.execute(
+            delete(JournalEntryModel)
+            .where(*conditions)
+            .returning(JournalEntryModel.id)
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return list(result.scalars())
 
     def _to_model(self, entity: JournalEntry) -> JournalEntryModel:
         return JournalEntryModel(
@@ -244,4 +345,5 @@ class JournalEntryRepository(IJournalEntryRepository):
             folder_id=model.folder_id,
             created_at=model.created_at,
             updated_at=model.updated_at,
+            deleted_at=model.deleted_at,
         )

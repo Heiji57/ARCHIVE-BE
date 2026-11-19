@@ -1,7 +1,10 @@
-from sqlalchemy import select
+from datetime import datetime
+
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.shared.infrastructure.database.errors import translate_unique_violations
+from app.shared.infrastructure.database.soft_delete import INCLUDE_DELETED
 from app.user.domain.exceptions.exceptions import UserEmailDuplicatedException
 from app.user.domain.models.user import User
 from app.user.domain.models.value_objects import Email
@@ -10,7 +13,7 @@ from app.user.infrastructure.persistence.models.user_model import UserModel
 
 # 사전 중복 체크를 동시 요청이 함께 통과했을 때 — 늦은 쪽도 같은 409 를 받게 한다.
 _UNIQUE_VIOLATIONS = {
-    "users_email_key": UserEmailDuplicatedException,
+    "uq_users_email_active": UserEmailDuplicatedException,
 }
 
 
@@ -36,6 +39,45 @@ class UserRepository(IUserRepository):
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
+    async def soft_delete(self, id: str) -> None:
+        await self._session.execute(
+            update(UserModel).where(UserModel.id == id).values(deleted_at=func.now())
+        )
+
+    async def is_deleted(self, id: str) -> bool:
+        """deleted_at 이 커밋돼 보이면 True(계정 삭제 마무리 작업이 확인용으로)."""
+        result = await self._session.execute(
+            select(UserModel.id)
+            .where(UserModel.id == id, UserModel.deleted_at.is_not(None))
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def avatar_keys(self) -> set[str]:
+        """지운 계정까지 모든 사용자가 가리키는 사진 키 — 고아 사진 파일 정리용."""
+        result = await self._session.execute(
+            select(UserModel.avatar_key)
+            .where(UserModel.avatar_key.is_not(None))
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return {k for k in result.scalars() if k}
+
+    async def find_deleted_before(self, before: datetime) -> list[User]:
+        result = await self._session.execute(
+            select(UserModel)
+            .where(UserModel.deleted_at.is_not(None), UserModel.deleted_at < before)
+            .execution_options(**INCLUDE_DELETED)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def purge(self, id: str) -> None:
+        # FK(ON DELETE CASCADE) 로 사용자 소유 테이블이 함께 지워진다.
+        await self._session.execute(
+            delete(UserModel)
+            .where(UserModel.id == id, UserModel.deleted_at.is_not(None))
+            .execution_options(**INCLUDE_DELETED)
+        )
+
     async def delete(self, id: str) -> None:
         model = await self._session.get(UserModel, id)
         if model:
@@ -49,7 +91,8 @@ class UserRepository(IUserRepository):
             country=entity.country,
             region=entity.region,
             timezone=entity.timezone,
-            account_type=entity.account_type,
+            display_name=entity.display_name,
+            avatar_key=entity.avatar_key,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -62,7 +105,8 @@ class UserRepository(IUserRepository):
             country=model.country,
             region=model.region,
             timezone=model.timezone,
-            account_type=model.account_type,
+            display_name=model.display_name,
+            avatar_key=model.avatar_key,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

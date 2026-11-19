@@ -1,0 +1,56 @@
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Literal
+
+from app.shared.domain.models.base import BaseEntity
+
+SuggestionKind = Literal["overdue", "free_slot", "unscheduled_long", "commit_match"]
+SuggestionStatus = Literal["shown", "applied", "dismissed"]
+
+
+@dataclass(frozen=True)
+class SuggestionAction:
+    label: str
+    # PATCH /todos/{id} 본문과 같은 모양(snake_case) — 적용은 할 일 묶음 수정 규칙을 그대로 탄다.
+    patch: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SuggestionCandidate:
+    """규칙이 만든 추천 하나(아직 저장 전). (kind, todo_id) 가 그날의 정체성이다."""
+
+    kind: SuggestionKind
+    todo_id: str
+    title: str
+    reason: str
+    actions: tuple[SuggestionAction, ...]
+    slot: tuple[datetime, datetime] | None = None  # 캘린더 흐린 칸
+
+
+@dataclass(kw_only=True)
+class Suggestion(BaseEntity):
+    """저장된 추천. 같은 날 같은 (kind, todo_id) 는 한 행.
+
+    넘긴(dismissed) 추천은 다시 안 나온다.
+    """
+
+    user_id: str
+    date_key: str
+    kind: SuggestionKind
+    todo_id: str
+    payload: dict[str, Any] = field(default_factory=dict)  # title, reason, slot, actions
+    status: SuggestionStatus = "shown"
+    # 적용 결과 — 되돌리기용 {"todo_id": 적용된 할 일 id, "previous": 바뀐 필드의 이전 값}
+    applied: dict[str, Any] | None = None
+
+    @property
+    def actions(self) -> list[SuggestionAction]:
+        return [SuggestionAction(a["label"], a["patch"]) for a in self.payload.get("actions", [])]
+
+
+@dataclass(frozen=True)
+class AiUsageReport:
+    day_used: int
+    day_limit: int
+    month_used: int
+    month_limit: int

@@ -3,11 +3,31 @@ from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.ai.domain.exceptions.exceptions import (
+    AiConversationNotFoundException,
+    AiLlmUnavailableException,
+    AiMemoryLimitExceededException,
+    AiMemoryNotFoundException,
+    AiProposalAlreadyAppliedException,
+    AiProposalItemsInvalidException,
+    AiProposalNotFoundException,
+    AiProposalStaleException,
+    AiProposalStateInvalidException,
+    AiScheduleLimitExceededException,
+    AiScheduleNotFoundException,
+    AiSuggestionActionInvalidException,
+    AiSuggestionNotFoundException,
+    AiToolDisabledException,
+    AiUsageLimitExceededException,
+)
 from app.auth.domain.exceptions.exceptions import (
+    AccountDeleteConfirmMismatchException,
     Auth2FACodeInvalidException,
     AuthInvalidCredentialsException,
     AuthTokenExpiredException,
     AuthTokenInvalidException,
+    AvatarTooLargeException,
+    AvatarUnsupportedTypeException,
     CountryInvalidException,
     CountryTimezoneRequiredException,
     EmailCodeAttemptsExceededException,
@@ -28,19 +48,35 @@ from app.auth.domain.exceptions.exceptions import (
     PasswordResetNotAllowedException,
     PasswordResetTokenExpiredException,
     PasswordResetTokenInvalidException,
+    ReauthRequiredException,
     RefreshTokenInvalidException,
     RefreshTokenReuseDetectedException,
     RefreshTokenRevokedException,
     SessionNotFoundException,
     TimezoneInvalidException,
 )
+from app.calendars.domain.exceptions.exceptions import (
+    CalendarDefaultUndeletableException,
+    CalendarLimitExceededException,
+    CalendarNameDuplicateException,
+    CalendarNotFoundException,
+)
+from app.data.domain.exceptions.exceptions import (
+    ExportDailyLimitException,
+    ExportExpiredException,
+    ExportInProgressException,
+    ExportNotFoundException,
+    TrashItemNotFoundException,
+    TrashKindInvalidException,
+)
 from app.github.domain.exceptions.exceptions import (
-    DeveloperAccountRequiredException,
     GitHubApiUnavailableException,
+    GitHubCommitQueryInvalidException,
     GitHubConnectionNotFoundException,
     GitHubPermissionDeniedException,
     GitHubPushFailedException,
     GitHubPushTargetNotSetException,
+    GitHubRangeTooLongException,
     GitHubRateLimitedException,
     GitHubRepositoryAlreadyLinkedException,
     GitHubRepositoryNotFoundException,
@@ -77,6 +113,7 @@ from app.retrospective.domain.exceptions.exceptions import (
     SummaryTemplateNameDuplicatedException,
     SummaryTemplateNotFoundException,
 )
+from app.settings.domain.exceptions.exceptions import SettingsUiPrefsTooLargeException
 from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.domain.exceptions.external import (
     AIEmptyResponseException,
@@ -87,6 +124,14 @@ from app.shared.domain.exceptions.external import (
     CacheUnavailableException,
     EmailDeliveryFailedException,
 )
+from app.todo.domain.exceptions.exceptions import (
+    TagNotFoundException,
+    TodoAlreadyCompletedException,
+    TodoAlreadyInProgressException,
+    TodoBatchFailedException,
+    TodoNotFoundException,
+    TodoQueryConflictException,
+)
 from app.topic.domain.exceptions.exceptions import (
     DigestAlreadyInProgressException,
     DigestNotFoundException,
@@ -95,11 +140,6 @@ from app.topic.domain.exceptions.exceptions import (
     TopicNameDuplicatedException,
     TopicNotFoundException,
 )
-from app.todo.domain.exceptions.exceptions import (
-    TodoAlreadyCompletedException,
-    TodoAlreadyInProgressException,
-    TodoNotFoundException,
-)
 from app.user.domain.exceptions.exceptions import (
     InvalidEmailException,
     UserEmailDuplicatedException,
@@ -107,8 +147,6 @@ from app.user.domain.exceptions.exceptions import (
 )
 
 _STATUS_MAP: dict[str, int] = {
-    # 403
-    DeveloperAccountRequiredException.code: 403,
     # 400
     OAuthStateInvalidException.code: 400,
     SummaryInvalidStateException.code: 400,
@@ -120,6 +158,7 @@ _STATUS_MAP: dict[str, int] = {
     PasswordResetNotAllowedException.code: 400,
     CalendarNotConnectedException.code: 400,
     CalendarStateInvalidException.code: 400,
+    TodoBatchFailedException.code: 400,
     # 401
     AuthTokenInvalidException.code: 401,
     AuthTokenExpiredException.code: 401,
@@ -139,6 +178,27 @@ _STATUS_MAP: dict[str, int] = {
     # 404
     UserNotFoundException.code: 404,
     TodoNotFoundException.code: 404,
+    CalendarNotFoundException.code: 404,
+    TagNotFoundException.code: 404,
+    AiSuggestionNotFoundException.code: 404,
+    AiConversationNotFoundException.code: 404,
+    AiProposalNotFoundException.code: 404,
+    AiProposalAlreadyAppliedException.code: 409,
+    AiProposalStaleException.code: 409,
+    AiProposalStateInvalidException.code: 409,
+    AiProposalItemsInvalidException.code: 422,
+    TrashItemNotFoundException.code: 404,
+    TrashKindInvalidException.code: 422,
+    ExportInProgressException.code: 409,
+    ExportDailyLimitException.code: 429,
+    ExportNotFoundException.code: 404,
+    ExportExpiredException.code: 410,
+    AiToolDisabledException.code: 400,
+    AiLlmUnavailableException.code: 503,
+    AiMemoryNotFoundException.code: 404,
+    AiScheduleNotFoundException.code: 404,
+    AiMemoryLimitExceededException.code: 422,
+    AiScheduleLimitExceededException.code: 422,
     JournalEntryNotFoundException.code: 404,
     RetroSummaryNotFoundException.code: 404,
     NotificationNotFoundException.code: 404,
@@ -148,6 +208,8 @@ _STATUS_MAP: dict[str, int] = {
     RetroTemplateNotFoundException.code: 404,
     FolderNotFoundException.code: 404,
     # 409
+    CalendarDefaultUndeletableException.code: 409,
+    CalendarNameDuplicateException.code: 409,
     UserEmailDuplicatedException.code: 409,
     TodoAlreadyCompletedException.code: 409,
     TodoAlreadyInProgressException.code: 409,
@@ -168,6 +230,13 @@ _STATUS_MAP: dict[str, int] = {
     TimezoneInvalidException.code: 422,
     SummaryReadinessUnsupportedException.code: 422,
     FolderCircularReferenceException.code: 422,
+    TodoQueryConflictException.code: 422,
+    CalendarLimitExceededException.code: 422,
+    # 413
+    SettingsUiPrefsTooLargeException.code: 413,
+    GitHubRangeTooLongException.code: 422,
+    GitHubCommitQueryInvalidException.code: 422,
+    AiSuggestionActionInvalidException.code: 422,
     # ── Topic ────────────────────────────────────────────────────────────────
     # 404
     TopicNotFoundException.code: 404,
@@ -177,6 +246,7 @@ _STATUS_MAP: dict[str, int] = {
     TopicLimitReachedException.code: 409,
     DigestAlreadyInProgressException.code: 409,
     # 429
+    AiUsageLimitExceededException.code: 429,
     GitHubRateLimitedException.code: 429,
     SummaryRateLimitExceededException.code: 429,
     DigestRateLimitExceededException.code: 429,
@@ -195,6 +265,10 @@ _STATUS_MAP: dict[str, int] = {
     OAuthEmailNotVerifiedException.code: 400,
     OAuthProviderUnavailableException.code: 503,
     OAuthProviderResponseInvalidException.code: 502,
+    AvatarTooLargeException.code: 413,
+    AvatarUnsupportedTypeException.code: 415,
+    ReauthRequiredException.code: 403,
+    AccountDeleteConfirmMismatchException.code: 400,
     # ── GitHub 세분화 ────────────────────────────────────────────────────────
     GitHubPermissionDeniedException.code: 403,
     GitHubResponseInvalidException.code: 502,

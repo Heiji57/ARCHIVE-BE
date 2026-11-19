@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.shared.domain.utils.timezone import validate_timezone
 from app.todo.domain.models.todo import RecurrenceRule
@@ -99,6 +99,7 @@ class TodoCreateRequest(BaseModel):
     recurrence_rule: RecurrenceRuleRequest | None = None
     tags: list[str] = []
     due_date_key: str | None = None
+    calendar_id: str | None = None  # 없거나 null 이면 기본 캘린더
 
     @field_validator("tags")
     @classmethod
@@ -155,6 +156,7 @@ class TodoUpdateRequest(BaseModel):
     recurrence_rule: RecurrenceRuleRequest | None = None
     tags: list[str] | None = None
     due_date_key: str | None = None
+    calendar_id: str | None = None  # 보내면 옮김, null 이면 기본 캘린더로
 
     @field_validator("tags")
     @classmethod
@@ -209,3 +211,62 @@ class TodoUpdateRequest(BaseModel):
             if self.date_key is not None and self.due_date_key < self.date_key:
                 raise ValueError("due_date_key must be >= date_key")
         return self
+
+
+_MAX_BATCH_OPERATIONS = 100
+
+
+class TodoBatchOperation(BaseModel):
+    """묶음 수정 한 건. `patch` 는 `PATCH /todos/{id}` 본문과 같은 규칙(recurrence_scope 포함)."""
+
+    id: str
+    patch: TodoUpdateRequest
+
+
+class TodoBatchRequest(BaseModel):
+    operations: list[TodoBatchOperation]
+
+    @field_validator("operations")
+    @classmethod
+    def operations_valid(cls, v: list[TodoBatchOperation]) -> list[TodoBatchOperation]:
+        if not v:
+            raise ValueError("operations must not be empty")
+        if len(v) > _MAX_BATCH_OPERATIONS:
+            raise ValueError(f"at most {_MAX_BATCH_OPERATIONS} operations per batch")
+        ids = [op.id for op in v]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate todo id in operations")
+        return v
+
+
+class UpdateTagRequest(BaseModel):
+    """`PATCH /todos/tags/{name}` — 보낸 필드만. 이미 있는 이름으로 바꾸면 합친다."""
+
+    name: str | None = None
+    color: Literal["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"] | None = None  # null=해시 색
+    sort_order: int | None = Field(default=None, ge=0, alias="sortOrder")  # null=순서 비움
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str | None) -> str | None:
+        if v is None:
+            raise ValueError("name must not be null")
+        return _validate_tags([v.strip()])[0]
+
+
+class ReorderTagsRequest(BaseModel):
+    """`PUT /todos/tags/order` — 이 순서대로 sortOrder 0, 1, 2…"""
+
+    names: list[str] = Field(max_length=200)
+
+    @field_validator("names")
+    @classmethod
+    def _names(cls, v: list[str]) -> list[str]:
+        if len(set(v)) != len(v):
+            raise ValueError("names must be unique")
+        for name in v:
+            if not 1 <= len(name) <= _TAG_MAX_LEN:
+                raise ValueError(f"each tag must be between 1 and {_TAG_MAX_LEN} characters")
+        return v

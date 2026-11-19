@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.infrastructure.database.base import Base
@@ -41,6 +41,9 @@ class TopicDigestModel(Base):
     full_fingerprint: Mapped[str | None] = mapped_column(String(40), nullable=True)
     source_entry_ids: Mapped[list[str]] = mapped_column(
         ARRAY(String), nullable=False, server_default=text("'{}'")
+    )
+    structured: Mapped[dict | None] = mapped_column(  # type: ignore[type-arg]
+        JSONB(none_as_null=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

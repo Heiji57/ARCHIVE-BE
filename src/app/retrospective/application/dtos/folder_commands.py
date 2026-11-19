@@ -1,29 +1,8 @@
 from dataclasses import dataclass
-from typing import Final
 
-
-class _Unset:
-    """Sentinel for 'field not provided' in partial-update commands.
-
-    omitted (UNSET)  → do not touch the existing value
-    explicit None    → clear the existing value (e.g. move folder to root)
-    """
-
-    _instance: "_Unset | None" = None
-
-    def __new__(cls) -> "_Unset":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __repr__(self) -> str:
-        return "<UNSET>"
-
-    def __bool__(self) -> bool:
-        return False
-
-
-UNSET: Final[_Unset] = _Unset()
+# 부분 수정 sentinel 은 공용 하나 — 모듈마다 클래스가 다르면 isinstance 판정이 어긋난다.
+from app.shared.domain.utils.unset import UNSET as UNSET
+from app.shared.domain.utils.unset import _Unset as _Unset
 
 
 @dataclass(frozen=True)

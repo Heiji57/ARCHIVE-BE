@@ -1,5 +1,7 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.notification.domain.models.notification import Notification
@@ -19,13 +21,41 @@ class NotificationRepository(INotificationRepository):
         return self._to_entity(merged)
 
     async def find_by_user_id(
-        self, user_id: str, unread_only: bool = False
+        self, user_id: str, unread_only: bool = False, now: datetime | None = None
     ) -> list[Notification]:
-        stmt = select(NotificationModel).where(NotificationModel.user_id == user_id)
+        now = now or datetime.now(UTC)
+        stmt = select(NotificationModel).where(
+            NotificationModel.user_id == user_id,
+            or_(
+                NotificationModel.deliver_after.is_(None),
+                NotificationModel.deliver_after <= now,
+            ),
+        )
         if unread_only:
             stmt = stmt.where(NotificationModel.is_read.is_(False))
         result = await self._session.execute(stmt.order_by(NotificationModel.created_at.desc()))
         return [self._to_entity(m) for m in result.scalars()]
+
+    async def find_due_for_delivery(self, now: datetime, limit: int) -> list[Notification]:
+        result = await self._session.execute(
+            select(NotificationModel)
+            .where(
+                NotificationModel.deliver_after.is_not(None),
+                NotificationModel.deliver_after <= now,
+            )
+            .order_by(NotificationModel.deliver_after, NotificationModel.id)
+            .limit(limit)
+        )
+        return [self._to_entity(m) for m in result.scalars()]
+
+    async def mark_delivered(self, ids: list[str]) -> None:
+        if not ids:
+            return
+        await self._session.execute(
+            update(NotificationModel)
+            .where(NotificationModel.id.in_(ids))
+            .values(deliver_after=None)
+        )
 
     async def mark_as_read(self, id: str, user_id: str) -> None:
         await self._session.execute(
@@ -35,9 +65,17 @@ class NotificationRepository(INotificationRepository):
         )
 
     async def mark_all_as_read(self, user_id: str) -> None:
+        # 아직 보류 중(방해 금지)인 알림은 사용자가 본 적이 없으므로 건드리지 않는다.
         await self._session.execute(
             update(NotificationModel)
-            .where(NotificationModel.user_id == user_id, NotificationModel.is_read.is_(False))
+            .where(
+                NotificationModel.user_id == user_id,
+                NotificationModel.is_read.is_(False),
+                or_(
+                    NotificationModel.deliver_after.is_(None),
+                    NotificationModel.deliver_after <= datetime.now(UTC),
+                ),
+            )
             .values(is_read=True)
         )
 
@@ -67,6 +105,8 @@ class NotificationRepository(INotificationRepository):
             title=entity.title,
             message=entity.message,
             is_read=entity.is_read,
+            link=entity.link,
+            deliver_after=entity.deliver_after,
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -80,6 +120,8 @@ class NotificationRepository(INotificationRepository):
             title=model.title,
             message=model.message,
             is_read=model.is_read,
+            link=model.link,
+            deliver_after=model.deliver_after,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )

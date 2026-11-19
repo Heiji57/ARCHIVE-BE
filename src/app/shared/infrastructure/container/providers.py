@@ -4,8 +4,14 @@ from dishka import Provider, Scope, provide
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.auth.application.ports import (
+    AccountDeletionDispatcher,
+    AvatarStorage,
+    DeletedAccountMarker,
+)
 from app.auth.application.services.session_service import SessionService
 from app.auth.application.use_cases.complete_onboarding import CompleteOnboardingUseCase
+from app.auth.application.use_cases.delete_account import DeleteAccountUseCase
 from app.auth.application.use_cases.get_me import GetMeUseCase
 from app.auth.application.use_cases.handle_oauth_callback import HandleOAuthCallbackUseCase
 from app.auth.application.use_cases.initiate_oauth import InitiateOAuthUseCase
@@ -13,6 +19,11 @@ from app.auth.application.use_cases.initiate_oauth_link import InitiateOAuthLink
 from app.auth.application.use_cases.list_sessions import ListSessionsUseCase
 from app.auth.application.use_cases.login import LoginUseCase
 from app.auth.application.use_cases.logout import LogoutUseCase
+from app.auth.application.use_cases.profile import (
+    DeleteAvatarUseCase,
+    UpdateProfileUseCase,
+    UploadAvatarUseCase,
+)
 from app.auth.application.use_cases.refresh_token import RefreshTokenUseCase
 from app.auth.application.use_cases.register import RegisterUseCase
 from app.auth.application.use_cases.request_password_reset import RequestPasswordResetUseCase
@@ -22,7 +33,6 @@ from app.auth.application.use_cases.revoke_session import (
     RevokeSessionUseCase,
 )
 from app.auth.application.use_cases.send_email_verification import SendEmailVerificationUseCase
-from app.auth.application.use_cases.update_profile import UpdateProfileUseCase
 from app.auth.application.use_cases.verify_email_code import VerifyEmailCodeUseCase
 from app.auth.domain.models.value_objects import OAuthProvider
 from app.auth.domain.repositories.repository import IOAuthConnectionRepository
@@ -32,26 +42,39 @@ from app.auth.infrastructure.cache.login_attempt import LoginAttemptCache
 from app.auth.infrastructure.cache.oauth_state import OAuthStateCache
 from app.auth.infrastructure.cache.onboarding import OnboardingTokenCache
 from app.auth.infrastructure.cache.password_reset import PasswordResetCache
+from app.auth.infrastructure.external.account_deletion import (
+    CeleryAccountDeletionDispatcher,
+    RedisDeletedAccountMarker,
+)
 from app.auth.infrastructure.oauth.github_client import GitHubOAuthClient
 from app.auth.infrastructure.oauth.google_client import GoogleOAuthClient
 from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
-from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import OAuthConnectionRepository
+from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import (
+    OAuthConnectionRepository,
+)
+from app.auth.infrastructure.storage.avatar_storage import LocalAvatarStorage
+from app.calendars.domain.repositories.repository import ICalendarRepository
 from app.github.application.use_cases.get_commits_by_date import GetCommitsByDateUseCase
 from app.github.application.use_cases.get_connection_status import GetConnectionStatusUseCase
 from app.github.application.use_cases.link_repository import LinkRepositoryUseCase
-from app.github.application.use_cases.list_available_repositories import ListAvailableRepositoriesUseCase
+from app.github.application.use_cases.list_available_repositories import (
+    ListAvailableRepositoriesUseCase,
+)
 from app.github.application.use_cases.list_linked_repositories import ListLinkedRepositoriesUseCase
 from app.github.application.use_cases.push_retrospective import PushRetrospectiveUseCase
 from app.github.application.use_cases.sync_all_repositories import SyncAllRepositoriesUseCase
 from app.github.application.use_cases.unlink_all_repositories import UnlinkAllRepositoriesUseCase
 from app.github.application.use_cases.unlink_repository import UnlinkRepositoryUseCase
 from app.github.application.use_cases.update_repository import UpdateRepositoryUseCase
-from app.github.domain.repositories.repository import IGitHubRepositoryRepository
+from app.github.domain.repositories.repository import ICommitDayCache, IGitHubRepositoryRepository
 from app.github.domain.repositories.retrospective_push_repository import (
     IRetrospectivePushRepository,
 )
 from app.github.infrastructure.api.github_api_client import GitHubApiClient
-from app.github.infrastructure.persistence.repositories.github_repository_repo import GitHubRepositoryRepository
+from app.github.infrastructure.cache.commit_day_cache import RedisCommitDayCache
+from app.github.infrastructure.persistence.repositories.github_repository_repo import (
+    GitHubRepositoryRepository,
+)
 from app.github.infrastructure.persistence.repositories.retrospective_push_repo import (
     RetrospectivePushRepository,
 )
@@ -83,59 +106,44 @@ from app.google_calendar.infrastructure.api.google_calendar_client import (
 from app.google_calendar.infrastructure.cache.calendar_state import (
     CalendarOAuthStateCache,
 )
+from app.google_calendar.infrastructure.notifications.trash_notice import NotifierTrashNotice
 from app.google_calendar.infrastructure.persistence.repositories.calendar_connection_repo import (
     GoogleCalendarConnectionRepository,
 )
 from app.google_calendar.infrastructure.persistence.repositories.calendar_event_repo import (
     CalendarEventRepository,
 )
-from app.notification.application.use_cases.create_notification import CreateNotificationUseCase
-from app.settings.application.use_cases.get_settings import GetSettingsUseCase
-from app.settings.application.use_cases.list_country_timezones import (
-    ListCountryTimezonesUseCase,
-)
-from app.settings.application.use_cases.update_country import UpdateCountryUseCase
-from app.settings.application.use_cases.update_settings import UpdateSettingsUseCase
-from app.settings.application.use_cases.update_timezone import UpdateTimezoneUseCase
-from app.settings.domain.repositories.repository import IUserSettingsRepository
-from app.settings.infrastructure.persistence.repositories.user_settings_repo import UserSettingsRepository
+from app.notification.application.services.notifier import Notifier
 from app.notification.application.use_cases.delete_notification import DeleteNotificationUseCase
 from app.notification.application.use_cases.delete_notifications import DeleteNotificationsUseCase
 from app.notification.application.use_cases.get_notifications import GetNotificationsUseCase
 from app.notification.application.use_cases.mark_all_as_read import MarkAllAsReadUseCase
 from app.notification.application.use_cases.mark_as_read import MarkAsReadUseCase
 from app.notification.domain.repositories.repository import INotificationRepository
-from app.notification.infrastructure.persistence.repositories.notification_repo import NotificationRepository
+from app.notification.infrastructure.persistence.repositories.notification_repo import (
+    NotificationRepository,
+)
 from app.retrospective.application.use_cases.create_entry import CreateEntryUseCase
 from app.retrospective.application.use_cases.create_folder import CreateFolderUseCase
+from app.retrospective.application.use_cases.create_retro_template import CreateRetroTemplateUseCase
+from app.retrospective.application.use_cases.create_summary_template import (
+    CreateSummaryTemplateUseCase,
+)
 from app.retrospective.application.use_cases.delete_entry import DeleteEntryUseCase
 from app.retrospective.application.use_cases.delete_folder import DeleteFolderUseCase
+from app.retrospective.application.use_cases.delete_retro_template import DeleteRetroTemplateUseCase
+from app.retrospective.application.use_cases.delete_summary_template import (
+    DeleteSummaryTemplateUseCase,
+)
+from app.retrospective.application.use_cases.edit_summary import EditSummaryUseCase
 from app.retrospective.application.use_cases.get_entries import GetEntriesUseCase
 from app.retrospective.application.use_cases.get_entries_page import GetEntriesPageUseCase
-from app.retrospective.application.use_cases.get_folder_contents import GetFolderContentsUseCase
-from app.retrospective.application.use_cases.list_folders import ListFoldersUseCase
-from app.retrospective.application.use_cases.move_entry_to_folder import MoveEntryToFolderUseCase
-from app.retrospective.application.use_cases.update_folder import UpdateFolderUseCase
-from app.search.application.use_cases.global_search import GlobalSearchUseCase
 from app.retrospective.application.use_cases.get_entry import GetEntryUseCase
-from app.retrospective.application.use_cases.edit_summary import EditSummaryUseCase
+from app.retrospective.application.use_cases.get_folder_contents import GetFolderContentsUseCase
 from app.retrospective.application.use_cases.get_summaries import GetSummariesUseCase
 from app.retrospective.application.use_cases.get_summary import GetSummaryUseCase
 from app.retrospective.application.use_cases.get_summary_readiness import (
     GetSummaryReadinessUseCase,
-)
-from app.retrospective.application.use_cases.create_retro_template import CreateRetroTemplateUseCase
-from app.retrospective.application.use_cases.delete_retro_template import DeleteRetroTemplateUseCase
-from app.retrospective.application.use_cases.list_retro_templates import ListRetroTemplatesUseCase
-from app.retrospective.application.use_cases.reset_retro_template import ResetRetroTemplateUseCase
-from app.retrospective.application.use_cases.seed_retro_templates import SeedRetroTemplatesUseCase
-from app.retrospective.application.use_cases.set_active_retro_template import SetActiveRetroTemplateUseCase
-from app.retrospective.application.use_cases.update_retro_template import UpdateRetroTemplateUseCase
-from app.retrospective.application.use_cases.create_summary_template import (
-    CreateSummaryTemplateUseCase,
-)
-from app.retrospective.application.use_cases.delete_summary_template import (
-    DeleteSummaryTemplateUseCase,
 )
 from app.retrospective.application.use_cases.get_summary_template import (
     GetSummaryTemplateUseCase,
@@ -143,13 +151,23 @@ from app.retrospective.application.use_cases.get_summary_template import (
 from app.retrospective.application.use_cases.get_summary_usage import (
     GetSummaryUsageUseCase,
 )
+from app.retrospective.application.use_cases.list_folders import ListFoldersUseCase
+from app.retrospective.application.use_cases.list_retro_templates import ListRetroTemplatesUseCase
 from app.retrospective.application.use_cases.list_summary_templates import (
     ListSummaryTemplatesUseCase,
 )
+from app.retrospective.application.use_cases.move_entry_to_folder import MoveEntryToFolderUseCase
 from app.retrospective.application.use_cases.request_summary import RequestSummaryUseCase
+from app.retrospective.application.use_cases.reset_retro_template import ResetRetroTemplateUseCase
+from app.retrospective.application.use_cases.seed_retro_templates import SeedRetroTemplatesUseCase
+from app.retrospective.application.use_cases.set_active_retro_template import (
+    SetActiveRetroTemplateUseCase,
+)
 from app.retrospective.application.use_cases.set_active_summary_template import (
     SetActiveSummaryTemplateUseCase,
 )
+from app.retrospective.application.use_cases.update_folder import UpdateFolderUseCase
+from app.retrospective.application.use_cases.update_retro_template import UpdateRetroTemplateUseCase
 from app.retrospective.application.use_cases.update_summary_template import (
     UpdateSummaryTemplateUseCase,
 )
@@ -161,18 +179,56 @@ from app.retrospective.domain.repositories.repository import (
     IRetroTemplateRepository,
     IUserSummaryTemplateRepository,
 )
-from app.retrospective.infrastructure.persistence.repositories.retro_template_repo import RetroTemplateRepository
 from app.retrospective.infrastructure.cache.summary_rate_limiter import SummaryRateLimiter
 from app.retrospective.infrastructure.persistence.repositories.folder_repo import FolderRepository
-from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import JournalEntryRepository
-from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import RetroSummaryRepository
+from app.retrospective.infrastructure.persistence.repositories.journal_entry_repo import (
+    JournalEntryRepository,
+)
+from app.retrospective.infrastructure.persistence.repositories.retro_summary_repo import (
+    RetroSummaryRepository,
+)
+from app.retrospective.infrastructure.persistence.repositories.retro_template_repo import (
+    RetroTemplateRepository,
+)
 from app.retrospective.infrastructure.persistence.repositories.summary_template_repo import (
     UserSummaryTemplateRepository,
+)
+from app.search.application.use_cases.global_search import GlobalSearchUseCase
+from app.settings.application.use_cases.get_settings import GetSettingsUseCase
+from app.settings.application.use_cases.list_country_timezones import (
+    ListCountryTimezonesUseCase,
+)
+from app.settings.application.use_cases.patch_settings import PatchSettingsUseCase
+from app.settings.application.use_cases.update_country import UpdateCountryUseCase
+from app.settings.application.use_cases.update_timezone import UpdateTimezoneUseCase
+from app.settings.domain.repositories.repository import IUserSettingsRepository
+from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
+    UserSettingsRepository,
 )
 from app.shared.infrastructure.config.oauth import GoogleCalendarConfig
 from app.shared.infrastructure.config.retrospective import RetrospectiveConfig
 from app.shared.infrastructure.config.settings import AppConfig, get_settings
 from app.shared.infrastructure.config.topic import TopicConfig
+from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
+from app.todo.application.use_cases.batch_update_todos import BatchUpdateTodosUseCase
+from app.todo.application.use_cases.create_todo import CreateTodoUseCase
+from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
+from app.todo.application.use_cases.get_todo_stats import GetTodoStatsUseCase
+from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
+from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
+from app.todo.application.use_cases.get_todos_filtered import GetTodosFilteredUseCase
+from app.todo.application.use_cases.manage_tags import (
+    DeleteTagUseCase,
+    ListTagsUseCase,
+    ReorderTagsUseCase,
+    UpdateTagUseCase,
+)
+from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
+from app.todo.application.use_cases.search_tags import SearchTagsUseCase
+from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
+from app.todo.domain.repositories.repository import ITodoRepository, IUserTagRepository
+from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
+from app.todo.infrastructure.persistence.repositories.user_tag_repo import UserTagRepository
 from app.topic.application.services.topic_matcher import TopicMatcher
 from app.topic.application.use_cases.create_topic import CreateTopicUseCase
 from app.topic.application.use_cases.delete_topic import DeleteTopicUseCase
@@ -186,10 +242,10 @@ from app.topic.domain.repositories.repository import (
     IDigestRateLimiter,
     IEmbeddingQueueRepository,
     IEntryChunkRepository,
+    ITodoEmbeddingRepository,
     ITopicDigestRepository,
     ITopicMatchTransaction,
     ITopicRepository,
-    ITodoEmbeddingRepository,
 )
 from app.topic.infrastructure.ai.embedding_service import EmbeddingService
 from app.topic.infrastructure.cache.digest_rate_limiter import DigestRateLimiter
@@ -206,17 +262,6 @@ from app.topic.infrastructure.persistence.repositories.topic_repo import (
 from app.topic.infrastructure.persistence.transaction import (
     SqlAlchemyTopicMatchTransaction,
 )
-from app.todo.application.use_cases.add_calendar_link import AddCalendarLinkUseCase
-from app.todo.application.use_cases.create_todo import CreateTodoUseCase
-from app.todo.application.use_cases.delete_todo import DeleteTodoUseCase
-from app.todo.application.use_cases.get_todo_stats import GetTodoStatsUseCase
-from app.todo.application.use_cases.get_todos_by_date import GetTodosByDateUseCase
-from app.todo.application.use_cases.get_todos_by_range import GetTodosByRangeUseCase
-from app.todo.application.use_cases.remove_calendar_link import RemoveCalendarLinkUseCase
-from app.todo.application.use_cases.search_tags import SearchTagsUseCase
-from app.todo.application.use_cases.update_todo import UpdateTodoUseCase
-from app.todo.domain.repositories.repository import ITodoRepository
-from app.todo.infrastructure.persistence.repositories.todo_repo import TodoRepository
 from app.user.domain.repositories.country_history_repository import (
     ICountryHistoryRepository,
 )
@@ -249,6 +294,20 @@ class AppProvider(Provider):
             hide_parameters=True,
         )
         return async_sessionmaker(engine, expire_on_commit=False)
+
+    @provide
+    def avatar_storage(self, config: AppConfig) -> AvatarStorage:
+        return LocalAvatarStorage(config.auth.avatar_dir)
+
+    @provide
+    def account_deletion_dispatcher(self, config: AppConfig) -> AccountDeletionDispatcher:
+        redis = Redis.from_url(config.redis.auth_url, decode_responses=True)
+        return CeleryAccountDeletionDispatcher(redis)
+
+    @provide
+    def deleted_account_marker(self, config: AppConfig) -> DeletedAccountMarker:
+        redis = Redis.from_url(config.redis.auth_url, decode_responses=True)
+        return RedisDeletedAccountMarker(redis, config.auth.access_token_expire_minutes * 60)
 
     @provide
     def auth_token_cache(self, config: AppConfig) -> AuthTokenCache:
@@ -296,6 +355,11 @@ class AppProvider(Provider):
     @provide
     def github_api_client(self) -> GitHubApiClient:
         return GitHubApiClient()
+
+    @provide
+    def commit_day_cache(self, config: AppConfig) -> ICommitDayCache:
+        redis = Redis.from_url(config.redis.cache_url, decode_responses=True)
+        return RedisCommitDayCache(redis)
 
     @provide
     def google_calendar_config(self, config: AppConfig) -> GoogleCalendarConfig:
@@ -434,10 +498,13 @@ class RequestProvider(Provider):
     # ── Notification Use Cases ────────────────────────────────────────────────
 
     @provide
-    def create_notification_use_case(
-        self, repo: INotificationRepository
-    ) -> CreateNotificationUseCase:
-        return CreateNotificationUseCase(repo)
+    def notifier(
+        self,
+        repo: INotificationRepository,
+        settings_repo: IUserSettingsRepository,
+        user_repo: IUserRepository,
+    ) -> Notifier:
+        return Notifier(repo, settings_repo, user_repo)
 
     @provide
     def get_notifications_use_case(
@@ -468,16 +535,18 @@ class RequestProvider(Provider):
     # ── Settings Use Cases ────────────────────────────────────────────────────
 
     @provide
-    def get_settings_use_case(self, repo: IUserSettingsRepository) -> GetSettingsUseCase:
-        return GetSettingsUseCase(repo)
+    def get_settings_use_case(
+        self, repo: IUserSettingsRepository, folder_repo: IFolderRepository
+    ) -> GetSettingsUseCase:
+        return GetSettingsUseCase(repo, folder_repo)
 
     @provide
-    def update_settings_use_case(
+    def patch_settings_use_case(
         self,
         repo: IUserSettingsRepository,
         github_repo: IGitHubRepositoryRepository,
-    ) -> UpdateSettingsUseCase:
-        return UpdateSettingsUseCase(repo, github_repo)
+    ) -> PatchSettingsUseCase:
+        return PatchSettingsUseCase(repo, github_repo)
 
     @provide
     def update_country_use_case(
@@ -541,9 +610,7 @@ class RequestProvider(Provider):
 
     @provide
     def refresh_token_use_case(
-        self,
-        session_service: SessionService,
-        user_repo: IUserRepository,
+        self, session_service: SessionService, user_repo: IUserRepository
     ) -> RefreshTokenUseCase:
         return RefreshTokenUseCase(session_service, user_repo)
 
@@ -576,6 +643,25 @@ class RequestProvider(Provider):
     @provide
     def update_profile_use_case(self, user_repo: IUserRepository) -> UpdateProfileUseCase:
         return UpdateProfileUseCase(user_repo)
+
+    @provide
+    def upload_avatar_use_case(
+        self, user_repo: IUserRepository, storage: AvatarStorage
+    ) -> UploadAvatarUseCase:
+        return UploadAvatarUseCase(user_repo, storage)
+
+    @provide
+    def delete_avatar_use_case(self, user_repo: IUserRepository) -> DeleteAvatarUseCase:
+        return DeleteAvatarUseCase(user_repo)
+
+    @provide
+    def delete_account_use_case(
+        self,
+        user_repo: IUserRepository,
+        oauth_repo: IOAuthConnectionRepository,
+        calendar_repo: IGoogleCalendarConnectionRepository,
+    ) -> DeleteAccountUseCase:
+        return DeleteAccountUseCase(user_repo, oauth_repo, calendar_repo)
 
     @provide
     def initiate_oauth_use_case(
@@ -651,12 +737,15 @@ class RequestProvider(Provider):
         self,
         todo_repo: ITodoRepository,
         settings_repo: IUserSettingsRepository,
+        calendar_repo: ICalendarRepository,
     ) -> CreateTodoUseCase:
-        return CreateTodoUseCase(todo_repo, settings_repo)
+        return CreateTodoUseCase(todo_repo, settings_repo, calendar_repo)
 
     @provide
-    def update_todo_use_case(self, todo_repo: ITodoRepository) -> UpdateTodoUseCase:
-        return UpdateTodoUseCase(todo_repo)
+    def update_todo_use_case(
+        self, todo_repo: ITodoRepository, calendar_repo: ICalendarRepository
+    ) -> UpdateTodoUseCase:
+        return UpdateTodoUseCase(todo_repo, calendar_repo)
 
     @provide
     def delete_todo_use_case(self, todo_repo: ITodoRepository) -> DeleteTodoUseCase:
@@ -681,6 +770,25 @@ class RequestProvider(Provider):
     @provide
     def get_todos_by_range_use_case(self, todo_repo: ITodoRepository) -> GetTodosByRangeUseCase:
         return GetTodosByRangeUseCase(todo_repo)
+
+    @provide
+    def user_tag_repo(self, session: AsyncSession) -> IUserTagRepository:
+        return UserTagRepository(session)
+
+    list_tags_use_case = provide(ListTagsUseCase)
+    update_tag_use_case = provide(UpdateTagUseCase)
+    delete_tag_use_case = provide(DeleteTagUseCase)
+    reorder_tags_use_case = provide(ReorderTagsUseCase)
+
+    @provide
+    def get_todos_filtered_use_case(self, todo_repo: ITodoRepository) -> GetTodosFilteredUseCase:
+        return GetTodosFilteredUseCase(todo_repo)
+
+    @provide
+    def batch_update_todos_use_case(
+        self, todo_repo: ITodoRepository, update_uc: UpdateTodoUseCase
+    ) -> BatchUpdateTodosUseCase:
+        return BatchUpdateTodosUseCase(todo_repo, update_uc)
 
     @provide
     def get_todo_stats_use_case(
@@ -772,9 +880,12 @@ class RequestProvider(Provider):
 
     @provide
     def global_search_use_case(
-        self, todo_repo: ITodoRepository, entry_repo: IJournalEntryRepository
+        self,
+        todo_repo: ITodoRepository,
+        entry_repo: IJournalEntryRepository,
+        topic_repo: ITopicRepository,
     ) -> GlobalSearchUseCase:
-        return GlobalSearchUseCase(todo_repo, entry_repo)
+        return GlobalSearchUseCase(todo_repo, entry_repo, topic_repo)
 
     @provide
     def delete_entry_use_case(
@@ -797,8 +908,10 @@ class RequestProvider(Provider):
         return UpdateFolderUseCase(folder_repo)
 
     @provide
-    def delete_folder_use_case(self, folder_repo: IFolderRepository) -> DeleteFolderUseCase:
-        return DeleteFolderUseCase(folder_repo)
+    def delete_folder_use_case(
+        self, folder_repo: IFolderRepository, entry_repo: IJournalEntryRepository
+    ) -> DeleteFolderUseCase:
+        return DeleteFolderUseCase(folder_repo, entry_repo)
 
     @provide
     def get_folder_contents_use_case(
@@ -825,8 +938,9 @@ class RequestProvider(Provider):
         self,
         summary_repo: IRetroSummaryRepository,
         rate_limiter: SummaryRateLimiter,
+        settings_repo: IUserSettingsRepository,
     ) -> RequestSummaryUseCase:
-        return RequestSummaryUseCase(summary_repo, rate_limiter)
+        return RequestSummaryUseCase(summary_repo, rate_limiter, settings_repo)
 
     @provide
     def get_summary_usage_use_case(
@@ -968,8 +1082,9 @@ class RequestProvider(Provider):
         oauth_repo: IOAuthConnectionRepository,
         repo: IGitHubRepositoryRepository,
         api_client: GitHubApiClient,
+        commit_cache: ICommitDayCache,
     ) -> GetCommitsByDateUseCase:
-        return GetCommitsByDateUseCase(user_repo, oauth_repo, repo, api_client)
+        return GetCommitsByDateUseCase(user_repo, oauth_repo, repo, api_client, commit_cache)
 
     @provide
     def push_retrospective_use_case(
@@ -1021,9 +1136,16 @@ class RequestProvider(Provider):
         calendar_config: GoogleCalendarConfig,
         todo_repo: ITodoRepository,
         settings_repo: IUserSettingsRepository,
+        notifier: Notifier,
     ) -> SyncCalendarEventsUseCase:
         return SyncCalendarEventsUseCase(
-            connection_repo, event_repo, api_client, calendar_config, todo_repo, settings_repo
+            connection_repo,
+            event_repo,
+            api_client,
+            calendar_config,
+            todo_repo,
+            settings_repo,
+            NotifierTrashNotice(notifier, settings_repo),
         )
 
     @provide
@@ -1154,5 +1276,7 @@ class RequestProvider(Provider):
         self,
         topic_repo: ITopicRepository,
         digest_repo: ITopicDigestRepository,
+        entry_repo: IJournalEntryRepository,
+        todo_repo: ITodoRepository,
     ) -> GetDigestUseCase:
-        return GetDigestUseCase(topic_repo, digest_repo)
+        return GetDigestUseCase(topic_repo, digest_repo, entry_repo, todo_repo)

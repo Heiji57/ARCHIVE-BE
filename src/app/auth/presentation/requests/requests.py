@@ -87,17 +87,27 @@ class LoginRequest(BaseModel):
 
 
 class UpdateProfileRequest(BaseModel):
+    """생략한 필드는 그대로. `displayName: null` 은 지움, 문자열은 앞뒤 공백을 빼고 1~50자."""
+
     display_name: str | None = Field(default=None, alias="displayName")
-    account_type: str | None = Field(default=None, alias="accountType")
 
     model_config = {"populate_by_name": True}
 
-    @field_validator("account_type", mode="before")
+    @field_validator("display_name")
     @classmethod
-    def account_type_valid(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("developer", "user"):
-            raise ValueError("account_type must be 'developer' or 'user'")
+    def _name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not 1 <= len(v) <= 50:
+            raise ValueError("displayName must be 1-50 characters")
         return v
+
+
+class DeleteAccountRequest(BaseModel):
+    """표시 이름 또는 이메일을 그대로 입력해야 지울 수 있다."""
+
+    confirm: str = Field(min_length=1, max_length=255)
 
 
 class OnboardingCompleteRequest(BaseModel):

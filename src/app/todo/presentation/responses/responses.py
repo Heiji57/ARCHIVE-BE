@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.todo.domain.models.todo import RecurrenceRule, Todo
+from app.todo.domain.models.user_tag import TagSummary
 from app.todo.domain.repositories.repository import TagCount, WeeklyTrendDay
 
 
@@ -52,6 +53,7 @@ class TodoResponse(BaseModel):
     series_rule: RecurrenceRuleResponse | None
     tags: list[str]
     due_date_key: str | None
+    calendar_id: str | None  # null = 기본 캘린더
 
     @classmethod
     def from_entity(cls, todo: Todo) -> "TodoResponse":
@@ -86,6 +88,7 @@ class TodoResponse(BaseModel):
             ),
             tags=todo.tags,
             due_date_key=todo.due_date_key,
+            calendar_id=todo.calendar_id,
         )
 
 
@@ -121,3 +124,23 @@ class TodoStatsResponse(BaseModel):
 
 class TagSearchResponse(BaseModel):
     tags: list[str]
+
+
+class TodoBatchResponse(BaseModel):
+    """묶음 수정 결과. `previous` 는 변경 전 값(operations 순서) — 되돌리기용."""
+
+    todos: list[TodoResponse]
+    previous: list[TodoResponse]
+
+
+class TagResponse(BaseModel):
+    name: str
+    count: int  # 그 태그가 붙은 할 일 수
+    color: str | None  # FE 팔레트 키, null 이면 이름 해시 색
+    sort_order: int | None = Field(serialization_alias="sortOrder")
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_domain(cls, t: TagSummary) -> "TagResponse":
+        return cls(name=t.name, count=t.count, color=t.color, sort_order=t.sort_order)

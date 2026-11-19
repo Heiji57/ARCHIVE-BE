@@ -1,4 +1,8 @@
-"""Gemini 마크다운 생성 래퍼 — 토픽 다이제스트 전용."""
+"""Gemini 생성 래퍼 — 토픽 다이제스트 전용."""
+
+import json
+from typing import Any
+
 import structlog
 from google import genai
 from google.genai import types
@@ -19,10 +23,14 @@ class TopicGeminiClient:
         )
         self._model = config.gemini_model
 
-    async def generate(self, prompt: str) -> str:
-        """마크다운 다이제스트 생성. 반환값은 마크다운 문자열."""
+    async def generate_json(self, prompt: str, schema: dict[str, Any]) -> Any:
+        """JSON 응답 생성(`response_json_schema` 로 모양 강제). 파싱 실패는 ValueError.
+
+        스키마가 있어도 모델이 잘리거나 깨진 JSON 을 줄 수 있어 호출자가 재요청을 판단한다.
+        """
         config = types.GenerateContentConfig(
-            response_mime_type="text/plain",
+            response_mime_type="application/json",
+            response_json_schema=schema,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
         response = await ai_errors.call(
@@ -36,8 +44,10 @@ class TopicGeminiClient:
         log_generate_usage("gemini.digest.generate", self._model, response)
         text = response.text
         if text is None:
-            # safety filter / blocked — 재시도해도 같은 결과
             raise AIEmptyResponseException(
                 "Gemini blocked the response (safety filter or empty candidates)."
             )
-        return text.strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Gemini returned invalid JSON: {e}") from e

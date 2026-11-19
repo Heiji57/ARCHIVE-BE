@@ -40,11 +40,14 @@ class EmbeddingService:
         """여러 텍스트를 한 번에 임베딩. API 호출 1회."""
         if not texts:
             return []
+        batch: list[types.PartUnion] = list(texts)
         response = await ai_errors.call(
             "gemini.embed_batch",
             self._client.aio.models.embed_content(
                 model=_EMBEDDING_MODEL,
-                contents=texts,
+                # SDK 의 contents 는 불변(invariant) list 타입이라 list[str] 을 그대로 못 받는다
+                # (Pillow 가 설치되면 Image 가 합쳐진 타입이 된다) — 그 타입의 list 로 옮긴다.
+                contents=batch,
                 config=_EMBED_CONFIG,
             ),
         )

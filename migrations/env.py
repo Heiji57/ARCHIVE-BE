@@ -7,15 +7,8 @@ from sqlalchemy import pool
 
 from app.shared.infrastructure.database.base import Base
 
-# 모든 ORM 모델을 import해야 autogenerate가 인식한다
-import app.user.infrastructure.persistence.models.user_model  # noqa: F401
-import app.user.infrastructure.persistence.models.country_history_model  # noqa: F401
-import app.todo.infrastructure.persistence.models.todo_model  # noqa: F401
-import app.retrospective.infrastructure.persistence.models.journal_entry_model  # noqa: F401
-import app.retrospective.infrastructure.persistence.models.retro_summary_model  # noqa: F401
-import app.notification.infrastructure.persistence.models.notification_model  # noqa: F401
-import app.github.infrastructure.persistence.models.github_repository_model  # noqa: F401
-import app.github.infrastructure.persistence.models.retrospective_push_model  # noqa: F401
+# 모든 ORM 모델을 import해야 autogenerate가 인식한다 — 목록은 한 곳에서 관리한다
+import app.shared.infrastructure.database.models  # noqa: F401
 
 config = context.config
 

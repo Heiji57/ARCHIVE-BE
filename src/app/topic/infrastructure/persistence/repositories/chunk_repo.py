@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import Select, delete, func, select, tuple_
+from sqlalchemy import Select, delete, exists, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,7 @@ from app.retrospective.infrastructure.persistence.models.journal_entry_model imp
 )
 from app.shared.domain.utils.id import generate_id
 from app.todo.domain.models.value_objects import TaskStatus
+from app.todo.infrastructure.persistence.models.todo_model import TodoModel
 from app.topic.domain.models.topic import (
     EmbeddingQueueItem,
     EntryChunk,
@@ -38,6 +39,15 @@ _NON_BLANK_PATTERN = (
     r"[^[:space:]\u001C-\u001F\u0085\u00A0\u1680"
     r"\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]"
 )
+
+
+def _entry_alive() -> Any:
+    """휴지통의 회고 청크는 매칭·근거에서 뺀다. 청크는 지우지 않는다 — 되살릴 때 다시
+    임베딩하지 않게(30일 뒤 worker.purge_trash 가 회고와 함께 지운다 — FK 가 없어 따로)."""
+    return exists().where(
+        JournalEntryModel.id == EntryChunkModel.entry_id,
+        JournalEntryModel.deleted_at.is_(None),
+    )
 
 
 async def _fetch_in_savepoint(session: AsyncSession, stmt: Select[Any]) -> list[Row[Any]]:
@@ -82,6 +92,12 @@ class EntryChunkRepository(IEntryChunkRepository):
             await self._session.execute(stmt)
         await self._session.flush()
 
+    async def delete_by_entries(self, entry_ids: list[str]) -> None:
+        if entry_ids:
+            await self._session.execute(
+                delete(EntryChunkModel).where(EntryChunkModel.entry_id.in_(entry_ids))
+            )
+
     async def delete_by_entry(self, entry_id: str) -> None:
         await self._session.execute(
             delete(EntryChunkModel).where(EntryChunkModel.entry_id == entry_id)
@@ -103,6 +119,7 @@ class EntryChunkRepository(IEntryChunkRepository):
             EntryChunkModel.user_id == user_id,
             EntryChunkModel.embedding.is_not(None),
             distance <= 1 - threshold,
+            _entry_alive(),
         ]
         if since_date_key:
             conditions.append(EntryChunkModel.date_key >= since_date_key)
@@ -201,6 +218,7 @@ class EntryChunkRepository(IEntryChunkRepository):
         ).where(
             EntryChunkModel.user_id == user_id,
             tuple_(EntryChunkModel.entry_id, EntryChunkModel.chunk_index).in_(keys),
+            _entry_alive(),
         )
         rows = (await self._session.execute(stmt)).all()
         return [
@@ -261,6 +279,12 @@ class TodoEmbeddingRepository(ITodoEmbeddingRepository):
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def delete_by_todos(self, todo_ids: list[str]) -> None:
+        if todo_ids:
+            await self._session.execute(
+                delete(TodoEmbeddingModel).where(TodoEmbeddingModel.todo_id.in_(todo_ids))
+            )
+
     async def delete_by_todo(self, todo_id: str) -> None:
         await self._session.execute(
             delete(TodoEmbeddingModel).where(TodoEmbeddingModel.todo_id == todo_id)
@@ -281,6 +305,9 @@ class TodoEmbeddingRepository(ITodoEmbeddingRepository):
             TodoEmbeddingModel.status.in_(_MATCHED_TODO_STATUSES),
             TodoEmbeddingModel.embedding.is_not(None),
             distance <= 1 - threshold,
+            exists().where(  # 휴지통의 할 일은 매칭에서 뺀다(예외 row 임베딩 포함)
+                TodoModel.id == TodoEmbeddingModel.todo_id, TodoModel.deleted_at.is_(None)
+            ),
         ]
         if since_date_key:
             conditions.append(TodoEmbeddingModel.date_key >= since_date_key)

@@ -11,8 +11,15 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from redis.exceptions import RedisError
 
+from app.ai.infrastructure.container.providers import AiProvider
+from app.ai.presentation.router import router as ai_router
 from app.auth.presentation.router import router as auth_router
 from app.auth.presentation.router_v2 import router as auth_router_v2
+from app.calendars.infrastructure.container.providers import CalendarsProvider
+from app.calendars.presentation.router import router as calendars_router
+from app.data.infrastructure.container.providers import DataProvider
+from app.data.presentation.export_router import router as export_router
+from app.data.presentation.router import router as trash_router
 from app.github.presentation.router import router as github_router
 from app.google_calendar.presentation.router import (
     callback_router as calendar_callback_router,
@@ -25,6 +32,8 @@ from app.retrospective.presentation.router import router as entry_router
 from app.retrospective.presentation.summary_router import router as summary_router
 from app.retrospective.presentation.template_router import (
     active_router as summary_active_router,
+)
+from app.retrospective.presentation.template_router import (
     active_router_v2 as summary_active_router_v2,
 )
 from app.retrospective.presentation.template_router import (
@@ -36,6 +45,7 @@ from app.shared.domain.exceptions.base import BaseAppException
 from app.shared.domain.exceptions.external import CacheUnavailableException
 from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.container.providers import AppProvider, RequestProvider
+from app.shared.infrastructure.database import models as _orm_models  # noqa: F401  (FK 대상 등록)
 from app.shared.infrastructure.logger.request_context import (
     REQUEST_ID_HEADER,
     RequestContextMiddleware,
@@ -84,7 +94,9 @@ def create_app() -> FastAPI:
     )
 
     # setup_dishka는 앱 시작 전(create_app 단계)에 호출해야 미들웨어 등록 가능
-    container = make_async_container(AppProvider(), RequestProvider())
+    container = make_async_container(
+        AppProvider(), RequestProvider(), CalendarsProvider(), AiProvider(), DataProvider()
+    )
     setup_dishka(container, app=app)
 
     # 순서 주의 — add_middleware 는 바깥쪽에 쌓는다. RequestContext 를 먼저 추가해 CORS 보다
@@ -151,6 +163,10 @@ def create_app() -> FastAPI:
     app.include_router(calendar_callback_router, prefix="/api/v1")  # redirect_uri — v1 전용
     app.include_router(search_router, prefix="/api/v1")
     app.include_router(topic_router, prefix="/api/v1")
+    app.include_router(calendars_router, prefix="/api/v1")
+    app.include_router(trash_router, prefix="/api/v1")
+    app.include_router(export_router, prefix="/api/v1")
+    app.include_router(ai_router, prefix="/api/v1")
     # v2 — 에러 코드·검증이 v1 과 달라지는 엔드포인트만 (나머지는 v1 유지). GitHub/Calendar 는
     # 핸들러가 같고 코드 선택만 경로 prefix 로 갈린다(errors/handler.py _V1_LEGACY_CODES).
     app.include_router(auth_router_v2, prefix="/api/v2")

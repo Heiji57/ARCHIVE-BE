@@ -1,16 +1,18 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import structlog
 
+from app.google_calendar.application.ports import TrashedTodosNotice
+from app.google_calendar.application.services.token_manager import (
+    ensure_valid_access_token,
+)
 from app.google_calendar.domain.exceptions.exceptions import (
     CalendarApiUnavailableException,
     CalendarReauthRequiredException,
 )
 from app.google_calendar.domain.models.calendar_connection import GoogleCalendarConnection
 from app.google_calendar.domain.models.calendar_event import CalendarEvent
-from app.google_calendar.application.services.token_manager import (
-    ensure_valid_access_token,
-)
 from app.google_calendar.domain.repositories.repository import (
     ICalendarEventRepository,
     IGoogleCalendarConnectionRepository,
@@ -44,7 +46,8 @@ class SyncCalendarEventsUseCase:
     Google 원본 이벤트(ARCHIVE 가 push 하지 않은, archive_todo_id 없는 이벤트)는
     read-only CalendarEvent 가 아니라 **수정 가능한 Todo 로 승격**한다(google_event_id
     로 dedup). cancelled 된 이벤트는 연동된 todo 가 있으면 `calendar_auto_delete_todo`
-    설정에 따라 삭제 또는 연동 해제한다.
+    설정에 따라 휴지통으로 보내거나 연동 해제한다. 휴지통으로 보낸 것은 동기화 한 번에 알림
+    하나로 묶는다(`trash_notice`).
     """
 
     def __init__(
@@ -55,6 +58,7 @@ class SyncCalendarEventsUseCase:
         config: GoogleCalendarConfig,
         todo_repo: ITodoRepository,
         settings_repo: IUserSettingsRepository,
+        trash_notice: TrashedTodosNotice | None = None,
     ) -> None:
         self._connection_repo = connection_repo
         self._event_repo = event_repo
@@ -62,6 +66,7 @@ class SyncCalendarEventsUseCase:
         self._config = config
         self._todo_repo = todo_repo
         self._settings_repo = settings_repo
+        self._trash_notice = trash_notice
 
     async def execute(
         self, user_id: str, force: bool = False
@@ -117,6 +122,7 @@ class SyncCalendarEventsUseCase:
         # 이 테이블에 쌓이지 않고 전부 todo 로 승격되므로 cancelled_ids 정리만 유지.
         cancelled_ids: list[str] = []
         auto_delete: bool | None = None  # cancelled 이벤트 등장 시에만 lazy 조회
+        trashed = 0
 
         # 이벤트별 개별 조회(N+1) 대신, 조회가 필요한 이벤트(cancelled 또는 Google 원본)의
         # google_event_id 를 모아 1회 batch 조회 후 in-memory dict 로 참조한다.
@@ -138,8 +144,20 @@ class SyncCalendarEventsUseCase:
                         auto_delete = bool(
                             user_settings and user_settings.calendar_auto_delete_todo
                         )
-                    if auto_delete:
-                        await self._todo_repo.delete(linked.id, user_id)
+                    if auto_delete and linked.series_id is not None:
+                        # 반복의 한 회차(예외 row) — 휴지통이 아니라 "이 회차 삭제"와 같은 취소로.
+                        # 휴지통에 넣으면 회차 유일 인덱스를 계속 차지해, 그 회차를 다시 고칠 때
+                        # 휴지통 행에 덮어써져 사라진다(휴지통 목록에도 안 보인다).
+                        await self._todo_repo.save(
+                            replace(linked, status=TaskStatus.CANCELLED, updated_at=now)
+                        )
+                        await self._todo_repo.clear_calendar_link(linked.id, user_id)
+                    elif auto_delete:
+                        # 휴지통으로(30일 안에 되살릴 수 있다). 시리즈 base 면 예외 row 까지.
+                        await self._todo_repo.soft_delete(
+                            linked.id, user_id, with_series=linked.is_series_base
+                        )
+                        trashed += 1
                     else:
                         await self._todo_repo.clear_calendar_link(linked.id, user_id)
             elif raw.archive_todo_id is not None:
@@ -169,6 +187,8 @@ class SyncCalendarEventsUseCase:
                     await self._todo_repo.create_from_calendar_event(todo)
 
         await self._event_repo.delete_by_google_ids(user_id, cancelled_ids)
+        if trashed and self._trash_notice is not None:
+            await self._trash_notice.todos_trashed(user_id, trashed)
 
         conn.sync_token = page.next_sync_token or conn.sync_token
         conn.last_synced_at = now

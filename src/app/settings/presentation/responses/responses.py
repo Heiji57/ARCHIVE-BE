@@ -1,4 +1,4 @@
-from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -36,13 +36,21 @@ class SettingsResponse(BaseModel):
     auto_summary_monthly: bool = Field(serialization_alias="autoSummaryMonthly")
     auto_summary_yearly: bool = Field(serialization_alias="autoSummaryYearly")
     notification_retention_days: int = Field(serialization_alias="notificationRetentionDays")
-    last_schedule_check_at: datetime | None = Field(serialization_alias="lastScheduleCheckAt")
     calendar_auto_push_todo: bool = Field(serialization_alias="calendarAutoPushTodo")
     calendar_auto_delete_todo: bool = Field(serialization_alias="calendarAutoDeleteTodo")
     github: GitHubSettingsBlock
     active_summary_template_ids: ActiveSummaryTemplateIdsBlock = Field(
         serialization_alias="activeSummaryTemplateIds"
     )
+    week_start: str = Field(serialization_alias="weekStart")
+    # {days: [0~6], perDay: {"1": {from, to}}} — 요일은 0(일)~6(토)
+    work_schedule: dict[str, Any] = Field(serialization_alias="workSchedule")
+    default_todo_minutes: int = Field(serialization_alias="defaultTodoMinutes")
+    day_end_reminder: dict[str, Any] = Field(serialization_alias="dayEndReminder")
+    notification_prefs: dict[str, bool] = Field(serialization_alias="notificationPrefs")
+    quiet_hours: dict[str, Any] = Field(serialization_alias="quietHours")
+    email_digest: str = Field(serialization_alias="emailDigest")
+    ui_preferences: dict[str, Any] = Field(serialization_alias="uiPreferences")
 
     model_config = {"populate_by_name": True}
 
@@ -54,7 +62,6 @@ class SettingsResponse(BaseModel):
             auto_summary_monthly=s.auto_summary_monthly,
             auto_summary_yearly=s.auto_summary_yearly,
             notification_retention_days=s.notification_retention_days,
-            last_schedule_check_at=s.last_schedule_check_at,
             calendar_auto_push_todo=s.calendar_auto_push_todo,
             calendar_auto_delete_todo=s.calendar_auto_delete_todo,
             github=GitHubSettingsBlock(
@@ -63,4 +70,12 @@ class SettingsResponse(BaseModel):
             active_summary_template_ids=ActiveSummaryTemplateIdsBlock.from_dict(
                 s.active_summary_template_ids
             ),
+            week_start=s.week_start,
+            work_schedule=s.work_schedule.to_dict(),
+            default_todo_minutes=s.default_todo_minutes,
+            day_end_reminder=s.day_end_reminder.to_dict(),
+            notification_prefs=s.notification_prefs.to_dict(),
+            quiet_hours=s.quiet_hours.to_dict(),
+            email_digest=s.email_digest,
+            ui_preferences=dict(s.ui_preferences),
         )

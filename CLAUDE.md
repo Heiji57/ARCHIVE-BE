@@ -81,23 +81,30 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 |---|---|
 | Auth | `POST /auth/email/verify/send`, `/confirm`, `/register`, `/login`, `/logout`, `/token/refresh` |
 | Auth | `POST /auth/password/reset/request`, `/auth/password/reset/confirm` |
-| Auth | `GET /auth/me`, `PATCH /auth/me` |
+| Auth | `GET /auth/me`, `PATCH /auth/me`(이름), `DELETE /auth/me`(계정 soft delete), `POST/DELETE /auth/me/avatar` |
 | Auth | `GET /auth/oauth/{provider}/authorize`, `/callback`, `POST /auth/oauth/{provider}/link/init`, `POST /auth/oauth/onboarding` |
 | Auth | `GET /auth/sessions`, `DELETE /auth/sessions`, `DELETE /auth/sessions/{sessionId}` (활성 세션 관리) |
 | Auth **v2** | `POST /api/v2/auth/email/verify/send`, `/confirm`, `GET /api/v2/auth/oauth/{provider}/authorize`, `POST /api/v2/auth/oauth/{provider}/link/init` (에러 코드 세분화 — `auth/presentation/router_v2.py`) |
 | GitHub·Calendar **v2** | `/api/v2/github/*`, `/api/v2/calendar/*` — v1 과 같은 핸들러, 세분화 코드(`GITHUB_PERMISSION_DENIED` 등)만 v2 에서 노출 |
 | Summary **v2** | `PUT /api/v2/settings/auto-summary/active` (알 수 없는 키 422) |
-| Todo | `GET/POST /todos`, `PATCH/DELETE /todos/{id}` |
+| Todo | `GET/POST /todos` (`?overdue`/`?due`/`?calendarPushStatus` 기간 밖 조회, `?calendarIds=`), `POST /todos/batch` (묶음 수정), `PATCH/DELETE /todos/{id}` |
+| Todo 태그 | `GET /todos/tags`, `PATCH/DELETE /todos/tags/{name}` (이름 변경·합치기·색·순서), `PUT /todos/tags/order` |
+| Calendars | `GET/POST /calendars`, `PATCH/DELETE /calendars/{id}` (사용자 캘린더 — Google 연동 `/calendar/*` 와 별개) |
+| AI | `GET /ai/suggestions?date=`, `POST /ai/suggestions/{id}/apply|undo|dismiss` (규칙 기반 추천), `GET /ai/usage` |
+| AI 대화 | `GET/POST /ai/conversations`, `DELETE /ai/conversations/{id}`, `GET/POST /ai/conversations/{id}/messages`, `GET /ai/conversations/{id}/stream` (SSE), `GET /ai/proposals/{id}`, `POST /ai/proposals/{id}/apply|undo|dismiss` |
+| AI 설정 | `GET/PATCH /ai/settings`, `GET/POST /ai/memories`, `DELETE /ai/memories/{id}`, `GET/POST /ai/schedules`, `PATCH/DELETE /ai/schedules/{id}` |
 | Entry | `GET/POST /entries`, `GET /entries/paginated`, `GET/PUT/DELETE /entries/{id}`, `PATCH /entries/{id}/folder` |
+| Trash | `GET /trash?kind=`, `POST /trash/{kind}/{id}/restore`, `DELETE /trash/{kind}/{id}`, `DELETE /trash` (`data` 모듈 — 할 일·회고 휴지통) |
+| Export | `POST /exports`(202), `GET /exports/{id}`, `GET /exports/{id}/download?token=` (`data` 모듈 — zip, 서명 URL) |
 | Folder | `POST /folders`, `GET /folders/contents`, `PATCH/DELETE /folders/{id}` (중첩 폴더로 회고록 정리) |
-| Search | `GET /search` (Todo + daily entry 통합검색) |
+| Search | `GET /search?scope=all\|todo\|retro\|topic` (Todo + 회고 전 종류 + 주제 통합검색) |
 | Summary | `POST /summaries/generate`, `GET /summaries/readiness`, `GET /summaries`, `GET /summaries/{id}`, `GET /summaries/{id}/stream` |
 | Notification | `GET /notifications/stream`, `GET /notifications`, `PATCH /notifications/read-all`, `PATCH /notifications/{id}/read`, `DELETE /notifications/{id}`, `DELETE /notifications` |
-| Settings | `GET/PUT /settings`, `PATCH /settings/country`, `PATCH /settings/timezone`, `GET /settings/countries/{code}/timezones` |
+| Settings | `GET /settings`, `PATCH /settings/{general,auto-summary,notifications,calendar,work,github}` (섹션별 부분 수정), `GET·POST /settings/email-digest/unsubscribe` (인증 없음, GET 은 FE 확인 화면으로 리다이렉트만), `PATCH /settings/country`, `PATCH /settings/timezone`, `GET /settings/countries/{code}/timezones` |
 | GitHub | `GET /github/connection`, `GET /github/repositories/available`, `GET/POST/DELETE /github/repositories`, `POST /github/repositories/sync-all`, `PATCH/DELETE /github/repositories/{id}` |
-| GitHub | `GET /github/commits` (지정 날짜 / 기본=오늘, public repo only, failed repo 포함), `POST /github/retrospectives/push` |
+| GitHub | `GET /github/commits` (`?date=` 기본=오늘 또는 `?from=&to=` 최대 31일, 날짜별 캐시, public repo only, failed repo 포함), `POST /github/retrospectives/push` |
 | RetroTemplate | `GET/POST /templates`, `PATCH/DELETE /templates/{id}`, `POST /templates/{id}/reset`, `PUT /templates/active` |
-| Topic | `GET/POST /topics`, `PATCH/DELETE /topics/{id}`, `GET /topics/{id}/stats`, `GET /topics/{id}/sources` |
+| Topic | `GET/POST /topics` (`?include=recent`), `PATCH/DELETE /topics/{id}`, `GET /topics/{id}/stats`, `GET /topics/{id}/sources` |
 | Topic | `GET /topics/{id}/digest`, `POST /topics/{id}/digest/generate`, `GET /topics/{id}/digest/stream` (SSE) |
 
 ## API Contract — Single Source of Truth
@@ -116,14 +123,15 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 
 ## Key Conventions
 
-범용 컨벤션만 여기 남긴다. 모듈별(도메인 정책) 컨벤션은 각 모듈 디렉토리의 `CLAUDE.md`로 이관됐다 — 해당 모듈 작업 시에만 자동 로드된다: `src/app/todo/CLAUDE.md`, `src/app/retrospective/CLAUDE.md`, `src/app/topic/CLAUDE.md`, `src/app/auth/CLAUDE.md`, `src/app/settings/CLAUDE.md`, `src/app/github/CLAUDE.md`, `src/app/search/CLAUDE.md`.
+범용 컨벤션만 여기 남긴다. 모듈별(도메인 정책) 컨벤션은 각 모듈 디렉토리의 `CLAUDE.md`로 이관됐다 — 해당 모듈 작업 시에만 자동 로드된다: `src/app/todo/CLAUDE.md`, `src/app/retrospective/CLAUDE.md`, `src/app/topic/CLAUDE.md`, `src/app/auth/CLAUDE.md`, `src/app/settings/CLAUDE.md`, `src/app/github/CLAUDE.md`, `src/app/search/CLAUDE.md`, `src/app/notification/CLAUDE.md`, `src/app/calendars/CLAUDE.md`, `src/app/ai/CLAUDE.md`, `src/app/data/CLAUDE.md`.
 
 - **DI 등록**: 신규 리포지터리/유스케이스는 그 클래스가 속한 도메인 모듈의 `{module}/infrastructure/container/providers.py`에 `@provide`로 등록(예: `todo` 리포지터리/유스케이스는 `todo/infrastructure/container/providers.py`의 `TodoProvider`). 신규 모듈이면 `main.py`의 `make_async_container()` 호출부에 그 Provider 인스턴스를 추가한다. `shared/infrastructure/container/providers.py`(`SharedProvider`)는 DB 세션 등 특정 도메인에 속하지 않는 공용 인프라 전용 — 도메인 리포지터리/유스케이스를 여기 넣지 않는다. Scope는 각 Provider 클래스의 기본값(대개 `Scope.REQUEST`)을 따르되, 캐시/API 클라이언트처럼 앱 전체에서 싱글턴이어야 하는 것은 메서드 단위 `@provide(scope=Scope.APP)`로 오버라이드한다.
 - **라우터 등록**: `main.py`의 `create_app()`에 `app.include_router()` 추가
 - **응답 형식**: `ApiResponse[T]` 래퍼 사용 (`shared/presentation/schemas/response.py`)
 - **인증**: 인증이 필요한 엔드포인트는 `current_user: UserContext = Depends(get_current_user)` 사용
-- **DB 마이그레이션**: 스키마 변경 시 `migrations/versions/` 에 Alembic 파일 추가
+- **DB 마이그레이션**: 스키마 변경 시 `migrations/versions/` 에 Alembic 파일 추가. 새 ORM 모델은 `shared/infrastructure/database/models.py` 에 등록한다 — API·워커·Alembic 이 시작할 때 이 모듈로 모든 테이블을 metadata 에 올린다. 빠뜨리면 그 테이블을 가리키는 FK 를 가진 모델을 flush 할 때(특히 워커) `NoReferencedTableError`.
 - **예외 처리**: 외부 라이브러리 예외는 infrastructure 경계에서 도메인 예외로 번역하고, 호출부는 구체 예외만 잡는다. `except Exception` 은 정해진 경계(태스크 최상위·OAuth 팝업 콜백·배치 항목 격리·정리 후 재발생·lifespan)에서만 — 상세는 `develop.md` "외부 연동 예외 번역과 `except Exception` 사용 범위".
+- **휴지통(soft delete)**: `todos`·`journal_entries`·`users` 는 지우면 `deleted_at` 을 채운다. 지운 행은 `shared/infrastructure/database/soft_delete.py` 의 `do_orm_execute` 리스너(`with_loader_criteria`)가 **모든 ORM 조회·UPDATE·DELETE 에서 자동으로 뺀다** — 새 모델에 `deleted_at` 을 두면 모델 파일 끝에서 `soft_delete.register(Model)`. 지운 행을 다뤄야 하는 쿼리(휴지통 목록·복원·영구 삭제, IDOR 가드)만 `.execution_options(**INCLUDE_DELETED)`. **raw `text()` SQL 에는 걸리지 않으니 직접 `deleted_at IS NULL` 을 쓴다.** 유일 조건은 부분 유니크 인덱스(`WHERE deleted_at IS NULL`). 청크·임베딩 테이블은 FK 가 없어 영구 삭제 때 따로 지운다. 30일 뒤 `worker.purge_trash`(하루) 가 영구 삭제.
 - **사용자 타임존**: 사용자별 `users.timezone`(IANA tz) 보유. 모든 기간 계산("오늘", "이번 주" 등)은 이 tz 기준으로 처리한다. 절대 서버 UTC 기준으로 계산하지 않는다. `shared/domain/utils/period.py`의 `today_in_tz(tz)`, `now_in_tz(tz)` 사용.
 
 ## Environment Setup
@@ -161,7 +169,7 @@ celery -A app.worker.celery_app worker --beat -Q default --schedule=/tmp/celeryb
 celery -A app.worker.celery_app worker -Q calendar --concurrency=3 --loglevel=info
 ```
 
-> **큐 분리**: `ai_tasks` = AI 요약 task (`worker.generate_summary`, priority=9), `default` = 스케줄 dispatcher (`worker.dispatch_summaries_for_tz` + `worker.sync_all_calendars` beat 발사), `calendar` = 캘린더 백그라운드 동기화 (`worker.sync_all_calendars` dispatcher + `worker.sync_user_calendar` fan-out). worker 를 `-Q` 없이 띄우면 `task_default_queue=default` 만 소비해 요약 task 가 영원히 처리되지 않으니 **`ai_tasks` 를 반드시 포함**한다. 마찬가지로 **`calendar` 큐를 소비하는 worker 가 없으면 백그라운드 캘린더 sync 가 영원히 처리되지 않는다.** docker-compose 는 `worker-ai`(ai_tasks) / `worker-beat`(default+beat) / `worker-calendar`(calendar) 세 컨테이너로 분리되어 있다. 캘린더 sync 는 시간에 민감한 요약 dispatcher 와 무거운 AI 요약 양쪽에서 격리된다.
+> **큐 분리**: `ai_tasks` = AI 요약 task (`worker.generate_summary`, priority=9) + 주제 정리 + AI 대화 차례(`worker.run_ai_turn`), `default` = 스케줄 dispatcher (`worker.dispatch_summaries_for_tz` + `worker.sync_all_calendars` beat 발사 + 예약 알림 `dispatch_due_reminders`/`dispatch_day_end_reminders`/`flush_quiet_notifications`(5분), `send_weekly_email`(매시 5분), AI 예약 `dispatch_ai_schedules`(5분)·`purge_ai_conversations`(하루)·`purge_trash`·`purge_exports`·`purge_deleted_accounts`(하루), 계정 삭제 뒤 `finish_account_deletion`·`revoke_account_tokens`, 내보내기 `build_export`), `calendar` = 캘린더 백그라운드 동기화 (`worker.sync_all_calendars` dispatcher + `worker.sync_user_calendar` fan-out). worker 를 `-Q` 없이 띄우면 `task_default_queue=default` 만 소비해 요약 task 가 영원히 처리되지 않으니 **`ai_tasks` 를 반드시 포함**한다. 마찬가지로 **`calendar` 큐를 소비하는 worker 가 없으면 백그라운드 캘린더 sync 가 영원히 처리되지 않는다.** docker-compose 는 `worker-ai`(ai_tasks) / `worker-beat`(default+beat) / `worker-calendar`(calendar) 세 컨테이너로 분리되어 있다. 캘린더 sync 는 시간에 민감한 요약 dispatcher 와 무거운 AI 요약 양쪽에서 격리된다.
 
 > 프로덕션 배포 절차는 `deploy` 스킬 참고 (`.claude/skills/deploy/SKILL.md`).
 

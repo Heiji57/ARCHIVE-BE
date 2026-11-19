@@ -6,6 +6,7 @@ from celery.schedules import crontab
 from kombu import Exchange, Queue
 
 from app.shared.infrastructure.config.settings import get_settings
+from app.shared.infrastructure.database import models as _orm_models  # noqa: F401  (FK 대상 등록)
 from app.shared.infrastructure.logger.setup import configure_logging
 
 # Google Calendar 백그라운드 동기화 주기(분). 기본 5분.
@@ -22,6 +23,15 @@ _QUEUES = (
 _TASK_ROUTES = {
     "worker.generate_summary": {"queue": "ai_tasks"},
     "worker.generate_digest": {"queue": "ai_tasks"},
+    "worker.run_ai_turn": {"queue": "ai_tasks"},
+    "worker.dispatch_ai_schedules": {"queue": "default"},
+    "worker.purge_ai_conversations": {"queue": "default"},
+    "worker.purge_trash": {"queue": "default"},
+    "worker.purge_deleted_accounts": {"queue": "default"},
+    "worker.build_export": {"queue": "default"},
+    "worker.purge_exports": {"queue": "default"},
+    "worker.revoke_account_tokens": {"queue": "default"},
+    "worker.finish_account_deletion": {"queue": "default"},
     "worker.dispatch_summaries_for_tz": {"queue": "default"},
     "worker.embed_stale": {"queue": "default"},
     "worker.sync_all_calendars": {"queue": "calendar"},
@@ -29,6 +39,11 @@ _TASK_ROUTES = {
     # ARCHIVE → Google push — calendar 큐에서 격리 처리(즉시 단건 + 삭제 cleanup).
     "worker.push_calendar_event": {"queue": "calendar"},
     "worker.delete_calendar_event": {"queue": "calendar"},
+    # 예약 알림·주간 이메일 — 시각에 민감하고 가벼워 default 큐(요약 dispatcher 와 같은 줄)
+    "worker.dispatch_due_reminders": {"queue": "default"},
+    "worker.dispatch_day_end_reminders": {"queue": "default"},
+    "worker.flush_quiet_notifications": {"queue": "default"},
+    "worker.send_weekly_email": {"queue": "default"},
 }
 
 
@@ -73,16 +88,60 @@ def create_celery_app() -> Celery:
                 "task": "worker.embed_stale",
                 "schedule": timedelta(minutes=5),
             },
+            "due-reminders-periodic": {
+                "task": "worker.dispatch_due_reminders",
+                "schedule": timedelta(minutes=5),
+            },
+            "day-end-reminders-periodic": {
+                "task": "worker.dispatch_day_end_reminders",
+                "schedule": timedelta(minutes=5),
+            },
+            "flush-quiet-notifications-periodic": {
+                "task": "worker.flush_quiet_notifications",
+                "schedule": timedelta(minutes=5),
+            },
+            "ai-schedules-periodic": {
+                "task": "worker.dispatch_ai_schedules",
+                "schedule": timedelta(minutes=5),
+            },
+            "purge-exports-daily": {
+                "task": "worker.purge_exports",
+                "schedule": crontab(minute=20, hour=3),  # UTC 03:20
+            },
+            "purge-deleted-accounts-daily": {
+                "task": "worker.purge_deleted_accounts",
+                "schedule": crontab(minute=50, hour=3),  # UTC 03:50
+            },
+            "purge-trash-daily": {
+                "task": "worker.purge_trash",
+                "schedule": crontab(minute=40, hour=3),  # UTC 03:40
+            },
+            "purge-ai-conversations-daily": {
+                "task": "worker.purge_ai_conversations",
+                "schedule": crontab(minute=30, hour=3),  # UTC 03:30
+            },
+            "weekly-email-hourly": {
+                "task": "worker.send_weekly_email",
+                "schedule": crontab(minute=5),  # 매시 5분 — 요약 dispatcher(정각)와 엇갈리게
+            },
         },
     )
-    app.autodiscover_tasks([
-        "app.worker.tasks.generate_summary",
-        "app.worker.tasks.dispatch_summaries_for_tz",
-        "app.worker.tasks.sync_calendars",
-        "app.worker.tasks.push_calendars",
-        "app.worker.tasks.embed_stale",
-        "app.worker.tasks.generate_digest",
-    ])
+    app.autodiscover_tasks(
+        [
+            "app.worker.tasks.generate_summary",
+            "app.worker.tasks.dispatch_summaries_for_tz",
+            "app.worker.tasks.sync_calendars",
+            "app.worker.tasks.push_calendars",
+            "app.worker.tasks.embed_stale",
+            "app.worker.tasks.generate_digest",
+            "app.worker.tasks.reminders",
+            "app.worker.tasks.run_ai_turn",
+            "app.worker.tasks.ai_schedules",
+            "app.worker.tasks.purge_trash",
+            "app.worker.tasks.account_cleanup",
+            "app.worker.tasks.exports",
+        ]
+    )
     return app
 
 

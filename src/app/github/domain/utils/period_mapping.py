@@ -9,8 +9,7 @@ from datetime import date, datetime
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.retro_summary import RetroSummary
 from app.retrospective.domain.models.value_objects import RetroType, SummaryType
-from app.shared.domain.utils.period import week_of_month
-
+from app.shared.domain.utils.period import week_of_month, week_start_of_date
 
 # RetroType (journal) → push period_type
 _JOURNAL_TO_PERIOD_TYPE: dict[RetroType, str] = {
@@ -29,7 +28,9 @@ _SUMMARY_TO_PERIOD_TYPE: dict[SummaryType, str] = {
 
 
 def _weekly_key(d: date) -> str:
-    year, month, n = week_of_month(d)
+    """주간 push 키 `YYYY-MM-WN`. d 는 그 주의 시작일(주간 회고 date_key·요약 period_start)이라
+    시작 요일을 d 에서 되읽는다 — 사용자가 주 시작 요일을 바꿔도 이미 만든 주의 키는 그대로다."""
+    year, month, n = week_of_month(d, week_start_of_date(d))
     return f"{year:04d}-{month:02d}-W{n}"
 
 

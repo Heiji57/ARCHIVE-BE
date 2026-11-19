@@ -1,11 +1,6 @@
 from app.shared.domain.exceptions.base import BaseAppException
 
 
-class DeveloperAccountRequiredException(BaseAppException):
-    """GitHub 기능은 developer 계정 전용이다."""
-    code = "DEVELOPER_ACCOUNT_REQUIRED"
-
-
 class GitHubRepositoryNotFoundException(BaseAppException):
     code = "GITHUB_REPOSITORY_NOT_FOUND"
 
@@ -57,3 +52,15 @@ class GitHubResponseInvalidException(BaseAppException):
 
     Unavailable 과 달리 repo 단위 실패로 다룬다 (get_commits_by_date)."""
     code = "GITHUB_RESPONSE_INVALID"
+
+
+class GitHubRangeTooLongException(BaseAppException):
+    """GET /github/commits?from=&to= 기간이 상한(31일)을 넘음."""
+
+    code = "GITHUB_RANGE_TOO_LONG"
+
+
+class GitHubCommitQueryInvalidException(BaseAppException):
+    """GET /github/commits 파라미터 조합 오류 — date 와 from/to 혼용, from/to 한쪽만, from > to."""
+
+    code = "GITHUB_COMMIT_QUERY_INVALID"

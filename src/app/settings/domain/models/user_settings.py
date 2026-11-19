@@ -1,5 +1,15 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import Any
+
+from app.settings.domain.models.preferences import (
+    DayEndReminder,
+    EmailDigest,
+    NotificationPrefs,
+    QuietHours,
+    WeekStart,
+    WorkSchedule,
+)
 
 
 @dataclass(kw_only=True)
@@ -16,7 +26,6 @@ class UserSettings:
     # Google Calendar 에서 cancelled 된 이벤트에 연동된 todo 처리 방침.
     # false(기본, 보수적): 연동 해제만(todo 유지). true(공격적): todo 도 함께 삭제.
     calendar_auto_delete_todo: bool = False
-    last_schedule_check_at: datetime | None = None
     last_summary_date_local: date | None = None
     github_push_target_repository_id: str | None = None
     # summary_type -> active template id. 키 부재 또는 null 이면 시스템 기본 템플릿 사용.
@@ -25,6 +34,20 @@ class UserSettings:
     active_summary_template_ids: dict[str, str | None] = field(default_factory=dict)
     # retro_type -> active retro template id. 키 부재 또는 null 이면 기본 템플릿으로 폴백.
     active_retro_template_ids: dict[str, str | None] = field(default_factory=dict)
+    # ── 리디자인 설정 (서버가 읽는 값) ─────────────────────────────────────
+    week_start: WeekStart = "mon"
+    work_schedule: WorkSchedule = field(default_factory=WorkSchedule)
+    default_todo_minutes: int = 60
+    day_end_reminder: DayEndReminder = field(default_factory=DayEndReminder)
+    notification_prefs: NotificationPrefs = field(default_factory=NotificationPrefs)
+    quiet_hours: QuietHours = field(default_factory=QuietHours)
+    email_digest: EmailDigest = "off"
+    # 화면에서만 쓰는 값 — 서버는 크기만 검증하고 해석하지 않는다(알 수 없는 키도 보존).
+    ui_preferences: dict[str, Any] = field(default_factory=dict)
+    # 예약 알림·주간 이메일 중복 발송 방지 (사용자 tz 날짜)
+    last_due_reminder_date: date | None = None
+    last_day_end_reminder_date: date | None = None
+    last_weekly_email_date: date | None = None
     updated_at: datetime | None = None
 
     @classmethod

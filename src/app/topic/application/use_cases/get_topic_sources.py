@@ -13,6 +13,7 @@ class TopicSource:
     title: str
     date_key: str
     retro_type: str | None = None  # todo 는 항상 None
+    status: str | None = None  # entry 는 항상 None
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ class GetTopicSourcesUseCase:
             )
             for e in match.entries
         ] + [
-            TopicSource(kind="todo", id=t.id, title=t.title, date_key=t.date_key)
+            TopicSource(kind="todo", id=t.id, title=t.title, date_key=t.date_key, status=t.status)
             for t in match.todos
         ]
         # date_key 동률 시 id 로 tie-break — 페이지 경계에서 항목이 중복/누락되지 않게 한다.

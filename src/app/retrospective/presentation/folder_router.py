@@ -14,11 +14,11 @@ from app.retrospective.application.dtos.folder_commands import (
 )
 from app.retrospective.application.dtos.folder_queries import GetFolderContentsQuery
 from app.retrospective.application.use_cases.create_folder import CreateFolderUseCase
-from app.retrospective.application.use_cases.list_folders import ListFoldersUseCase
 from app.retrospective.application.use_cases.delete_folder import DeleteFolderUseCase
 from app.retrospective.application.use_cases.get_folder_contents import (
     GetFolderContentsUseCase,
 )
+from app.retrospective.application.use_cases.list_folders import ListFoldersUseCase
 from app.retrospective.application.use_cases.update_folder import UpdateFolderUseCase
 from app.retrospective.domain.models.journal_entry import JournalEntry
 from app.retrospective.domain.models.value_objects import RetroType
@@ -136,21 +136,15 @@ async def get_folder_contents(
         )
     )
 
-    is_dev_with_github = current_user.is_developer() and await _is_github_connected(
-        oauth_repo, current_user.id
-    )
+    has_github = await _is_github_connected(oauth_repo, current_user.id)
 
     entries = [i for i in items if isinstance(i, JournalEntry)]
     summaries = [i for i in items if not isinstance(i, JournalEntry)]
     push_map_e = (
-        await _push_map_for_entries(push_repo, current_user.id, entries)
-        if is_dev_with_github
-        else {}
+        await _push_map_for_entries(push_repo, current_user.id, entries) if has_github else {}
     )
     push_map_s = (
-        await _push_map_for_summaries(push_repo, current_user.id, summaries)
-        if is_dev_with_github
-        else {}
+        await _push_map_for_summaries(push_repo, current_user.id, summaries) if has_github else {}
     )
 
     # 원래 정렬 순서(최신순) 유지하며 응답 아이템으로 매핑
