@@ -5,7 +5,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ApplySuggestionRequest(BaseModel):
-    action_index: int = Field(default=0, ge=0, alias="actionIndex")
+    """`actionCode` 로 고르는 것을 권한다 — 학습으로 버튼 순서가 바뀔 수 있다.
+
+    둘 다 보내면 그 위치의 code 가 같아야 한다(다르면 422). 둘 다 없으면 첫 버튼.
+    """
+
+    action_index: int | None = Field(default=None, ge=0, alias="actionIndex")
+    action_code: str | None = Field(default=None, max_length=32, alias="actionCode")
 
     model_config = {"populate_by_name": True}
 

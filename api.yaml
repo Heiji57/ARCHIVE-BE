@@ -1427,7 +1427,8 @@ paths:
         - 지난 마감: 최근 30일 2번 이상 뒤로 미룬 일은 `reasonCode: overdue_deferred` 와 맨 앞 `drop`(내려놓기).
         - 순서·노출: 추천 반응(적용·넘김·되돌림) 20건부터 종류·상황(평일/주말 × 오전/오후/저녁)별 받아들일
           확률을 톰슨 샘플링으로 뽑아 `확률 × 급함` 순. 낮게 뽑히면 이번엔 빼지만 가끔 다시 보인다(탐색).
-          같은 날·같은 시간대 안에서는 순서가 같다. 버튼은 자주 누른 순(`drop` 은 맨 앞 고정).
+          같은 날·같은 시간대 안에서는 추천마다 뽑힌 값이 같다(다른 추천을 눌러도 남은 것은 그대로). 버튼은 자주 누른 순
+          (`drop` 은 맨 앞 고정) — 적용은 `actionCode` 로. 순위에서 숨긴 추천은 그날 '무시'로 세지 않는다.
         - `learned: true` = 학습한 값이 순서·시각·길이·문구에 쓰였다.
       parameters:
         - in: query
@@ -1458,7 +1459,7 @@ paths:
         고른 행동의 `patch` 를 `PATCH /todos/{id}` 와 같은 규칙으로 적용한다(반복 회차·Google push·임베딩 포함).
         바뀐 필드의 이전 값을 저장해 `undo` 로 되돌릴 수 있다. 가상 반복 회차였으면 `todoId` 는 새 예외 row id.
         `code: drop`(내려놓기)은 할 일을 휴지통으로 보낸다(`DELETE /todos/{id}` 규칙) — `undo` 는 휴지통에서 되살린다
-        (휴지통에 없으면 404 `AI_SUGGESTION_NOT_FOUND`). 학습을 켰으면 적용을 기록한다.
+        (이미 휴지통에서 직접 되살렸으면 추천만 되돌리고, 영구 삭제됐으면 404 `AI_SUGGESTION_NOT_FOUND`). 학습을 켰으면 적용을 기록한다.
       parameters:
         - { name: suggestion_id, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -1468,7 +1469,18 @@ paths:
             schema:
               type: object
               properties:
-                actionIndex: { type: integer, minimum: 0, default: 0 }
+                actionCode:
+                  type: string
+                  maxLength: 32
+                  description: |
+                    고를 행동의 `actions[].code`(권장). 학습으로 버튼 순서가 바뀔 수 있어(자주 누른 순, 미룬 일은 `drop` 이 맨 앞)
+                    위치보다 안전하다. 없는 code 면 422 `AI_SUGGESTION_ACTION_INVALID`.
+                actionIndex:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    `actions` 위치. `actionCode` 와 같이 보내면 그 위치의 code 가 같아야 한다(다르면 422 — 오래된 화면).
+                    둘 다 없으면 첫 행동.
       x-error-codes: [AI_SUGGESTION_NOT_FOUND, AI_SUGGESTION_ACTION_INVALID, TODO_BATCH_FAILED]
       responses:
         "200":

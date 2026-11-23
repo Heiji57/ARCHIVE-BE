@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 BehaviorEventType = Literal[
     "sugg_shown",  # 추천이 처음 보임 {suggestion_id, kind, day, ctx}
+    "sugg_hidden",  # 보였던 추천을 이번엔 안 냄(순위에서 숨김·후보에서 빠짐) — '무시' 벌점 제외
     "sugg_applied",  # {suggestion_id, kind, action, todo_id, day, ctx, hour?}
     "sugg_dismissed",  # {suggestion_id, kind, reason?, day, ctx}
     "sugg_undone",  # {suggestion_id, kind, day, ctx}

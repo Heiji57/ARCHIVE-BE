@@ -7,7 +7,7 @@
 """
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -69,12 +69,12 @@ class LearningService:
     ) -> None:
         if not await self.enabled(user_id):
             return
-        # '보임' 은 그날이 지나야 '무시' 로 셈에 들어가 바로 다시 계산할 필요가 없다
+        # '보임'·'숨김' 은 그날이 지나야 '무시' 셈에 영향을 줘 바로 다시 계산할 필요가 없다
         # (_MAX_AGE 가 맡음) — 추천을 부를 때마다 통계를 다시 계산하지 않게.
         await self._repo.add_event(
             user_id,
             BehaviorEvent(type=type_, created_at=at.now, todo_id=todo_id, data=data),
-            mark_stale=type_ != "sugg_shown",
+            mark_stale=type_ not in ("sugg_shown", "sugg_hidden"),
         )
 
     async def model(self, user_id: str, today: date, now: datetime) -> BehaviorModel | None:
@@ -139,7 +139,8 @@ class LearningService:
                 {"from": before.date_key, "to": after.date_key, "tag": tag},
                 todo_id=after.id,
             )
-        if after.is_timed and after.start_time != before.start_time:
+        if after.is_timed and _clock(after, at.tz) != _clock(before, at.tz):
+            # 날짜만 옮기면 시각(벽시계)은 그대로라 "시간을 정함" 이 아니다.
             await self.record(
                 user_id,
                 "todo_retimed",
@@ -151,6 +152,11 @@ class LearningService:
                 },
                 todo_id=after.id,
             )
+
+
+def _clock(todo: TodoSnapshot, tz: ZoneInfo) -> time | None:
+    """사용자 tz 벽시계 시작 시각(시간 없는 할 일이면 None)."""
+    return todo.start_time.astimezone(tz).time() if todo.is_timed and todo.start_time else None
 
 
 def event_context(tz: ZoneInfo, now: datetime | None = None) -> EventContext:

@@ -73,7 +73,9 @@ async def apply_suggestion(
     use_case: FromDishka[ApplySuggestionUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[ApplySuggestionResponse]:
-    s = await use_case.execute(current_user.id, suggestion_id, body.action_index)
+    s = await use_case.execute(
+        current_user.id, suggestion_id, body.action_index, action_code=body.action_code
+    )
     return ApiResponse.ok(
         ApplySuggestionResponse(
             suggestion=SuggestionResponse.from_entity(s),

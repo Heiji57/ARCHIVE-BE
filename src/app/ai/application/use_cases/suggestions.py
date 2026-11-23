@@ -8,6 +8,7 @@
 확률)·빈 칸 시각과 길이·버튼 순서를 정한다(`LearningService`, `suggestion_ranker`).
 """
 
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any, Literal
@@ -23,7 +24,7 @@ from app.ai.domain.models.learning import BehaviorModel
 from app.ai.domain.models.snapshots import TodoSnapshot
 from app.ai.domain.models.suggestion import Suggestion, SuggestionCandidate
 from app.ai.domain.repositories.repository import ISuggestionRepository
-from app.ai.domain.services.suggestion_ranker import context_of, rank, seeded_rng
+from app.ai.domain.services.suggestion_ranker import context_of, rank, rank_seed
 from app.ai.domain.services.suggestion_rules import (
     commit_match_suggestions,
     free_slot_suggestions,
@@ -68,7 +69,9 @@ class SuggestionService:
     async def record(
         self,
         suggestion: Suggestion,
-        type_: Literal["sugg_shown", "sugg_applied", "sugg_dismissed", "sugg_undone"],
+        type_: Literal[
+            "sugg_shown", "sugg_hidden", "sugg_applied", "sugg_dismissed", "sugg_undone"
+        ],
         tz: ZoneInfo,
         now: datetime | None = None,
         **extra: Any,
@@ -104,7 +107,7 @@ class GetSuggestionsUseCase:
         ranked = model is not None and model.can_rank
         if model is not None:
             ctx = context_of(now)
-            candidates = rank(candidates, model, ctx, seeded_rng(user_id, day.isoformat(), ctx))
+            candidates = rank(candidates, model, ctx, rank_seed(user_id, day.isoformat(), ctx))
         order = {(c.kind, c.todo_id): i for i, c in enumerate(candidates)}
 
         existing = {
@@ -112,6 +115,7 @@ class GetSuggestionsUseCase:
             for s in await self._svc.repo.list_for_date(user_id, day.isoformat())
         }
         shown: list[Suggestion] = []
+        returned: set[tuple[str, str]] = set()
         for c in candidates:
             prev = existing.get((c.kind, c.todo_id))
             if prev is not None and prev.status != "shown":
@@ -141,12 +145,40 @@ class GetSuggestionsUseCase:
                 )
             else:
                 saved = prev
+            returned.add((saved.kind, saved.todo_id))
             shown.append(saved)
+        await self._mark_hidden(existing.values(), returned, tz, now)
         if ranked:
             shown.sort(key=lambda s: order.get((s.kind, s.todo_id), 99))
         else:
             shown.sort(key=lambda s: _KIND_ORDER.get(s.kind, 9))
         return shown
+
+    async def _mark_hidden(
+        self,
+        existing: Iterable[Suggestion],
+        returned: set[tuple[str, str]],
+        tz: ZoneInfo,
+        now: datetime,
+    ) -> None:
+        """이미 보였지만 이번엔 안 낸 추천(순위에서 숨김·후보에서 빠짐)에 표시를 남긴다.
+
+        사용자가 볼 수 없던 추천을 그날 '무시'로 벌점 주지 않게 — `sugg_hidden` 을 한 번 남기고
+        `payload.hidden` 으로 표시해 다음 요청에서 또 남기지 않는다(다시 보이면 payload 가
+        새로 쓰여 표시가 지워진다).
+        """
+        for prev in existing:
+            if (
+                prev.status != "shown"
+                or (prev.kind, prev.todo_id) in returned
+                or prev.payload.get("hidden")
+            ):
+                continue
+            payload = {**prev.payload, "hidden": True}
+            saved = await self._svc.repo.save(
+                replace(prev, payload=payload, updated_at=datetime.now(UTC))
+            )
+            await self._svc.record(saved, "sugg_hidden", tz, now)
 
     async def _candidates(
         self,
@@ -199,12 +231,28 @@ class ApplySuggestionUseCase:
         self._svc = svc
 
     async def execute(
-        self, user_id: str, suggestion_id: str, action_index: int, now: datetime | None = None
+        self,
+        user_id: str,
+        suggestion_id: str,
+        action_index: int | None = None,
+        now: datetime | None = None,
+        action_code: str | None = None,
     ) -> Suggestion:
+        """`action_code` 로 고른다(학습으로 버튼 순서가 바뀔 수 있어 위치보다 안전하다).
+
+        둘 다 주면 그 위치의 code 가 같아야 한다 — 오래된 화면의 위치로 다른 행동을 적용하지 않게.
+        """
         suggestion = await _get(self._svc.repo, user_id, suggestion_id)
         if suggestion.status != "shown":
             raise AiSuggestionActionInvalidException("Suggestion is not open.")
         actions = suggestion.actions
+        if action_code is not None:
+            index = next((i for i, a in enumerate(actions) if a.code == action_code), None)
+            if index is None or (action_index is not None and action_index != index):
+                raise AiSuggestionActionInvalidException("Unknown action.")
+            action_index = index
+        if action_index is None:
+            action_index = 0
         if not 0 <= action_index < len(actions):
             raise AiSuggestionActionInvalidException("Unknown action.")
         action = actions[action_index]
@@ -269,7 +317,11 @@ class UndoSuggestionUseCase:
         if suggestion.status != "applied" or not suggestion.applied:
             raise AiSuggestionActionInvalidException("Suggestion is not applied.")
         if suggestion.applied.get("dropped"):
-            if not await self._svc.todos.restore(user_id, suggestion.applied["todo_id"]):
+            todo_id = suggestion.applied["todo_id"]
+            # 휴지통에서 이미 직접 되살렸으면(휴지통엔 없지만 할 일은 있음) 추천만 되돌린다.
+            if not await self._svc.todos.restore(user_id, todo_id) and (
+                await self._svc.todos.get(user_id, todo_id) is None
+            ):
                 raise AiSuggestionNotFoundException("The todo is no longer in the trash.")
         else:
             await self._svc.todos.apply_patch(

@@ -2,8 +2,9 @@
 
 - 받아들일 확률(A): 톰슨 샘플링. 종류 팔의 평균을 사전값(무게 2)으로 둔 상황 팔
   Beta(α, β) 에서 하나 뽑는다. 뽑은 값이 `HIDE_BELOW` 보다 작으면 이번엔 숨긴다 — 자주 넘긴
-  종류도 가끔 다시 보여(탐색) "한 번 넘기면 영원히 안 나옴" 을 막는다. 같은 날·같은 시간대
-  안에서는 같은 씨앗을 써서 새로 고칠 때마다 순서가 흔들리지 않는다.
+  종류도 가끔 다시 보여(탐색) "한 번 넘기면 영원히 안 나옴" 을 막는다. 씨앗은 (사용자, 날짜,
+  시간대, 종류, 할 일) — 후보마다 따로라, 같은 시간대 안에서는 새로 고치거나 다른 추천을
+  누르거나 해도 남은 추천의 뽑힌 값이 흔들리지 않는다.
 - 시간대(B): 태그별 24시간 분포를 전체 분포 쪽으로 당긴 것(디리클레, 무게 5). 증거가
   `MIN_HOUR_EVIDENCE` 보다 적으면 쓰지 않는다(앞에서부터 찾기 그대로).
 - 길이(C): (n × 중앙값 + 3 × 기본값) / (n + 3) — 태그는 전체 추정 쪽으로 다시 당긴다.
@@ -42,9 +43,14 @@ def context_of(local_now: datetime) -> dict[str, str]:
     }
 
 
-def seeded_rng(user_id: str, day: str, ctx: dict[str, str]) -> random.Random:
-    seed = hashlib.sha256(f"{user_id}|{day}|{ctx.get('dp')}".encode()).digest()
-    return random.Random(int.from_bytes(seed[:8], "big"))
+def rank_seed(user_id: str, day: str, ctx: dict[str, str]) -> str:
+    """같은 날·같은 시간대면 같은 씨앗."""
+    return f"{user_id}|{day}|{ctx.get('dp')}"
+
+
+def _rng(seed: str, c: SuggestionCandidate) -> random.Random:
+    digest = hashlib.sha256(f"{seed}|{c.kind}|{c.todo_id}".encode()).digest()
+    return random.Random(int.from_bytes(digest[:8], "big"))
 
 
 # ── A. 받아들일 확률 ──────────────────────────────────────────────────────────
@@ -69,15 +75,18 @@ def rank(
     candidates: list[SuggestionCandidate],
     model: BehaviorModel,
     ctx: dict[str, str],
-    rng: random.Random,
+    seed: str,
 ) -> list[SuggestionCandidate]:
-    """뽑은 받아들일 확률 × 급함 순. 너무 낮게 뽑힌 것은 이번엔 뺀다. 버튼은 자주 누른 순."""
+    """뽑은 받아들일 확률 × 급함 순. 너무 낮게 뽑힌 것은 이번엔 뺀다. 버튼은 자주 누른 순.
+
+    후보마다 씨앗이 따로라 다른 후보가 빠지거나 늘어도 그 후보의 뽑힌 값은 같다.
+    """
     if not model.can_rank:
         return [_order_actions(c, model) for c in candidates]
     scored: list[tuple[float, int, SuggestionCandidate]] = []
     for i, c in enumerate(candidates):
         a, b = accept_params(model, c.kind, ctx)
-        theta = rng.betavariate(a, b)
+        theta = _rng(seed, c).betavariate(a, b)
         if theta < HIDE_BELOW:
             continue
         scored.append((theta * c.urgency, i, replace(_order_actions(c, model), learned=True)))
@@ -109,10 +118,11 @@ def hour_profile(model: BehaviorModel, tag: str | None) -> tuple[list[float], fl
     if own and sum(own) > 0:
         t_total = sum(own)
         probs = [(own[h] + _TAG_PRIOR * p_glob[h]) / (t_total + _TAG_PRIOR) for h in range(24)]
-        evidence = t_total
     else:
-        probs, evidence = p_glob, g_total
-    return (probs, evidence) if evidence >= MIN_HOUR_EVIDENCE else None
+        probs = p_glob
+    # 증거는 전체 기록으로 판단한다(전체 ⊇ 태그). 태그 기록이 몇 건뿐이면 확률이 전체 분포 쪽으로
+    # 당겨져 있으니 그대로 쓸 수 있다 — 태그 1건 때문에 학습한 시간대를 꺼 버리지 않게.
+    return (probs, g_total) if g_total >= MIN_HOUR_EVIDENCE else None
 
 
 def slot_score(probs: list[float], start: datetime, end: datetime) -> float:
@@ -138,12 +148,16 @@ def _shrink(samples: list[int], prior: float) -> float:
 
 
 def estimate_minutes(model: BehaviorModel, tag: str | None, default: int) -> tuple[int, bool]:
-    """(추정 길이(분), 학습값인지). 3건 미만이면 거의 기본값."""
+    """(추정 길이(분), 학습값인지). 학습값 = 전체 기록 3건 이상이고 기본값과 달라졌을 때.
+
+    태그 기록이 1~2건이어도 전체 기록이 충분하면 학습값이다(전체 ⊇ 태그). 추정이 기본값과
+    같으면 "보통 N분" 이라고 말할 것이 없어 학습값으로 치지 않는다.
+    """
     glob = model.minutes.get("*") or []
     own = (model.minutes.get(tag) or []) if tag else []
     if not glob and not own:
         return default, False
     estimate = _shrink(own, _shrink(glob, float(default)))
     rounded = int(round(estimate / _STEP) * _STEP)
-    learned = len(own) >= MIN_LENGTH_SAMPLES or (not own and len(glob) >= MIN_LENGTH_SAMPLES)
-    return max(_MIN_MINUTES, min(_MAX_MINUTES, rounded)), learned
+    minutes = max(_MIN_MINUTES, min(_MAX_MINUTES, rounded))
+    return minutes, len(glob) >= MIN_LENGTH_SAMPLES and minutes != default

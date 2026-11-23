@@ -8,7 +8,7 @@
 | 적용하고 그날 끝냄 | pos +1 더(합 +2) |
 | 되돌림 | pos −1, neg +1 |
 | 넘김 | neg +0.5 (이유: 필요 없음 1, 지금 아님·시간이 안 맞음 0.25) |
-| 보였는데 그날 아무 반응 없음 | neg +0.1 |
+| 보였는데 그날 아무 반응 없음 | neg +0.1 (그날 한 번이라도 숨겼으면(`sugg_hidden`) 빼고) |
 
 시간대(B)는 끝낸 시각(무게 1)과 시작 시각을 정하거나 옮긴 것(무게 2 — 빈 칸 추천을 적용한
 것도 할 일 수정이라 여기로 들어온다).
@@ -57,7 +57,8 @@ def build_model(events: list[BehaviorEvent], now: datetime, today: date) -> Beha
     reacted: set[str] = set()
     done_at = _done_times(events)
     for e in events:
-        if e.type in ("sugg_applied", "sugg_dismissed"):
+        # 숨긴 추천은 사용자가 끝까지 볼 수 없었을 수 있어 '무시'로 세지 않는다.
+        if e.type in ("sugg_applied", "sugg_dismissed", "sugg_hidden"):
             reacted.add(str(e.data.get("suggestion_id")))
 
     def arms(e: BehaviorEvent) -> list[Arm]:

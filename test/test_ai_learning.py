@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from test_ai_suggestions import _svc  # 같은 배선(학습 포함)을 쓴다
 
 import app.shared.infrastructure.database.models  # noqa: F401  (FK 대상 테이블 등록)
-from app.ai.application.services.learning import LearningService
+from app.ai.application.services.learning import LearningService, event_context
 from app.ai.application.use_cases.ai_settings import AiSettingsUseCase
 from app.ai.application.use_cases.suggestions import (
     ApplySuggestionUseCase,
@@ -22,6 +22,7 @@ from app.ai.application.use_cases.suggestions import (
     GetSuggestionsUseCase,
     UndoSuggestionUseCase,
 )
+from app.ai.domain.exceptions.exceptions import AiSuggestionActionInvalidException
 from app.ai.domain.models.learning import (
     MIN_EVENTS_TO_RANK,
     Arm,
@@ -34,8 +35,9 @@ from app.ai.domain.services.behavior_model import build_model
 from app.ai.domain.services.suggestion_ranker import (
     context_of,
     estimate_minutes,
+    hour_profile,
     rank,
-    seeded_rng,
+    rank_seed,
 )
 from app.ai.domain.services.suggestion_rules import (
     find_free_slots,
@@ -144,7 +146,7 @@ def _cand(kind, todo_id, urgency=1.0):
 
 def test_rank_waits_for_enough_reactions():
     m = BehaviorModel(accept={"overdue": Arm(0, 50)}, reactions=MIN_EVENTS_TO_RANK - 1)
-    got = rank([_cand("overdue", "t1")], m, _CTX, seeded_rng("u", "d", _CTX))
+    got = rank([_cand("overdue", "t1")], m, _CTX, rank_seed("u", "d", _CTX))
     assert [c.todo_id for c in got] == ["t1"] and not got[0].learned
 
 
@@ -155,17 +157,67 @@ def test_rank_hides_mostly_dismissed_kind_and_is_stable():
         reactions=72,
     )
     cands = [_cand("commit_match", "c1"), _cand("overdue", "o1")]
-    first = rank(cands, m, _CTX, seeded_rng("u", "2026-11-16", _CTX))
-    again = rank(cands, m, _CTX, seeded_rng("u", "2026-11-16", _CTX))
+    first = rank(cands, m, _CTX, rank_seed("u", "2026-11-16", _CTX))
+    again = rank(cands, m, _CTX, rank_seed("u", "2026-11-16", _CTX))
     assert [c.todo_id for c in first] == [c.todo_id for c in again]  # 같은 날·시간대면 같은 순서
     assert first[0].todo_id == "o1" and first[0].learned
     assert [a.code for a in first[0].actions] == ["to_tomorrow", "to_today"]  # 자주 누른 버튼 앞
     # 거의 다 넘긴 종류도 가끔은 보인다(탐색) — 그러나 대부분 숨는다
     shown = sum(
-        any(c.todo_id == "c1" for c in rank(cands, m, _CTX, seeded_rng("u", f"d{i}", _CTX)))
+        any(c.todo_id == "c1" for c in rank(cands, m, _CTX, rank_seed("u", f"d{i}", _CTX)))
         for i in range(200)
     )
     assert 0 < shown < 60
+
+
+def test_rank_draw_does_not_depend_on_other_candidates():
+    """다른 후보가 빠져도(적용·넘김) 남은 후보의 노출·뽑힌 값은 같다."""
+    m = BehaviorModel(accept={"overdue": Arm(3, 3)}, reactions=72)
+    cands = [_cand("overdue", f"o{i}") for i in range(6)]
+    for d in range(30):
+        seed = rank_seed("u", f"d{d}", _CTX)
+        full = [c.todo_id for c in rank(cands, m, _CTX, seed)]
+        rest = [c.todo_id for c in rank(cands[1:], m, _CTX, seed)]
+        assert rest == [t for t in full if t != "o0"]
+
+
+def test_hidden_suggestion_is_not_ignored():
+    events = [
+        _ev("sugg_shown", 1, suggestion_id="s1", kind="free_slot", day="2026-11-15", ctx=_CTX),
+        _ev("sugg_hidden", 1, suggestion_id="s1", kind="free_slot", day="2026-11-15", ctx=_CTX),
+        _ev("sugg_shown", 1, suggestion_id="s2", kind="free_slot", day="2026-11-15", ctx=_CTX),
+    ]
+    arm = build_model(events, _NOW, _TODAY).accept["free_slot"]
+    assert arm.neg == pytest.approx(0.1 * 0.5 ** (1 / 30), rel=1e-3)  # s2 만 무시
+
+
+class _FakeBehaviorRepo:
+    def __init__(self):
+        self.events = []
+
+    async def add_event(self, user_id, event, mark_stale=True):
+        self.events.append(event)
+
+
+class _NoSettings:
+    async def find(self, user_id):
+        return None
+
+
+async def test_moving_timed_todo_to_another_day_is_not_retimed():
+    repo = _FakeBehaviorRepo()
+    svc = LearningService(repo, _NoSettings())  # type: ignore[arg-type]
+    at = event_context(_SEOUL, _NOW)
+
+    def timed(day, hour):
+        start = datetime(2026, 11, day, hour, tzinfo=_SEOUL)
+        return TodoSnapshot(id="t1", title="x", date_key=f"2026-11-{day}", status="not-start",
+                            start_time=start, end_time=start + timedelta(hours=1))
+
+    await svc.todo_changed("u", timed(16, 15), timed(17, 15), at)  # 날짜만 옮김(시각 그대로)
+    assert [e.type for e in repo.events] == ["todo_moved"]
+    await svc.todo_changed("u", timed(17, 15), timed(17, 10), at)  # 시각을 바꿈
+    assert [e.type for e in repo.events] == ["todo_moved", "todo_retimed"]
 
 
 # ── 빈 칸(B)·길이(C) ──────────────────────────────────────────────────────────
@@ -188,12 +240,14 @@ def test_free_slot_without_model_is_unchanged():
 def test_free_slot_prefers_usual_hour_and_learned_length():
     hours = [0.0] * 24
     hours[14] = 10.0
-    model = BehaviorModel(hours={"*": hours, "공부": hours}, minutes={"공부": [30, 30, 30, 30]})
+    model = BehaviorModel(
+        hours={"*": hours, "공부": hours}, minutes={"*": [45] * 4, "공부": [45] * 4}
+    )
     todo = TodoSnapshot(id="t1", title="x", date_key="2026-11-16", status="not-start",
                         tags=("공부",))
     [got] = free_slot_suggestions([todo], _at(9), _at(18), 60, "Asia/Seoul", _T, model=model)
     assert got.slot[0].astimezone(_SEOUL) == _at(14)
-    assert got.slot[1] - got.slot[0] == timedelta(minutes=45)  # (4×30 + 3×60) / 7 ≈ 43 → 45
+    # 전체 (4×45 + 3×60) / 7 ≈ 51.4, 태그 (4×45 + 3×51.4) / 7 ≈ 47.8 → 45
     assert got.reason_code == "free_slot_usual_time" and got.learned
     assert got.reason == "평소 14시쯤 하던 일이에요 · 보통 45분 걸렸어요"
 
@@ -202,6 +256,26 @@ def test_estimate_minutes_shrinks_toward_default():
     assert estimate_minutes(BehaviorModel(), "x", 50) == (50, False)
     m = BehaviorModel(minutes={"*": [120]})
     assert estimate_minutes(m, None, 60) == (75, False)  # (120 + 180) / 4 = 75, 1건이라 학습 아님
+
+
+def test_estimate_minutes_learned_with_few_tag_samples():
+    """태그 기록이 1건이어도 전체 기록이 충분하고 길이가 기본값과 다르면 학습값이다."""
+    m = BehaviorModel(minutes={"*": [30, 30, 30, 90], "work": [90]})
+    minutes, learned = estimate_minutes(m, "work", 30)
+    assert minutes != 30 and learned
+    # 추정이 기본값과 같으면 "보통 N분" 이라 할 것이 없다
+    assert estimate_minutes(BehaviorModel(minutes={"*": [30] * 5}), None, 30) == (30, False)
+
+
+def test_hour_profile_one_tag_event_keeps_global_evidence():
+    glob = [0.0] * 24
+    glob[9] = 40.0
+    work = [0.0] * 24
+    work[15] = 1.0
+    profile = hour_profile(BehaviorModel(hours={"*": glob, "work": work}), "work")
+    assert profile is not None  # 태그 1건 때문에 학습한 시간대를 끄지 않는다
+    probs, _ = profile
+    assert max(range(24), key=lambda h: probs[h]) == 9  # 전체 쪽으로 당겨져 있다
 
 
 # ── 미룸(D) ───────────────────────────────────────────────────────────────────
@@ -332,11 +406,62 @@ async def test_drop_goes_to_trash_and_undo_restores(factory):
         overdue = next(g for g in got if g.kind == "overdue")
         assert overdue.payload["reason_code"] == "overdue_deferred"
         assert overdue.payload["actions"][0]["code"] == "drop"
-        applied = await ApplySuggestionUseCase(_svc(s)).execute(_USER, overdue.id, 0, now=_NOW)
+        # 오래된 화면: 0번이 '오늘로' 였다고 믿고 code 를 같이 보내면 거부된다
+        with pytest.raises(AiSuggestionActionInvalidException):
+            await ApplySuggestionUseCase(_svc(s)).execute(
+                _USER, overdue.id, 0, now=_NOW, action_code="to_today"
+            )
+        applied = await ApplySuggestionUseCase(_svc(s)).execute(
+            _USER, overdue.id, now=_NOW, action_code="drop"
+        )
         assert applied.applied["dropped"] is True
         assert await TodoRepository(s).find_by_id("todo_lr_late", _USER) is None  # 휴지통
         await UndoSuggestionUseCase(_svc(s)).execute(_USER, overdue.id)
         assert (await TodoRepository(s).find_by_id("todo_lr_late", _USER)) is not None
+
+
+async def test_undo_drop_after_manual_restore(factory):
+    """내려놓은 할 일을 휴지통에서 직접 되살렸어도 추천은 되돌릴 수 있다."""
+    async with factory.begin() as s:
+        repo = BehaviorRepository(s)
+        for i in range(2):
+            await repo.add_event(
+                _USER,
+                BehaviorEvent(
+                    type="todo_moved", created_at=_NOW - timedelta(days=3 - i),
+                    todo_id="todo_lr_late",
+                    data={"from": f"2026-11-{11 + i}", "to": f"2026-11-{12 + i}"},
+                ),
+            )
+    async with factory.begin() as s:
+        svc = _svc(s)
+        got = await GetSuggestionsUseCase(svc).execute(_USER, _TODAY, now=_NOW)
+        overdue = next(g for g in got if g.kind == "overdue")
+        await ApplySuggestionUseCase(svc).execute(_USER, overdue.id, now=_NOW, action_code="drop")
+        assert await svc.todos.restore(_USER, "todo_lr_late")  # 사용자가 휴지통에서 직접
+        undone = await UndoSuggestionUseCase(svc).execute(_USER, overdue.id)
+        assert undone.status == "shown"
+
+
+async def test_suggestion_no_longer_returned_is_marked_hidden(factory):
+    async with factory.begin() as s:
+        got = await GetSuggestionsUseCase(_svc(s)).execute(_USER, _TODAY, now=_NOW)
+        assert any(g.todo_id == "todo_lr_free" for g in got)
+        # 빈 칸 추천이 더는 후보가 아니게(시간을 직접 정함)
+        await s.execute(
+            text(
+                "UPDATE todos SET start_time = '2026-11-16 08:00+00',"
+                " end_time = '2026-11-16 09:00+00', timezone = 'Asia/Seoul'"
+                " WHERE id = 'todo_lr_free'"
+            )
+        )
+    for _ in range(2):  # 두 번 불러도 한 번만 남긴다
+        async with factory.begin() as s:
+            got = await GetSuggestionsUseCase(_svc(s)).execute(_USER, _TODAY, now=_NOW)
+            assert all(g.todo_id != "todo_lr_free" for g in got)
+    async with factory.begin() as s:
+        events = await _events(s)
+    assert events.count(("sugg_hidden", "todo_lr_free")) == 1
 
 
 async def test_learning_off_records_nothing_and_reset_clears(factory):
