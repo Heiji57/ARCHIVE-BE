@@ -1419,6 +1419,20 @@ paths:
           `defaultTodoMinutes`, 시간 있는 할 일·Google 일정과 겹치지 않게)에 — `slot` 이 캘린더 흐린 칸
         - `commit_match`: 그날 본인 커밋 메시지와 제목이 겹치는 끝내지 않은 할 일 — 끝냄으로
         같은 할 일에 여러 종류가 겹치면 지난 마감 > 빈 칸 > 커밋 순으로 하나만. 넘긴 추천은 다시 안 나온다.
+
+        **행동 학습**(`ai_settings.learningEnabled`, 기본 켬) — 사용자 한 명의 기록만 쓴다. 기록이 없거나
+        끄면 위 규칙 그대로.
+        - 빈 칸: 끝낸 시각·직접 정한 시작 시각으로 배운 "평소 하던 시간대"(증거 5건 이상)에 가까운 칸부터,
+          길이는 태그별 실제 길이(`(n × 중앙값 + 3 × 기본값) / (n + 3)`, 15분 단위) — 전체 기록 3건 미만이거나
+          15분 단위로 맞춰 기본값과 같으면 기본값 그대로(긴 기본값은 240분으로 자르지 않는다).
+        - 지난 마감: 최근 30일 **직접** 2번 이상 뒤로 미룬 일은 `reasonCode: overdue_deferred` 와 맨 앞 `drop`(내려놓기).
+          추천·제안을 적용해 옮긴 것은 미룸으로 세지 않는다.
+        - 순서·노출: 추천 반응(적용·넘김·되돌림) 20건부터 종류·상황(평일/주말 × 오전/오후/저녁)별 받아들일
+          확률을 톰슨 샘플링으로 뽑아 `확률 × 급함` 순. 낮게 뽑히면 이번엔 빼지만 가끔 다시 보인다(탐색).
+          같은 날·같은 시간대 안에서는 추천마다 뽑힌 값이 같다(다른 추천을 눌러도 남은 것은 그대로). 버튼은 자주 누른 순
+          (`drop` 은 맨 앞 고정) — 적용은 `actionCode` 로. 보였다가 순위에서 숨긴 추천은 다시 보이기 전까지
+          '무시'(그날 반응 없음)로 세지 않는다.
+        - `learned: true` = 학습한 값이 순서·시각·길이·문구에 쓰였다.
       parameters:
         - in: query
           name: date
@@ -1447,6 +1461,8 @@ paths:
       description: |
         고른 행동의 `patch` 를 `PATCH /todos/{id}` 와 같은 규칙으로 적용한다(반복 회차·Google push·임베딩 포함).
         바뀐 필드의 이전 값을 저장해 `undo` 로 되돌릴 수 있다. 가상 반복 회차였으면 `todoId` 는 새 예외 row id.
+        `code: drop`(내려놓기)은 할 일을 휴지통으로 보낸다(`DELETE /todos/{id}` 규칙) — `undo` 는 휴지통에서 되살린다
+        (이미 휴지통에서 직접 되살렸으면 추천만 되돌리고, 영구 삭제됐으면 404 `AI_SUGGESTION_NOT_FOUND`). 학습을 켰으면 적용을 기록한다.
       parameters:
         - { name: suggestion_id, in: path, required: true, schema: { type: string } }
       requestBody:
@@ -1456,7 +1472,18 @@ paths:
             schema:
               type: object
               properties:
-                actionIndex: { type: integer, minimum: 0, default: 0 }
+                actionCode:
+                  type: string
+                  maxLength: 32
+                  description: |
+                    고를 행동의 `actions[].code`(권장). 학습으로 버튼 순서가 바뀔 수 있어(자주 누른 순, 미룬 일은 `drop` 이 맨 앞)
+                    위치보다 안전하다. 없는 code 면 422 `AI_SUGGESTION_ACTION_INVALID`.
+                actionIndex:
+                  type: integer
+                  minimum: 0
+                  description: |
+                    `actions` 위치. `actionCode` 와 같이 보내면 그 위치의 code 가 같아야 한다(다르면 422 — 오래된 화면).
+                    둘 다 없으면 첫 행동.
       x-error-codes: [AI_SUGGESTION_NOT_FOUND, AI_SUGGESTION_ACTION_INVALID, TODO_BATCH_FAILED]
       responses:
         "200":
@@ -1487,7 +1514,9 @@ paths:
     post:
       tags: [ai]
       summary: 추천 적용 되돌리기
-      description: 바뀐 필드를 이전 값으로 되돌리고 추천을 다시 보이게(`shown`) 한다.
+      description: |
+        바뀐 필드를 이전 값으로 되돌리고 추천을 다시 보이게(`shown`) 한다. 적용이 남긴 학습 기록(옮김·시간 정함·끝냄)도
+        지운다 — 되돌린 변경은 학습에 세지 않는다.
       parameters:
         - { name: suggestion_id, in: path, required: true, schema: { type: string } }
       x-error-codes: [AI_SUGGESTION_NOT_FOUND, AI_SUGGESTION_ACTION_INVALID]
@@ -1512,9 +1541,21 @@ paths:
     post:
       tags: [ai]
       summary: 추천 넘기기
-      description: 같은 날 같은 (종류, 할 일) 추천은 다시 나오지 않는다. 적용한 추천은 먼저 되돌려야 한다(422).
+      description: |
+        같은 날 같은 (종류, 할 일) 추천은 다시 나오지 않는다. 적용한 추천은 먼저 되돌려야 한다(422) — 단 `drop`(내려놓기)을
+        적용한 추천은 바로 닫을 수 있다(할 일이 영구 삭제돼 되돌릴 수 없을 때, 넘김으로 기록하지 않음).
+        이미 넘긴 추천은 그대로 돌려준다(기록은 한 번). 본문은 선택 — `reason` 은 학습 무게만 바꾼다
+        (`not_needed` 1, 이유 없음 0.5, `not_now`·`wrong_time` 0.25).
       parameters:
         - { name: suggestion_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, enum: [not_now, not_needed, wrong_time], nullable: true }
       x-error-codes: [AI_SUGGESTION_NOT_FOUND, AI_SUGGESTION_ACTION_INVALID]
       responses:
         "200":
@@ -1531,14 +1572,32 @@ paths:
           $ref: "#/components/responses/Unauthorized_401"
         "404":
           $ref: "#/components/responses/NotFound_404"
+        "422": { $ref: "#/components/responses/ValidationError_422" }
+
+  /ai/learning:
+    delete:
+      tags: [ai]
+      summary: 행동 학습 기록 지우기
+      description: |
+        추천 반응·할 일 옮김/끝냄 기록과 거기서 계산한 통계를 모두 지운다. 학습 켜짐/꺼짐(`learningEnabled`)은
+        그대로 둔다. 기록은 따로 지우지 않아도 180일이 지나면 `worker.purge_ai_conversations`(하루)가 지운다.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiResponseEmpty" }
+        "401":
+          $ref: "#/components/responses/Unauthorized_401"
 
   /ai/usage:
     get:
       tags: [ai]
-      summary: AI 사용량
+      summary: AI 사용량 + 추천 효과
       description: |
         하루·한 달 AI 요청 수(사용자 tz). 상한은 env `AI_DAILY_REQUEST_LIMIT`(50)·`AI_MONTHLY_REQUEST_LIMIT`(1000).
         넘으면 대화 요청이 `429 AI_USAGE_LIMIT_EXCEEDED`. 규칙 기반 추천은 세지 않는다.
+        `learning` 은 최근 30일 추천 반응 수와 비율(분모 0 이면 null). 학습을 끄면 새 기록이 없어 0 으로 줄어든다.
       responses:
         "200":
           description: OK
@@ -1551,10 +1610,24 @@ paths:
                     properties:
                       data:
                         type: object
-                        required: [day, month]
+                        required: [day, month, learning]
                         properties:
                           day: { type: object, properties: { used: { type: integer }, limit: { type: integer } } }
                           month: { type: object, properties: { used: { type: integer }, limit: { type: integer } } }
+                          learning:
+                            type: object
+                            required: [enabled, ready, shown, applied, dismissed, undone, doneAfterApply, acceptRate, undoRate, doneAfterApplyRate]
+                            properties:
+                              enabled: { type: boolean }
+                              ready: { type: boolean, description: 순서·노출에 학습을 쓰기 시작했는지(추천 반응 20건 이상) }
+                              shown: { type: integer }
+                              applied: { type: integer }
+                              dismissed: { type: integer }
+                              undone: { type: integer }
+                              doneAfterApply: { type: integer, description: 적용한 그날 끝낸 수 }
+                              acceptRate: { type: number, nullable: true, description: applied / shown }
+                              undoRate: { type: number, nullable: true, description: undone / applied }
+                              doneAfterApplyRate: { type: number, nullable: true, description: doneAfterApply / applied }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
 
@@ -1875,6 +1948,8 @@ paths:
       description: |
         `tools` 는 보낸 출처만 바뀐다. `confirmMode` 는 1차에 `always` 고정이라 받지 않는다.
         `retentionDays` 0 = 보관 안 함(하루 지난 대화를 지움).
+        `learningEnabled` false 면 행동 학습 기록을 남기지 않고 추천에 쓰지 않는다(이미 쌓인 기록은 남는다 —
+        지우려면 `DELETE /ai/learning`).
       requestBody:
         required: true
         content:
@@ -1890,6 +1965,7 @@ paths:
                 deepSearch: { type: boolean }
                 memoryEnabled: { type: boolean }
                 retentionDays: { type: integer, enum: [0, 30, 90, 365] }
+                learningEnabled: { type: boolean }
       responses:
         "200":
           description: OK
@@ -5253,13 +5329,20 @@ components:
     # ── Todo ───────────────────────────────────────────────────────────────
     AiSuggestionResponse:
       type: object
-      required: [id, kind, todoId, title, reason, actions, status]
+      required: [id, kind, todoId, title, reason, reasonCode, learned, actions, status]
       properties:
         id: { type: string }
         kind: { type: string, enum: [overdue, free_slot, commit_match] }
         todoId: { type: string, description: "가상 반복 회차면 `{base}::{date}`" }
         title: { type: string }
         reason: { type: string, description: 템플릿 문장(locale) }
+        reasonCode:
+          type: string
+          enum: [overdue, overdue_deferred, free_slot, free_slot_usual_time, free_slot_usual_length, commit_match]
+          description: |
+            이유 종류 — `overdue_deferred` 여러 번 미룬 일, `free_slot_usual_time` 평소 하던 시간대의 칸,
+            `free_slot_usual_length` 학습한 길이의 칸(시간대 학습 전).
+        learned: { type: boolean, description: 행동 학습 값이 순서·시각·길이·문구에 쓰였는지 }
         slot:
           type: object
           nullable: true
@@ -5267,13 +5350,17 @@ components:
           properties: { start: { type: string, format: date-time }, end: { type: string, format: date-time } }
         actions:
           type: array
-          maxItems: 2
+          maxItems: 3
           items:
             type: object
-            required: [label, patch]
+            required: [label, patch, code]
             properties:
               label: { type: string }
-              patch: { type: object, description: "PATCH /todos/{id} 본문 모양(snake_case)" }
+              patch: { type: object, description: "PATCH /todos/{id} 본문 모양(snake_case). `drop` 은 빈 객체" }
+              code:
+                type: string
+                enum: [to_today, to_tomorrow, drop, schedule, mark_done]
+                description: 버튼 종류 — `drop`(내려놓기)은 휴지통으로 보낸다(undo 로 되살림)
         status: { type: string, enum: [shown, applied, dismissed] }
 
     AiConversationResponse:
@@ -5328,7 +5415,7 @@ components:
 
     AiSettingsResponse:
       type: object
-      required: [petEnabled, tools, confirmMode, answerLength, deepSearch, memoryEnabled, retentionDays]
+      required: [petEnabled, tools, confirmMode, answerLength, deepSearch, memoryEnabled, retentionDays, learningEnabled]
       properties:
         petEnabled: { type: boolean }
         tools:
@@ -5339,6 +5426,7 @@ components:
         deepSearch: { type: boolean, description: 저장만 한다(1차 대화 동작에는 영향 없음 — 2차) }
         memoryEnabled: { type: boolean }
         retentionDays: { type: integer, enum: [0, 30, 90, 365] }
+        learningEnabled: { type: boolean, description: 행동 학습(기본 켬) }
 
     AiMemoryResponse:
       type: object

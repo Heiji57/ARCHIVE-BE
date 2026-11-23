@@ -1,8 +1,10 @@
 """AI 사용량 — 사용자별 하루·한 달 요청 수(사용자 tz 날짜). 규칙 기반 추천은 세지 않는다."""
 
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
+from app.ai.application.services.learning import LearningService
 from app.ai.domain.exceptions.exceptions import AiUsageLimitExceededException
 from app.ai.domain.models.suggestion import AiUsageReport
 from app.ai.domain.repositories.repository import IAiUsageRepository
@@ -22,13 +24,13 @@ class AiUsageService:
         self._day_limit = day_limit
         self._month_limit = month_limit
 
-    async def _today(self, user_id: str, now: datetime | None) -> str:
+    async def today_key(self, user_id: str, now: datetime | None) -> str:
         user = await self._user_repo.find_by_id(user_id)
         tz = ZoneInfo(user.timezone if user else "UTC")
         return (now or datetime.now(UTC)).astimezone(tz).date().isoformat()
 
     async def report(self, user_id: str, now: datetime | None = None) -> AiUsageReport:
-        today = await self._today(user_id, now)
+        today = await self.today_key(user_id, now)
         return AiUsageReport(
             day_used=await self._repo.requests_on(user_id, today),
             day_limit=self._day_limit,
@@ -52,13 +54,18 @@ class AiUsageService:
     async def record(
         self, user_id: str, input_tokens: int, output_tokens: int, now: datetime | None = None
     ) -> None:
-        today = await self._today(user_id, now)
+        today = await self.today_key(user_id, now)
         await self._repo.add(user_id, today, 1, input_tokens, output_tokens)
 
 
 class GetAiUsageUseCase:
-    def __init__(self, usage: AiUsageService) -> None:
+    def __init__(self, usage: AiUsageService, learning: LearningService) -> None:
         self._usage = usage
+        self._learning = learning
 
-    async def execute(self, user_id: str) -> AiUsageReport:
-        return await self._usage.report(user_id)
+    async def execute(self, user_id: str, now: datetime | None = None) -> AiUsageReport:
+        """사용량 + 최근 30일 추천 효과(보임·적용·넘김·되돌림·적용 후 그날 끝냄)."""
+        now = now or datetime.now(UTC)
+        report = await self._usage.report(user_id, now)
+        today = date.fromisoformat(await self._usage.today_key(user_id, now))
+        return replace(report, learning=await self._learning.metrics(user_id, today, now))

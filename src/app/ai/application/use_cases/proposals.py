@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.ai.application.ports import RetroPort, TodoPort
+from app.ai.application.services.learning import LearningService
 from app.ai.domain.exceptions.exceptions import (
     AiProposalAlreadyAppliedException,
     AiProposalItemsInvalidException,
@@ -50,10 +51,17 @@ class UndoResult:
 
 
 class ProposalsUseCase:
-    def __init__(self, repo: IProposalRepository, todos: TodoPort, retros: RetroPort) -> None:
+    def __init__(
+        self,
+        repo: IProposalRepository,
+        todos: TodoPort,
+        retros: RetroPort,
+        learning: LearningService,
+    ) -> None:
         self._repo = repo
         self._todos = todos
         self._retros = retros
+        self._learning = learning
 
     async def _get(self, user_id: str, proposal_id: str) -> Proposal:
         proposal = await self._repo.find_by_id(proposal_id, user_id, for_update=True)
@@ -112,7 +120,10 @@ class ProposalsUseCase:
                 if "start_time" in after:
                     current = await self._todos.get(user_id, item["todoId"])
                     previous["timezone"] = current.timezone if current else None
-                result_id = await self._todos.apply_patch(user_id, item["todoId"], after)
+                # 출처를 붙여 남긴다 — 제안대로 옮긴 것은 미룸으로 안 세고, 되돌리면 기록을 지운다.
+                result_id = await self._todos.apply_patch(
+                    user_id, item["todoId"], after, source=_source(proposal)
+                )
                 applied[item["key"]] = {
                     "todo_id": result_id,
                     "created": False,
@@ -140,6 +151,7 @@ class ProposalsUseCase:
             raise AiProposalStateInvalidException("Proposal is not applied.")
         titles = {i["key"]: i["title"] for i in proposal.items}
         skipped: list[str] = []
+        reverted: list[str] = []
         for key, record in proposal.applied.items():
             if "entry_id" in record:
                 entry = await self._retros.get(user_id, record["entry_id"])
@@ -161,7 +173,15 @@ class ProposalsUseCase:
             if record["created"]:
                 await self._todos.delete(user_id, record["todo_id"])
             else:
-                await self._todos.apply_patch(user_id, record["todo_id"], record["previous"])
+                # 되돌림은 행동 학습에 새 옮김·시간 정함으로 세지 않는다(적용을 지우는 것)
+                await self._todos.apply_patch(
+                    user_id, record["todo_id"], record["previous"], observe=False
+                )
+                reverted.append(record["todo_id"])
+        if reverted:
+            # 되돌린 항목이 적용 때 남긴 학습 기록(옮김·시간 정함)을 지운다.
+            # 건너뛴 항목의 기록은 남긴다.
+            await self._learning.forget_source(user_id, _source(proposal), reverted)
         now = datetime.now(UTC)
         saved = await self._repo.save(replace(proposal, status="undone", updated_at=now))
         return UndoResult(saved, skipped)
@@ -173,6 +193,10 @@ class ProposalsUseCase:
         return await self._repo.save(
             replace(proposal, status="dismissed", updated_at=datetime.now(UTC))
         )
+
+
+def _source(proposal: Proposal) -> str:
+    return f"proposal:{proposal.id}"
 
 
 def _dt(value: Any) -> datetime | None:

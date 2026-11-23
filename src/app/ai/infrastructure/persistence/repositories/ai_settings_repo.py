@@ -33,6 +33,7 @@ class AiSettingsRepository(IAiSettingsRepository):
             deep_search=m.deep_search,
             memory_enabled=m.memory_enabled,
             retention_days=m.retention_days,
+            learning_enabled=m.learning_enabled,
         )
 
     async def save(self, s: AiSettings) -> AiSettings:
@@ -46,6 +47,7 @@ class AiSettingsRepository(IAiSettingsRepository):
                 deep_search=s.deep_search,
                 memory_enabled=s.memory_enabled,
                 retention_days=s.retention_days,
+                learning_enabled=s.learning_enabled,
                 updated_at=datetime.now().astimezone(),
             )
         )

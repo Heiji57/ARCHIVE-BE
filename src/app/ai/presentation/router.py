@@ -12,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.ai.application.use_cases.ai_settings import AiSettingsUseCase
 from app.ai.application.use_cases.conversations import ConversationsUseCase, PostMessageUseCase
+from app.ai.application.use_cases.learning import ResetLearningUseCase
 from app.ai.application.use_cases.proposals import ProposalsUseCase
 from app.ai.application.use_cases.suggestions import (
     ApplySuggestionUseCase,
@@ -27,6 +28,7 @@ from app.ai.presentation.requests.requests import (
     ApplySuggestionRequest,
     CreateConversationRequest,
     CreateScheduleRequest,
+    DismissSuggestionRequest,
     PatchAiSettingsRequest,
     PostMessageRequest,
     UpdateScheduleRequest,
@@ -71,7 +73,9 @@ async def apply_suggestion(
     use_case: FromDishka[ApplySuggestionUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[ApplySuggestionResponse]:
-    s = await use_case.execute(current_user.id, suggestion_id, body.action_index)
+    s = await use_case.execute(
+        current_user.id, suggestion_id, body.action_index, action_code=body.action_code
+    )
     return ApiResponse.ok(
         ApplySuggestionResponse(
             suggestion=SuggestionResponse.from_entity(s),
@@ -95,10 +99,22 @@ async def undo_suggestion(
 async def dismiss_suggestion(
     suggestion_id: str,
     use_case: FromDishka[DismissSuggestionUseCase],
+    body: DismissSuggestionRequest | None = None,
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[SuggestionResponse]:
-    s = await use_case.execute(current_user.id, suggestion_id)
+    """넘기기. 본문 `{reason}`(선택) — not_now | not_needed | wrong_time, 학습 무게만 바꾼다."""
+    s = await use_case.execute(current_user.id, suggestion_id, body.reason if body else None)
     return ApiResponse.ok(SuggestionResponse.from_entity(s))
+
+
+@router.delete("/learning", response_model=ApiResponse[None])
+async def reset_learning(
+    use_case: FromDishka[ResetLearningUseCase],
+    current_user: UserContext = Depends(get_current_user),
+) -> ApiResponse[None]:
+    """행동 학습 기록·통계를 모두 지운다. 학습 켜짐/꺼짐(`learningEnabled`)은 그대로."""
+    await use_case.execute(current_user.id)
+    return ApiResponse.ok(None)
 
 
 @router.get("/usage", response_model=ApiResponse[AiUsageResponse])
@@ -106,7 +122,9 @@ async def get_usage(
     use_case: FromDishka[GetAiUsageUseCase],
     current_user: UserContext = Depends(get_current_user),
 ) -> ApiResponse[AiUsageResponse]:
-    """하루·한 달 AI 요청 사용량(사용자 tz). 규칙 기반 추천은 세지 않는다."""
+    """하루·한 달 AI 요청 사용량(사용자 tz) + 최근 30일 추천 효과(learning).
+
+    규칙 기반 추천은 사용량에 세지 않는다."""
     return ApiResponse.ok(AiUsageResponse.from_report(await use_case.execute(current_user.id)))
 
 

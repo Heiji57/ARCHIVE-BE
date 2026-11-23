@@ -14,6 +14,12 @@ class TodoSnapshot:
     end_time: datetime | None = None
     timezone: str | None = None
     due_date_key: str | None = None
+    tags: tuple[str, ...] = ()
+    recurring: bool = False  # 반복 회차(가상 회차·예외 row) — 휴지통으로 보낼 수 없다
+
+    @property
+    def tag(self) -> str | None:
+        return self.tags[0] if self.tags else None
 
     @property
     def is_open(self) -> bool:

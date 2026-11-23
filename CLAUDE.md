@@ -90,7 +90,7 @@ Clean Architecture 패턴 적용: `Domain → Application → Infrastructure →
 | Todo | `GET/POST /todos` (`?overdue`/`?due`/`?calendarPushStatus` 기간 밖 조회, `?calendarIds=`), `POST /todos/batch` (묶음 수정), `PATCH/DELETE /todos/{id}` |
 | Todo 태그 | `GET /todos/tags`, `PATCH/DELETE /todos/tags/{name}` (이름 변경·합치기·색·순서), `PUT /todos/tags/order` |
 | Calendars | `GET/POST /calendars`, `PATCH/DELETE /calendars/{id}` (사용자 캘린더 — Google 연동 `/calendar/*` 와 별개) |
-| AI | `GET /ai/suggestions?date=`, `POST /ai/suggestions/{id}/apply|undo|dismiss` (규칙 기반 추천), `GET /ai/usage` |
+| AI | `GET /ai/suggestions?date=`, `POST /ai/suggestions/{id}/apply|undo|dismiss` (규칙 기반 추천 + 행동 학습), `GET /ai/usage` (사용량 + 추천 효과), `DELETE /ai/learning` (학습 기록 지우기) |
 | AI 대화 | `GET/POST /ai/conversations`, `DELETE /ai/conversations/{id}`, `GET/POST /ai/conversations/{id}/messages`, `GET /ai/conversations/{id}/stream` (SSE), `GET /ai/proposals/{id}`, `POST /ai/proposals/{id}/apply|undo|dismiss` |
 | AI 설정 | `GET/PATCH /ai/settings`, `GET/POST /ai/memories`, `DELETE /ai/memories/{id}`, `GET/POST /ai/schedules`, `PATCH/DELETE /ai/schedules/{id}` |
 | Entry | `GET/POST /entries`, `GET /entries/paginated`, `GET/PUT/DELETE /entries/{id}`, `PATCH /entries/{id}/folder` |

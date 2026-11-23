@@ -136,6 +136,8 @@ def _todo_port(s) -> TodoAdapter:
         CreateTodoUseCase(repo, UserSettingsRepository(s), cal),
         DeleteTodoUseCase(repo),
         TodoEmbeddingRepository(s),
+        None,  # type: ignore[arg-type]  # 휴지통 되살리기 — 이 테스트에선 안 씀
+        None,  # type: ignore[arg-type]  # 행동 학습 알림 — 이 테스트에선 안 씀
     )
 
 
@@ -149,12 +151,27 @@ def _retro_port(s) -> RetroAdapter:
     )
 
 
+class _ForgetSpy:
+    def __init__(self):
+        self.calls = []
+
+    async def forget_source(self, user_id, source, todo_ids=None):
+        self.calls.append((user_id, source, todo_ids))
+
+
 def _usage(s) -> AiUsageService:
     return AiUsageService(AiUsageRepository(s), UserRepository(s), 50, 1000)
 
 
-def _proposals(s) -> ProposalsUseCase:
-    return ProposalsUseCase(ProposalRepository(s), _todo_port(s), _retro_port(s))
+def _proposals(s, learning=None) -> ProposalsUseCase:
+    from app.ai.application.services.learning import LearningService
+    from app.ai.infrastructure.persistence.repositories.ai_settings_repo import (
+        AiSettingsRepository,
+    )
+    from app.ai.infrastructure.persistence.repositories.learning_repo import BehaviorRepository
+
+    learning = learning or LearningService(BehaviorRepository(s), AiSettingsRepository(s))
+    return ProposalsUseCase(ProposalRepository(s), _todo_port(s), _retro_port(s), learning)
 
 
 _MOVE = ToolCall(
@@ -231,8 +248,11 @@ async def test_apply_and_undo_move(factory):
         assert moved.date_key == "2026-11-17" and moved.start_time is not None
         with pytest.raises(AiProposalAlreadyAppliedException):
             await _proposals(s).apply(_USER, pid, None)
-        result = await _proposals(s).undo(_USER, pid)
+        learning = _ForgetSpy()
+        result = await _proposals(s, learning).undo(_USER, pid)
         assert result.skipped == [] and result.proposal.status == "undone"
+        # 되돌린 항목이 적용 때 남긴 학습 기록을 지운다
+        assert learning.calls == [(_USER, f"proposal:{pid}", ["todo_chat_1"])]
         back = await TodoRepository(s).find_by_id("todo_chat_1", _USER)
         assert back.date_key == "2026-11-16" and back.start_time is None
         assert applied.applied["i1"]["previous"]["date_key"] == "2026-11-16"

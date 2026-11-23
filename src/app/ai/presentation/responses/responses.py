@@ -5,12 +5,15 @@ from pydantic import BaseModel, Field
 
 from app.ai.domain.models.ai_settings import AiMemory, AiSchedule, AiSettings
 from app.ai.domain.models.conversation import ChatMessage, Conversation, Proposal
+from app.ai.domain.models.learning import LearningMetrics
 from app.ai.domain.models.suggestion import AiUsageReport, Suggestion
 
 
 class SuggestionActionResponse(BaseModel):
     label: str
     patch: dict[str, Any]  # PATCH /todos/{id} 본문 모양 — FE 는 보여 주기만 하고 적용은 서버가 한다
+    # to_today | to_tomorrow | drop(휴지통으로, patch 비어 있음) | schedule | mark_done
+    code: str
 
 
 class SuggestionResponse(BaseModel):
@@ -19,6 +22,10 @@ class SuggestionResponse(BaseModel):
     todo_id: str = Field(serialization_alias="todoId")
     title: str
     reason: str
+    # overdue | overdue_deferred | free_slot | free_slot_usual_time | free_slot_usual_length |
+    # commit_match
+    reason_code: str = Field(serialization_alias="reasonCode")
+    learned: bool  # 행동 학습 값이 순서·시각·길이·문구에 쓰였는지
     slot: dict[str, str] | None = None  # {start, end} ISO — 캘린더 흐린 칸
     actions: list[SuggestionActionResponse]
     status: str
@@ -33,8 +40,13 @@ class SuggestionResponse(BaseModel):
             todo_id=s.todo_id,
             title=s.payload.get("title", ""),
             reason=s.payload.get("reason", ""),
+            reason_code=s.payload.get("reason_code") or s.kind,
+            learned=bool(s.payload.get("learned")),
             slot=s.payload.get("slot"),
-            actions=[SuggestionActionResponse(label=a.label, patch=a.patch) for a in s.actions],
+            actions=[
+                SuggestionActionResponse(label=a.label, patch=a.patch, code=a.code)
+                for a in s.actions
+            ],
             status=s.status,
         )
 
@@ -52,15 +64,52 @@ class UsageWindowResponse(BaseModel):
     limit: int
 
 
+class LearningMetricsResponse(BaseModel):
+    """최근 30일 추천 효과. 비율은 분모가 0 이면 null."""
+
+    enabled: bool
+    ready: bool  # 순서·노출에 학습을 쓰기 시작했는지(추천 반응 20건 이상)
+    shown: int
+    applied: int
+    dismissed: int
+    undone: int
+    done_after_apply: int = Field(serialization_alias="doneAfterApply")
+    accept_rate: float | None = Field(serialization_alias="acceptRate")  # 적용 / 보임
+    undo_rate: float | None = Field(serialization_alias="undoRate")  # 되돌림 / 적용
+    done_after_apply_rate: float | None = Field(serialization_alias="doneAfterApplyRate")
+
+    model_config = {"populate_by_name": True}
+
+    @classmethod
+    def from_metrics(cls, m: LearningMetrics) -> "LearningMetricsResponse":
+        def ratio(a: int, b: int) -> float | None:
+            return round(a / b, 3) if b else None
+
+        return cls(
+            enabled=m.enabled,
+            ready=m.ready,
+            shown=m.shown,
+            applied=m.applied,
+            dismissed=m.dismissed,
+            undone=m.undone,
+            done_after_apply=m.done_after_apply,
+            accept_rate=ratio(m.applied, m.shown),
+            undo_rate=ratio(m.undone, m.applied),
+            done_after_apply_rate=ratio(m.done_after_apply, m.applied),
+        )
+
+
 class AiUsageResponse(BaseModel):
     day: UsageWindowResponse
     month: UsageWindowResponse
+    learning: LearningMetricsResponse | None = None
 
     @classmethod
     def from_report(cls, r: AiUsageReport) -> "AiUsageResponse":
         return cls(
             day=UsageWindowResponse(used=r.day_used, limit=r.day_limit),
             month=UsageWindowResponse(used=r.month_used, limit=r.month_limit),
+            learning=LearningMetricsResponse.from_metrics(r.learning) if r.learning else None,
         )
 
 
@@ -136,6 +185,7 @@ class AiSettingsResponse(BaseModel):
     deep_search: bool = Field(serialization_alias="deepSearch")
     memory_enabled: bool = Field(serialization_alias="memoryEnabled")
     retention_days: int = Field(serialization_alias="retentionDays")
+    learning_enabled: bool = Field(serialization_alias="learningEnabled")
 
     model_config = {"populate_by_name": True}
 
@@ -149,6 +199,7 @@ class AiSettingsResponse(BaseModel):
             deep_search=s.deep_search,
             memory_enabled=s.memory_enabled,
             retention_days=s.retention_days,
+            learning_enabled=s.learning_enabled,
         )
 
 

@@ -1,4 +1,7 @@
-from sqlalchemy import func, select
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +83,25 @@ class SuggestionRepository(ISuggestionRepository):
         )
         await self._session.flush()
         return self._to_entity(merged)
+
+    async def update_payload_if_shown(
+        self, suggestion_id: str, user_id: str, payload: dict[str, Any]
+    ) -> Suggestion | None:
+        # 조건부 UPDATE — 읽어 둔 행 전체를 merge 하면 그사이 커밋된 적용·넘김(status·applied)을
+        # 덮어쓴다. 행이 잠겨 있으면(적용 중) 끝날 때까지 기다린 뒤 조건을 다시 본다.
+        result = await self._session.execute(
+            update(AiSuggestionModel)
+            .where(
+                AiSuggestionModel.id == suggestion_id,
+                AiSuggestionModel.user_id == user_id,
+                AiSuggestionModel.status == "shown",
+            )
+            .values(payload=payload, updated_at=datetime.now(UTC))
+            .returning(AiSuggestionModel)
+            .execution_options(populate_existing=True, synchronize_session=False)
+        )
+        row = result.scalar_one_or_none()
+        return self._to_entity(row) if row is not None else None
 
     @staticmethod
     def _to_entity(m: AiSuggestionModel) -> Suggestion:
