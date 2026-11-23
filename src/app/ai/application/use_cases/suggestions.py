@@ -105,9 +105,13 @@ class GetSuggestionsUseCase:
         model = await self._svc.learning.model(user_id, now.date(), now.astimezone(UTC))
         candidates = await self._candidates(user_id, day, now, settings, tz, model)
         ranked = model is not None and model.can_rank
+        hidden_by_rank: set[tuple[str, str]] = set()
         if model is not None:
             ctx = context_of(now)
+            before: set[tuple[str, str]] = {(c.kind, c.todo_id) for c in candidates}
             candidates = rank(candidates, model, ctx, rank_seed(user_id, day.isoformat(), ctx))
+            kept: set[tuple[str, str]] = {(c.kind, c.todo_id) for c in candidates}
+            hidden_by_rank = before - kept
         order = {(c.kind, c.todo_id): i for i, c in enumerate(candidates)}
 
         existing = {
@@ -115,7 +119,6 @@ class GetSuggestionsUseCase:
             for s in await self._svc.repo.list_for_date(user_id, day.isoformat())
         }
         shown: list[Suggestion] = []
-        returned: set[tuple[str, str]] = set()
         for c in candidates:
             prev = existing.get((c.kind, c.todo_id))
             if prev is not None and prev.status != "shown":
@@ -140,14 +143,19 @@ class GetSuggestionsUseCase:
                 if saved.id == new_id:
                     await self._svc.record(saved, "sugg_shown", tz, now)
             elif prev.payload != payload:
-                saved = await self._svc.repo.save(
-                    replace(prev, payload=payload, updated_at=datetime.now(UTC))
-                )
+                updated = await self._svc.repo.update_payload_if_shown(prev.id, user_id, payload)
+                if updated is None:
+                    continue  # 그사이 다른 요청이 적용·넘김 — 그 상태를 덮어쓰지 않는다
+                saved = updated
+                if prev.payload.get("hidden"):
+                    # 숨겼던 추천이 다시 보인다 — 이제부터 반응이 없으면 다시 '무시'로 센다.
+                    await self._svc.record(saved, "sugg_shown", tz, now)
             else:
                 saved = prev
-            returned.add((saved.kind, saved.todo_id))
             shown.append(saved)
-        await self._mark_hidden(existing.values(), returned, tz, now)
+        await self._mark_hidden(
+            [s for k, s in existing.items() if k in hidden_by_rank], tz, now
+        )
         if ranked:
             shown.sort(key=lambda s: order.get((s.kind, s.todo_id), 99))
         else:
@@ -155,30 +163,24 @@ class GetSuggestionsUseCase:
         return shown
 
     async def _mark_hidden(
-        self,
-        existing: Iterable[Suggestion],
-        returned: set[tuple[str, str]],
-        tz: ZoneInfo,
-        now: datetime,
+        self, rows: Iterable[Suggestion], tz: ZoneInfo, now: datetime
     ) -> None:
-        """이미 보였지만 이번엔 안 낸 추천(순위에서 숨김·후보에서 빠짐)에 표시를 남긴다.
+        """이미 보였는데 이번엔 **순위에서 숨긴** 추천에 표시를 남긴다.
 
-        사용자가 볼 수 없던 추천을 그날 '무시'로 벌점 주지 않게 — `sugg_hidden` 을 한 번 남기고
-        `payload.hidden` 으로 표시해 다음 요청에서 또 남기지 않는다(다시 보이면 payload 가
-        새로 쓰여 표시가 지워진다).
+        사용자가 볼 수 없던 추천을 '무시'로 벌점 주지 않게 `sugg_hidden` 을 한 번 남기고
+        `payload.hidden` 으로 표시해 다음 요청에서 또 남기지 않는다. 다시 보이면 payload 가 새로
+        쓰여 표시가 지워지고 `sugg_shown` 을 다시 남긴다(그 뒤 반응이 없으면 다시 '무시').
+        규칙에서 빠진 추천(지난 날짜, 남은 빈 칸 없음 등)은 표시하지 않는다 — 보였던 동안
+        반응이 없었으면 그대로 '무시'다.
         """
-        for prev in existing:
-            if (
-                prev.status != "shown"
-                or (prev.kind, prev.todo_id) in returned
-                or prev.payload.get("hidden")
-            ):
+        for prev in rows:
+            if prev.status != "shown" or prev.payload.get("hidden"):
                 continue
-            payload = {**prev.payload, "hidden": True}
-            saved = await self._svc.repo.save(
-                replace(prev, payload=payload, updated_at=datetime.now(UTC))
+            saved = await self._svc.repo.update_payload_if_shown(
+                prev.id, prev.user_id, {**prev.payload, "hidden": True}
             )
-            await self._svc.record(saved, "sugg_hidden", tz, now)
+            if saved is not None:
+                await self._svc.record(saved, "sugg_hidden", tz, now)
 
     async def _candidates(
         self,
@@ -272,7 +274,9 @@ class ApplySuggestionUseCase:
             applied = {"todo_id": suggestion.todo_id, "previous": {}, "dropped": True}
         else:
             previous = _previous_values(current, patch)
-            result_id = await self._svc.todos.apply_patch(user_id, suggestion.todo_id, patch)
+            result_id = await self._svc.todos.apply_patch(
+                user_id, suggestion.todo_id, patch, source=_source(suggestion)
+            )
             applied = {"todo_id": result_id, "previous": previous}
         saved = await self._svc.repo.save(
             replace(
@@ -330,6 +334,8 @@ class UndoSuggestionUseCase:
                 suggestion.applied["previous"],
                 observe=False,  # 되돌림은 sugg_undone 으로만 남긴다
             )
+        # 적용이 남긴 할 일 기록(옮김·시간 정함·끝냄)을 지운다 — 되돌린 변경을 세지 않게.
+        await self._svc.learning.forget_source(user_id, _source(suggestion))
         saved = await self._svc.repo.save(
             replace(suggestion, status="shown", applied=None, updated_at=datetime.now(UTC))
         )
@@ -350,10 +356,16 @@ class DismissSuggestionUseCase:
         reason(not_now | not_needed | wrong_time)은 학습 무게만 바꾼다(필요 없음이 가장 무겁다).
         """
         suggestion = await _get(self._svc.repo, user_id, suggestion_id)
-        if suggestion.status == "applied":
-            raise AiSuggestionActionInvalidException("Undo before dismissing.")
         if suggestion.status == "dismissed":
             return suggestion  # 두 번 눌러도 한 번만 기록
+        if suggestion.status == "applied":
+            if not (suggestion.applied or {}).get("dropped"):
+                raise AiSuggestionActionInvalidException("Undo before dismissing.")
+            # 내려놓은 할 일이 영구 삭제되면 되돌릴 수 없다 — 닫기만 한다(받아들인 것이라 넘김으로
+            # 기록하지 않는다).
+            return await self._svc.repo.save(
+                replace(suggestion, status="dismissed", updated_at=datetime.now(UTC))
+            )
         saved = await self._svc.repo.save(
             replace(suggestion, status="dismissed", updated_at=datetime.now(UTC))
         )
@@ -368,6 +380,11 @@ async def _get(repo: ISuggestionRepository, user_id: str, suggestion_id: str) ->
     if suggestion is None:
         raise AiSuggestionNotFoundException()
     return suggestion
+
+
+def _source(suggestion: Suggestion) -> str:
+    """적용이 남긴 학습 기록의 출처 — 되돌리면 이 출처의 기록을 지운다."""
+    return f"suggestion:{suggestion.id}"
 
 
 def _payload(c: SuggestionCandidate) -> dict[str, Any]:

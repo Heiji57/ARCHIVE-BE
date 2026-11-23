@@ -22,7 +22,10 @@ from app.ai.application.use_cases.suggestions import (
     GetSuggestionsUseCase,
     UndoSuggestionUseCase,
 )
-from app.ai.domain.exceptions.exceptions import AiSuggestionActionInvalidException
+from app.ai.domain.exceptions.exceptions import (
+    AiSuggestionActionInvalidException,
+    AiSuggestionNotFoundException,
+)
 from app.ai.domain.models.learning import (
     MIN_EVENTS_TO_RANK,
     Arm,
@@ -181,14 +184,30 @@ def test_rank_draw_does_not_depend_on_other_candidates():
         assert rest == [t for t in full if t != "o0"]
 
 
-def test_hidden_suggestion_is_not_ignored():
+def test_hidden_suggestion_is_not_ignored_until_shown_again():
+    def vis(type_, hours, sid):
+        return _ev(type_, 1 + hours / 24, suggestion_id=sid, kind="free_slot",
+                   day="2026-11-15", ctx=_CTX)
+
     events = [
-        _ev("sugg_shown", 1, suggestion_id="s1", kind="free_slot", day="2026-11-15", ctx=_CTX),
-        _ev("sugg_hidden", 1, suggestion_id="s1", kind="free_slot", day="2026-11-15", ctx=_CTX),
-        _ev("sugg_shown", 1, suggestion_id="s2", kind="free_slot", day="2026-11-15", ctx=_CTX),
+        vis("sugg_shown", 3, "s1"), vis("sugg_hidden", 2, "s1"),  # 숨긴 채 끝남 → 무시 아님
+        vis("sugg_shown", 3, "s2"),  # 보인 채 끝남 → 무시
+        # 숨겼다 다시 보였는데 반응 없음 → 무시(한 번만)
+        vis("sugg_shown", 3, "s3"), vis("sugg_hidden", 2, "s3"), vis("sugg_shown", 1, "s3"),
     ]
     arm = build_model(events, _NOW, _TODAY).accept["free_slot"]
-    assert arm.neg == pytest.approx(0.1 * 0.5 ** (1 / 30), rel=1e-3)  # s2 만 무시
+    assert arm.neg == pytest.approx(0.2 * 0.5 ** (1 / 30), rel=2e-3)  # s2, s3
+
+
+def test_moves_made_by_applying_are_not_deferrals():
+    events = [
+        _ev("todo_moved", 2, tid="t1", source="suggestion:s1",
+            **{"from": "2026-11-10", "to": "2026-11-14"}),
+        _ev("todo_moved", 1, tid="t1", source="proposal:p1",
+            **{"from": "2026-11-14", "to": "2026-11-15"}),
+        _ev("todo_moved", 1, tid="t1", **{"from": "2026-11-15", "to": "2026-11-16"}),  # 직접
+    ]
+    assert build_model(events, _NOW, _TODAY).deferrals == {"t1": 1}
 
 
 class _FakeBehaviorRepo:
@@ -254,8 +273,17 @@ def test_free_slot_prefers_usual_hour_and_learned_length():
 
 def test_estimate_minutes_shrinks_toward_default():
     assert estimate_minutes(BehaviorModel(), "x", 50) == (50, False)
-    m = BehaviorModel(minutes={"*": [120]})
-    assert estimate_minutes(m, None, 60) == (75, False)  # (120 + 180) / 4 = 75, 1건이라 학습 아님
+    # 전체 기록이 3건 미만이면 기본값 그대로(1~2건으로 칸 길이를 바꾸지 않는다)
+    assert estimate_minutes(BehaviorModel(minutes={"*": [120]}), None, 60) == (60, False)
+    assert estimate_minutes(BehaviorModel(minutes={"*": [15]}), None, 60) == (60, False)
+
+
+def test_estimate_minutes_keeps_unusual_default():
+    # 기본 20분이고 늘 20분 — 15분 단위로 맞춰도 같으니 기본값 그대로("보통 15분" 아님)
+    assert estimate_minutes(BehaviorModel(minutes={"*": [20] * 5}), None, 20) == (20, False)
+    # 긴 기본값은 240분으로 자르지 않는다
+    assert estimate_minutes(BehaviorModel(minutes={"*": [480] * 5}), None, 480) == (480, False)
+    assert estimate_minutes(BehaviorModel(minutes={"*": [420] * 9}), None, 480) == (435, True)
 
 
 def test_estimate_minutes_learned_with_few_tag_samples():
@@ -371,21 +399,21 @@ async def test_records_reactions_and_todo_changes(factory):
         [
             ("sugg_shown", "todo_lr_late"),
             ("sugg_shown", "todo_lr_free"),
-            ("todo_moved", "todo_lr_late"),  # 적용도 할 일 수정이라 옮김으로 남는다(미룸)
+            ("todo_moved", "todo_lr_late"),  # 적용도 할 일 수정이라 남는다(출처 붙음 — 미룸 아님)
             ("sugg_applied", "todo_lr_late"),
             ("sugg_dismissed", "todo_lr_free"),
         ]
     )
     async with factory.begin() as s:
-        cached = await BehaviorRepository(s).find_model(_USER)
-        assert cached is not None and cached[2] is True  # 추천 때 계산 → 적용·넘김 기록으로 stale
-        model = await LearningService(BehaviorRepository(s), AiSettingsRepository(s)).model(
-            _USER, _TODAY, _NOW
-        )
-        assert model.deferrals == {"todo_lr_late": 1}
+        repo = BehaviorRepository(s)
+        cached = await repo.find_model(_USER)
+        # 추천 때 계산 → 그 뒤 적용·넘김 기록으로 서명이 달라졌다(다시 계산해야 함)
+        assert cached is not None and cached[2] != await repo.event_signature(_USER)
+        model = await LearningService(repo, AiSettingsRepository(s)).model(_USER, _TODAY, _NOW)
+        assert model.deferrals == {}  # 추천대로 옮긴 것은 미룸이 아니다
         assert model.reactions == 2
-        cached = await BehaviorRepository(s).find_model(_USER)
-        assert cached is not None and cached[2] is False  # 계산해 저장, stale 아님
+        cached = await repo.find_model(_USER)
+        assert cached is not None and cached[2] == await repo.event_signature(_USER)
 
 
 async def test_drop_goes_to_trash_and_undo_restores(factory):
@@ -443,11 +471,12 @@ async def test_undo_drop_after_manual_restore(factory):
         assert undone.status == "shown"
 
 
-async def test_suggestion_no_longer_returned_is_marked_hidden(factory):
+async def test_rule_dropout_is_not_hidden_but_rank_hide_is(factory):
+    """규칙에서 빠진 추천은 숨김이 아니고(보였던 동안 반응 없으면 무시), 순위에서 숨긴 것만 숨김."""
     async with factory.begin() as s:
         got = await GetSuggestionsUseCase(_svc(s)).execute(_USER, _TODAY, now=_NOW)
-        assert any(g.todo_id == "todo_lr_free" for g in got)
-        # 빈 칸 추천이 더는 후보가 아니게(시간을 직접 정함)
+        assert {g.kind for g in got} >= {"overdue", "free_slot"}
+        # 빈 칸 추천이 더는 후보가 아니게(시간을 직접 정함) — 학습 알림 없이 직접 고친다
         await s.execute(
             text(
                 "UPDATE todos SET start_time = '2026-11-16 08:00+00',"
@@ -455,13 +484,98 @@ async def test_suggestion_no_longer_returned_is_marked_hidden(factory):
                 " WHERE id = 'todo_lr_free'"
             )
         )
+        # 지난 마감 종류를 거의 늘 숨기는 통계(반응 충분) — 캐시를 지금 서명으로 저장
+        repo = BehaviorRepository(s)
+        low = BehaviorModel(accept={"overdue": Arm(0, 5000)}, reactions=100)
+        await repo.save_model(_USER, low, _NOW, await repo.event_signature(_USER))
     for _ in range(2):  # 두 번 불러도 한 번만 남긴다
         async with factory.begin() as s:
             got = await GetSuggestionsUseCase(_svc(s)).execute(_USER, _TODAY, now=_NOW)
-            assert all(g.todo_id != "todo_lr_free" for g in got)
+            assert got == []
     async with factory.begin() as s:
         events = await _events(s)
-    assert events.count(("sugg_hidden", "todo_lr_free")) == 1
+        assert events.count(("sugg_hidden", "todo_lr_late")) == 1
+        assert ("sugg_hidden", "todo_lr_free") not in events
+        # 다시 잘 받아들이는 통계 → 다시 보이고 sugg_shown 이 또 남는다
+        repo = BehaviorRepository(s)
+        high = BehaviorModel(accept={"overdue": Arm(5000, 0)}, reactions=100)
+        await repo.save_model(_USER, high, _NOW, await repo.event_signature(_USER))
+    async with factory.begin() as s:
+        got = await GetSuggestionsUseCase(_svc(s)).execute(_USER, _TODAY, now=_NOW)
+        [overdue] = got
+        assert overdue.kind == "overdue" and "hidden" not in overdue.payload
+    async with factory.begin() as s:  # text() 조회는 autoflush 하지 않아 커밋 뒤에 본다
+        events = await _events(s)
+    assert events.count(("sugg_shown", "todo_lr_late")) == 2
+
+
+async def test_payload_update_does_not_overwrite_concurrent_apply(factory):
+    from app.ai.infrastructure.persistence.repositories.suggestion_repo import (
+        SuggestionRepository,
+    )
+
+    async with factory.begin() as s:
+        got = await GetSuggestionsUseCase(_svc(s)).execute(_USER, _TODAY, now=_NOW)
+        overdue = next(g for g in got if g.kind == "overdue")
+    async with factory() as a:  # GET 이 행을 읽은 뒤
+        await a.begin()
+        [prev] = [x for x in await SuggestionRepository(a).list_for_date(_USER, "2026-11-16")
+                  if x.id == overdue.id]
+        async with factory.begin() as b:  # 다른 요청이 적용하고 커밋
+            await ApplySuggestionUseCase(_svc(b)).execute(
+                _USER, overdue.id, now=_NOW, action_code="to_today"
+            )
+        updated = await SuggestionRepository(a).update_payload_if_shown(
+            prev.id, _USER, {**prev.payload, "hidden": True}
+        )
+        await a.commit()
+    assert updated is None
+    async with factory.begin() as s:
+        row = await SuggestionRepository(s).find_by_id(overdue.id, _USER)
+        assert row.status == "applied" and row.applied is not None
+
+
+async def test_new_event_after_recompute_is_not_lost(factory):
+    async with factory.begin() as s:
+        learning = LearningService(BehaviorRepository(s), AiSettingsRepository(s))
+        await learning.model(_USER, _TODAY, _NOW)
+    async with factory.begin() as s:  # 계산 뒤 들어온 기록
+        await BehaviorRepository(s).add_event(
+            _USER,
+            BehaviorEvent(type="todo_moved", created_at=_NOW, todo_id="todo_lr_late",
+                          data={"from": "2026-11-10", "to": "2026-11-12"}),
+        )
+    async with factory.begin() as s:
+        learning = LearningService(BehaviorRepository(s), AiSettingsRepository(s))
+        model = await learning.model(_USER, _TODAY, _NOW)  # 6시간 안이어도 다시 계산
+        assert model.deferrals == {"todo_lr_late": 1}
+
+
+async def test_dismiss_closes_dropped_suggestion(factory):
+    """내려놓은 할 일이 영구 삭제돼 되돌릴 수 없으면 넘기기로 닫는다(넘김으로 기록하지 않음)."""
+    async with factory.begin() as s:
+        repo = BehaviorRepository(s)
+        for i in range(2):
+            await repo.add_event(
+                _USER,
+                BehaviorEvent(
+                    type="todo_moved", created_at=_NOW - timedelta(days=3 - i),
+                    todo_id="todo_lr_late",
+                    data={"from": f"2026-11-{11 + i}", "to": f"2026-11-{12 + i}"},
+                ),
+            )
+    async with factory.begin() as s:
+        svc = _svc(s)
+        got = await GetSuggestionsUseCase(svc).execute(_USER, _TODAY, now=_NOW)
+        overdue = next(g for g in got if g.kind == "overdue")
+        await ApplySuggestionUseCase(svc).execute(_USER, overdue.id, now=_NOW, action_code="drop")
+        await s.execute(text("DELETE FROM todos WHERE id = 'todo_lr_late'"))  # 영구 삭제
+        with pytest.raises(AiSuggestionNotFoundException):
+            await UndoSuggestionUseCase(svc).execute(_USER, overdue.id)
+    async with factory.begin() as s:
+        closed = await DismissSuggestionUseCase(_svc(s)).execute(_USER, overdue.id)
+        assert closed.status == "dismissed"
+        assert ("sugg_dismissed", "todo_lr_late") not in await _events(s)
 
 
 async def test_learning_off_records_nothing_and_reset_clears(factory):
@@ -490,8 +604,8 @@ async def test_usage_learning_metrics(factory):
         overdue = next(g for g in got if g.kind == "overdue")
         await ApplySuggestionUseCase(_svc(s)).execute(_USER, overdue.id, 0, now=_NOW)
         await UndoSuggestionUseCase(_svc(s)).execute(_USER, overdue.id)
-        # 되돌림은 sugg_undone 만 — 날짜를 되돌린 수정은 '옮김' 으로 다시 세지 않는다
-        assert [t for t, _ in await _events(s)].count("todo_moved") == 1
+        # 되돌리면 적용이 남긴 '옮김' 도 지운다 — 되돌린 변경은 세지 않는다
+        assert [t for t, _ in await _events(s)].count("todo_moved") == 0
     async with factory.begin() as s:
         learning = LearningService(BehaviorRepository(s), AiSettingsRepository(s))
         usage = AiUsageService(AiUsageRepository(s), UserRepository(s), 50, 1000)

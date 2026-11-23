@@ -1,9 +1,12 @@
 """행동 학습 — 기록 남기기, 통계(모델) 꺼내기, 지우기.
 
 - 학습을 끄면(`ai_settings.learning_enabled = false`) 기록을 남기지 않고 모델도 쓰지 않는다.
-- 통계는 `ai_user_models` 에 캐시한다. 새 기록이 들어오면 stale 이 되고, 다음에 꺼낼 때
-  최근 `EVENT_RETENTION_DAYS` 기록으로 다시 계산한다. 감쇠·'무시' 판정이 날짜에 따라 바뀌므로
-  `_MAX_AGE` 가 지나도 다시 계산한다.
+- 통계는 `ai_user_models` 에 캐시한다. 계산할 때 본 기록 서명(건수:마지막 id)과 지금 서명이
+  다르면(기록이 늘었거나 지워짐) 최근 `EVENT_RETENTION_DAYS` 기록으로 다시 계산한다. 서명은
+  기록보다 **먼저** 읽는다 — 그 사이 들어온 기록은 다음에 서명이 달라 다시 계산된다(놓치지 않음).
+  기록을 남길 때 캐시 행을 건드리지 않아 동시 요청끼리 행 잠금·교착이 없다. 감쇠·'무시' 판정이
+  날짜에 따라 바뀌므로 `_MAX_AGE` 가 지나도 다시 계산한다.
+- 추천·제안 적용이 바꾼 할 일 기록에는 `source` 를 붙이고, 되돌리면 그 기록을 지운다.
 """
 
 from dataclasses import dataclass
@@ -69,28 +72,33 @@ class LearningService:
     ) -> None:
         if not await self.enabled(user_id):
             return
-        # '보임'·'숨김' 은 그날이 지나야 '무시' 셈에 영향을 줘 바로 다시 계산할 필요가 없다
-        # (_MAX_AGE 가 맡음) — 추천을 부를 때마다 통계를 다시 계산하지 않게.
         await self._repo.add_event(
-            user_id,
-            BehaviorEvent(type=type_, created_at=at.now, todo_id=todo_id, data=data),
-            mark_stale=type_ not in ("sugg_shown", "sugg_hidden"),
+            user_id, BehaviorEvent(type=type_, created_at=at.now, todo_id=todo_id, data=data)
         )
 
+    async def forget_source(
+        self, user_id: str, source: str, todo_ids: list[str] | None = None
+    ) -> None:
+        """되돌린 적용이 남긴 할 일 기록(옮김·시간 정함·끝냄)을 지운다 — 되돌린 변경을 세지 않게.
+
+        학습을 껐어도 지운다(켜 둔 동안 남긴 기록일 수 있다)."""
+        await self._repo.delete_by_source(user_id, source, todo_ids)
+
     async def model(self, user_id: str, today: date, now: datetime) -> BehaviorModel | None:
-        """학습을 껐으면 None. 캐시가 stale·오래됐으면 다시 계산해 저장한다."""
+        """학습을 껐으면 None. 기록 서명이 바뀌었거나 오래됐으면 다시 계산해 저장한다."""
         if not await self.enabled(user_id):
             return None
+        signature = await self._repo.event_signature(user_id)  # 기록보다 먼저
         cached = await self._repo.find_model(user_id)
         if cached is not None:
-            model, computed_at, stale = cached
-            if not stale and now - computed_at < _MAX_AGE:
+            model, computed_at, seen = cached
+            if seen == signature and now - computed_at < _MAX_AGE:
                 return model
         events = await self._repo.list_events_since(
             user_id, now - timedelta(days=EVENT_RETENTION_DAYS)
         )
         model = build_model(events, now, today)
-        await self._repo.save_model(user_id, model, now)
+        await self._repo.save_model(user_id, model, now, signature)
         return model
 
     async def metrics(self, user_id: str, today: date, now: datetime) -> LearningMetrics:
@@ -103,12 +111,21 @@ class LearningService:
         await self._repo.reset(user_id)
 
     async def todo_changed(
-        self, user_id: str, before: TodoSnapshot, after: TodoSnapshot, at: EventContext
+        self,
+        user_id: str,
+        before: TodoSnapshot,
+        after: TodoSnapshot,
+        at: EventContext,
+        source: str | None = None,
     ) -> None:
-        """할 일 하나를 고친 뒤 — 끝냄, 날짜 옮김, 시간 정함·옮김을 기록한다."""
+        """할 일 하나를 고친 뒤 — 끝냄, 날짜 옮김, 시간 정함·옮김을 기록한다.
+
+        source = 추천·제안 적용이 바꾼 것("suggestion:{id}" | "proposal:{id}").
+        """
         if not await self.enabled(user_id):
             return
         tag = after.tag
+        origin = {"source": source} if source else {}
         minutes = (
             int((after.end_time - after.start_time).total_seconds() // 60)  # type: ignore[operator]
             if after.is_timed
@@ -125,6 +142,7 @@ class LearningService:
                     "minutes": minutes,
                     "tag": tag,
                     "day": at.day,
+                    **origin,
                 },
                 todo_id=after.id,
             )
@@ -136,7 +154,7 @@ class LearningService:
                 user_id,
                 "todo_moved",
                 at,
-                {"from": before.date_key, "to": after.date_key, "tag": tag},
+                {"from": before.date_key, "to": after.date_key, "tag": tag, **origin},
                 todo_id=after.id,
             )
         if after.is_timed and _clock(after, at.tz) != _clock(before, at.tz):
@@ -149,6 +167,7 @@ class LearningService:
                     "hour": after.start_time.astimezone(at.tz).hour,  # type: ignore[union-attr]
                     "minutes": minutes,
                     "tag": tag,
+                    **origin,
                 },
                 todo_id=after.id,
             )

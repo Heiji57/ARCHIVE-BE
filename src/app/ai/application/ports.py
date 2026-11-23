@@ -27,12 +27,18 @@ class TodoPort(Protocol):
         ...
 
     async def apply_patch(
-        self, user_id: str, todo_id: str, patch: dict[str, Any], observe: bool = True
+        self,
+        user_id: str,
+        todo_id: str,
+        patch: dict[str, Any],
+        observe: bool = True,
+        source: str | None = None,
     ) -> str:
         """PATCH /todos/{id} 규칙으로 바꾼다. 바뀐 할 일 id(가상 회차면 새 예외 row id).
 
         observe=False 면 행동 학습에 알리지 않는다 — 되돌리기는 사용자의 새 행동이 아니라
-        앞선 적용을 지우는 것이라(옮김·시간 정함이 두 번 세지지 않게)."""
+        앞선 적용을 지우는 것이라(옮김·시간 정함이 두 번 세지지 않게). source 는 적용 출처
+        ("suggestion:{id}" | "proposal:{id}") — 학습 기록에 붙어 되돌리면 지운다."""
         ...
 
     async def list_range(self, user_id: str, from_key: str, to_key: str) -> list[TodoSnapshot]:

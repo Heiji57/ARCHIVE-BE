@@ -9,14 +9,20 @@ from typing import Any, Literal
 
 BehaviorEventType = Literal[
     "sugg_shown",  # 추천이 처음 보임 {suggestion_id, kind, day, ctx}
-    "sugg_hidden",  # 보였던 추천을 이번엔 안 냄(순위에서 숨김·후보에서 빠짐) — '무시' 벌점 제외
+    "sugg_hidden",  # 보였던 추천을 순위에서 숨김 — 다시 보이기(sugg_shown) 전까지 '무시' 벌점 제외
     "sugg_applied",  # {suggestion_id, kind, action, todo_id, day, ctx, hour?}
     "sugg_dismissed",  # {suggestion_id, kind, reason?, day, ctx}
     "sugg_undone",  # {suggestion_id, kind, day, ctx}
-    "todo_moved",  # 날짜를 옮김 {from, to, tag}
-    "todo_retimed",  # 시간을 정함·옮김 {hour, minutes?, tag}
-    "todo_done",  # 끝냄 {hour, minutes?, tag, day}
+    # 할 일 기록 — 추천·제안 적용으로 바뀐 것이면 data.source = "suggestion:{id}" | "proposal:{id}"
+    # (되돌리면 그 기록을 지운다, 적용으로 옮긴 것은 미룸으로 안 센다).
+    "todo_moved",  # 날짜를 옮김 {from, to, tag, source?}
+    "todo_retimed",  # 시간을 정함·옮김 {hour, minutes?, tag, source?}
+    "todo_done",  # 끝냄 {hour, minutes?, tag, day, source?}
 ]
+
+# 보임·숨김은 그날이 지나야 통계('무시')에 영향을 준다 — 캐시를 바로 낡게 하지 않는다
+# (6시간 재계산이 맡음).
+VISIBILITY_EVENTS: tuple[str, ...] = ("sugg_shown", "sugg_hidden")
 
 DismissReason = Literal["not_now", "not_needed", "wrong_time"]
 DISMISS_REASONS: tuple[str, ...] = ("not_now", "not_needed", "wrong_time")

@@ -9,6 +9,11 @@ from app.todo.domain.models.todo import Todo
 
 
 class TodoChangeObserver(Protocol):
-    async def changed(self, user_id: str, before: Todo, after: Todo) -> None:
-        """사용자가 할 일 하나(한 회차)를 고친 뒤. 요청 트랜잭션 안에서 불린다."""
+    async def changed(
+        self, user_id: str, before: Todo, after: Todo, source: str | None = None
+    ) -> None:
+        """사용자가 할 일 하나(한 회차)를 고친 뒤. 요청 트랜잭션 안에서 불린다.
+
+        source = 다른 모듈이 대신 고쳤을 때 그 출처(예: AI 추천 적용). 일반 수정은 None.
+        """
         ...

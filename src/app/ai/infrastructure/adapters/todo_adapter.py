@@ -119,7 +119,12 @@ class TodoAdapter:
         return to_snapshot(todo) if todo else None
 
     async def apply_patch(
-        self, user_id: str, todo_id: str, patch: dict[str, Any], observe: bool = True
+        self,
+        user_id: str,
+        todo_id: str,
+        patch: dict[str, Any],
+        observe: bool = True,
+        source: str | None = None,
     ) -> str:
         result = await self._batch.execute(user_id, [to_update_command(user_id, todo_id, patch)])
         outcome = result.outcomes[0]
@@ -130,6 +135,7 @@ class TodoAdapter:
             outcome.extra_push_todo_id,
             before=outcome.before,
             observer=self._observer if observe else None,
+            source=source,
         )
         return outcome.todo.id
 

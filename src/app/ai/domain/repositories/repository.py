@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from datetime import date, datetime
+from typing import Any
 
 from app.ai.domain.models.ai_settings import AiMemory, AiSchedule, AiSettings
 from app.ai.domain.models.conversation import ChatMessage, Conversation, Proposal
@@ -28,6 +29,13 @@ class ISuggestionRepository(ABC):
 
     @abstractmethod
     async def save(self, suggestion: Suggestion) -> Suggestion: ...
+
+    @abstractmethod
+    async def update_payload_if_shown(
+        self, suggestion_id: str, user_id: str, payload: dict[str, Any]
+    ) -> Suggestion | None:
+        """아직 `shown` 일 때만 payload 를 바꾼다(그사이 적용·넘김을 덮어쓰지 않게). 아니면 None."""
+        ...
 
 
 class IAiUsageRepository(ABC):
@@ -144,10 +152,23 @@ class IBehaviorRepository(ABC):
     """행동 학습 기록과 통계 캐시."""
 
     @abstractmethod
-    async def add_event(
-        self, user_id: str, event: BehaviorEvent, mark_stale: bool = True
+    async def add_event(self, user_id: str, event: BehaviorEvent) -> None:
+        """기록만 남긴다 — 통계 캐시 행은 건드리지 않는다(행 잠금·교착을 만들지 않게)."""
+        ...
+
+    @abstractmethod
+    async def event_signature(self, user_id: str) -> str:
+        """통계에 바로 영향을 주는 기록(보임·숨김 제외)의 "건수:마지막 id".
+
+        기록이 늘거나 지워지면 달라진다 — 캐시가 낡았는지 이것으로 판단한다.
+        """
+        ...
+
+    @abstractmethod
+    async def delete_by_source(
+        self, user_id: str, source: str, todo_ids: list[str] | None = None
     ) -> None:
-        """기록을 남기고(mark_stale 면) 통계 캐시를 stale 로 표시한다."""
+        """적용(`data.source`)이 남긴 할 일 기록을 지운다 — 되돌리기. todo_ids 면 그 할 일만."""
         ...
 
     @abstractmethod
@@ -156,12 +177,14 @@ class IBehaviorRepository(ABC):
         ...
 
     @abstractmethod
-    async def find_model(self, user_id: str) -> tuple[BehaviorModel, datetime, bool] | None:
-        """(모델, 계산 시각, stale) 또는 없으면 None."""
+    async def find_model(self, user_id: str) -> tuple[BehaviorModel, datetime, str] | None:
+        """(모델, 계산 시각, 계산할 때의 기록 서명) 또는 없으면 None."""
         ...
 
     @abstractmethod
-    async def save_model(self, user_id: str, model: BehaviorModel, computed_at: datetime) -> None:
+    async def save_model(
+        self, user_id: str, model: BehaviorModel, computed_at: datetime, signature: str
+    ) -> None:
         ...
 
     @abstractmethod

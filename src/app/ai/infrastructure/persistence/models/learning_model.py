@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, text
+from sqlalchemy import DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,7 +27,7 @@ class AiBehaviorEventModel(Base):
 
 
 class AiUserModelModel(Base):
-    """이벤트에서 계산한 통계 캐시 — 새 이벤트가 들어오면 stale, 다음 추천 때 다시 계산."""
+    """이벤트에서 계산한 통계 캐시 — 기록 서명이 바뀌면 다음 추천 때 다시 계산."""
 
     __tablename__ = "ai_user_models"
 
@@ -36,4 +36,4 @@ class AiUserModelModel(Base):
     )
     model: Mapped[dict] = mapped_column(JSONB, nullable=False)  # type: ignore[type-arg]
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    signature: Mapped[str] = mapped_column(String(80), nullable=False, server_default=text("''"))

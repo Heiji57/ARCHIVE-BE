@@ -147,17 +147,24 @@ def _shrink(samples: list[int], prior: float) -> float:
     return (n * median(samples) + _LENGTH_PRIOR * prior) / (n + _LENGTH_PRIOR) if n else prior
 
 
-def estimate_minutes(model: BehaviorModel, tag: str | None, default: int) -> tuple[int, bool]:
-    """(추정 길이(분), 학습값인지). 학습값 = 전체 기록 3건 이상이고 기본값과 달라졌을 때.
+def _round_minutes(minutes: float, default: int) -> int:
+    """15분 단위, 15분~max(240, 기본값) — 사용자가 정한 긴 기본값은 자르지 않는다."""
+    rounded = int(round(minutes / _STEP) * _STEP)
+    return max(_MIN_MINUTES, min(max(_MAX_MINUTES, default), rounded))
 
-    태그 기록이 1~2건이어도 전체 기록이 충분하면 학습값이다(전체 ⊇ 태그). 추정이 기본값과
-    같으면 "보통 N분" 이라고 말할 것이 없어 학습값으로 치지 않는다.
+
+def estimate_minutes(model: BehaviorModel, tag: str | None, default: int) -> tuple[int, bool]:
+    """(길이(분), 학습값인지). 학습값이 아니면 기본값을 **그대로** 돌려준다.
+
+    전체 기록이 3건 미만이면 기본값(1~2건으로 칸 길이를 바꾸지 않는다). 태그 기록이 1~2건이어도
+    전체 기록이 충분하면 학습값이다(전체 ⊇ 태그). 추정을 15분 단위로 맞춘 값이 기본값을 같은
+    단위로 맞춘 값과 같으면 기본값 그대로 — 기본 20분인 사용자에게 "보통 15분" 이라 하지 않게.
     """
     glob = model.minutes.get("*") or []
-    own = (model.minutes.get(tag) or []) if tag else []
-    if not glob and not own:
+    if len(glob) < MIN_LENGTH_SAMPLES:
         return default, False
-    estimate = _shrink(own, _shrink(glob, float(default)))
-    rounded = int(round(estimate / _STEP) * _STEP)
-    minutes = max(_MIN_MINUTES, min(_MAX_MINUTES, rounded))
-    return minutes, len(glob) >= MIN_LENGTH_SAMPLES and minutes != default
+    own = (model.minutes.get(tag) or []) if tag else []
+    estimate = _round_minutes(_shrink(own, _shrink(glob, float(default))), default)
+    if estimate == _round_minutes(float(default), default):
+        return default, False
+    return estimate, True

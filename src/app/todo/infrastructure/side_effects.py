@@ -30,10 +30,12 @@ async def after_update(
     *,
     before: Todo | None = None,
     observer: TodoChangeObserver | None = None,
+    source: str | None = None,
 ) -> None:
     """수정 뒤 후속 작업 — Google Calendar push 예약, 임베딩 갱신 표시, 변경 알림(행동 학습).
 
     `before` 는 한 할 일(한 회차)을 고쳤을 때만 있다 — 시리즈 전체 수정은 알리지 않는다.
+    `source` 는 다른 모듈이 대신 고쳤을 때의 출처(AI 추천·제안 적용) — 관찰자에게 그대로 넘긴다.
     """
     if todo.calendar_push_status in ("pending", "pending_delete"):
         enqueue_push(user_id, todo.id)
@@ -42,4 +44,4 @@ async def after_update(
     if not todo.is_series_base:
         await queue_repo.enqueue("todo", todo.id, user_id)
     if before is not None and observer is not None:
-        await observer.changed(user_id, before, todo)
+        await observer.changed(user_id, before, todo, source)

@@ -46,7 +46,8 @@ def upgrade() -> None:
         ),
         sa.Column("model", postgresql.JSONB(), nullable=False),
         sa.Column("computed_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("stale", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        # 계산할 때 본 기록의 서명("건수:마지막 id") — 기록이 늘거나 지워지면 달라져 다시 계산한다.
+        sa.Column("signature", sa.String(80), nullable=False, server_default=sa.text("''")),
     )
     op.add_column(
         "ai_settings",

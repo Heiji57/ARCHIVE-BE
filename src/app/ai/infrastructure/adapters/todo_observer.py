@@ -17,11 +17,13 @@ class LearningTodoObserver:
         self._learning = learning
         self._user_repo = user_repo
 
-    async def changed(self, user_id: str, before: Todo, after: Todo) -> None:
+    async def changed(
+        self, user_id: str, before: Todo, after: Todo, source: str | None = None
+    ) -> None:
         if not await self._learning.enabled(user_id):
             return
         user = await self._user_repo.find_by_id(user_id)
         tz = ZoneInfo(user.timezone if user else "UTC")
         await self._learning.todo_changed(
-            user_id, to_snapshot(before), to_snapshot(after), event_context(tz)
+            user_id, to_snapshot(before), to_snapshot(after), event_context(tz), source
         )
