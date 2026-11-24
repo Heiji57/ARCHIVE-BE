@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from app.auth.infrastructure.storage.avatar_storage import avatar_url
+from app.auth.infrastructure.storage.avatar_storage import avatar_public_base, avatar_url
 from app.shared.infrastructure.config.settings import get_settings
 from app.user.domain.models.user import User
 
@@ -31,7 +31,7 @@ class UserResponse(BaseModel):
             region=user.region,
             timezone=user.timezone,
             display_name=user.display_name,
-            avatar_url=avatar_url(get_settings().auth.avatar_public_path, user.avatar_key),
+            avatar_url=avatar_url(avatar_public_base(get_settings()), user.avatar_key),
         )
 
 

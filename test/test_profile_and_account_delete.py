@@ -112,8 +112,8 @@ async def test_avatar_resized_to_256_webp_and_old_files_left_for_sweep(tmp_path)
     assert (tmp_path / first.avatar_key).exists() and users.user.avatar_key == second.avatar_key
     gone = await DeleteAvatarUseCase(users).execute("usr_p")  # type: ignore[arg-type]
     assert gone.avatar_key is None
-    assert set(storage.stale_keys(-1)) == {first.avatar_key, second.avatar_key}
-    assert storage.stale_keys(3600) == []  # 방금 만든 파일은 정리 대상이 아니다
+    assert set(await storage.stale_keys(-1)) == {first.avatar_key, second.avatar_key}
+    assert await storage.stale_keys(3600) == []  # 방금 만든 파일은 정리 대상이 아니다
 
 
 async def test_avatar_rejects_type_size_and_non_image(tmp_path):

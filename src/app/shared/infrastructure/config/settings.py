@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .ai import AIConfig
@@ -10,11 +11,12 @@ from .email import EmailConfig
 from .oauth import GitHubOAuthConfig, GoogleCalendarConfig, GoogleOAuthConfig
 from .redis import RedisConfig
 from .retrospective import RetrospectiveConfig
+from .storage import StorageConfig
 from .topic import TopicConfig
 
 
 class AppConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     app_env: str = "development"
     cors_origins: list[str] = Field(default_factory=list)
@@ -31,6 +33,15 @@ class AppConfig(BaseSettings):
     email: EmailConfig = Field(default_factory=EmailConfig)
     retrospective: RetrospectiveConfig = Field(default_factory=RetrospectiveConfig)
     topic: TopicConfig = Field(default_factory=TopicConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+
+    @model_validator(mode="after")
+    def _production_needs_object_storage(self) -> Self:
+        # 운영 compose 는 컨테이너마다 볼륨이 없다 — 로컬 파일이면 워커가 만든 zip 을 API 가
+        # 못 보고 재배포 때 사진이 사라진다. 조용히 깨지지 않게 시작할 때 막는다.
+        if self.is_production and self.storage.backend != "s3":
+            raise ValueError("APP_ENV=production needs STORAGE_BACKEND=s3")
+        return self
 
     @property
     def is_production(self) -> bool:

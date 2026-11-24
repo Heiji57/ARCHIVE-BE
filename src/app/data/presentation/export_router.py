@@ -4,12 +4,12 @@ from datetime import UTC, datetime
 
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 
+from app.data.application.ports import ExportStorage
 from app.data.application.use_cases.exports import GetExportUseCase, RequestExportUseCase
 from app.data.domain.exceptions.exceptions import ExportNotFoundException
 from app.data.domain.models.export import EXPORT_URL_TTL, ExportJob
-from app.data.infrastructure.export.storage import LocalExportStorage
 from app.data.presentation.requests.requests import RequestExportRequest
 from app.data.presentation.responses.responses import ExportCreatedResponse, ExportResponse
 from app.shared.domain.context.user_context import UserContext
@@ -18,7 +18,6 @@ from app.shared.infrastructure.auth.jwt import (
     decode_export_download_token,
     get_current_user,
 )
-from app.shared.infrastructure.config.settings import get_settings
 from app.shared.presentation.schemas.response import ApiResponse
 
 router = APIRouter(prefix="/exports", tags=["data"], route_class=DishkaRoute)
@@ -76,17 +75,21 @@ async def get_export(
 async def download_export(
     export_id: str,
     use_case: FromDishka[GetExportUseCase],
+    storage: FromDishka[ExportStorage],
     token: str = Query(...),
-) -> FileResponse:
-    """서명 URL(24시간) — 로그인 헤더 없이 브라우저가 바로 받는다."""
+) -> Response:
+    """서명 URL(24시간) — 로그인 헤더 없이 브라우저가 바로 받는다.
+
+    객체 저장소면 5분짜리 저장소 서명 URL 로 307, 로컬이면 파일을 직접 보낸다.
+    """
     if decode_export_download_token(token) != export_id:
         raise ExportNotFoundException()
     job = await use_case.execute_by_id(export_id, datetime.now(UTC))
-    path = LocalExportStorage(get_settings().auth.export_dir).path(job.file_key or "")
-    if not job.file_key or not path.exists():
+    filename = f"archive-export-{job.created_at.date().isoformat()}.zip"
+    found = await storage.locate(job.file_key, filename) if job.file_key else None
+    if found is None:
         raise ExportNotFoundException()
-    return FileResponse(
-        path,
-        media_type="application/zip",
-        filename=f"archive-export-{job.created_at.date().isoformat()}.zip",
-    )
+    if found.url is not None:
+        return RedirectResponse(found.url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+    assert found.path is not None
+    return FileResponse(found.path, media_type="application/zip", filename=filename)

@@ -7,7 +7,6 @@
   않는 프로필 사진 파일도 정리한다.
 """
 
-import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,8 +22,8 @@ from app.auth.infrastructure.external.account_deletion import (
     REVOKE_TOKENS_KEY,
     RedisDeletedAccountMarker,
 )
-from app.auth.infrastructure.storage.avatar_storage import LocalAvatarStorage
-from app.data.infrastructure.export.storage import LocalExportStorage
+from app.auth.infrastructure.storage.avatar_storage import make_avatar_storage
+from app.data.infrastructure.export.storage import make_export_storage
 from app.data.infrastructure.persistence.repositories.export_repo import ExportRepository
 from app.shared.infrastructure.config.settings import get_settings
 from app.user.infrastructure.persistence.account_purge import purge_unlinked_user_data
@@ -86,7 +85,7 @@ async def finish_account_deletion_task(
         await FinishAccountDeletionUseCase(
             SessionService(AuthTokenCache(redis, settings.auth), settings.auth),
             RedisDeletedAccountMarker(redis, settings.auth.access_token_expire_minutes * 60),
-            LocalAvatarStorage(settings.auth.avatar_dir),
+            make_avatar_storage(settings),
         ).execute(user_id, avatar_key)
     finally:
         await redis.aclose()
@@ -130,8 +129,8 @@ async def revoke_account_tokens_task(self: Any, ref: str) -> None:
 @celery_app.task(name="worker.purge_deleted_accounts")
 async def purge_deleted_accounts_task() -> None:
     settings = get_settings()
-    storage = LocalAvatarStorage(settings.auth.avatar_dir)
-    exports = LocalExportStorage(settings.auth.export_dir)
+    storage = make_avatar_storage(settings)
+    exports = make_export_storage(settings)
     before = datetime.now(UTC) - ACCOUNT_RETENTION
     factory = get_worker_session_factory()
     async with factory.begin() as session:
@@ -143,7 +142,7 @@ async def purge_deleted_accounts_task() -> None:
                 await purge_unlinked_user_data(session, user.id)
                 await UserRepository(session).purge(user.id)
             for key in export_files:
-                exports.remove(key)
+                await exports.remove(key)
             if user.avatar_key:
                 await storage.remove(user.avatar_key)
             _log.info("account.purged", user_id=user.id)
@@ -154,6 +153,6 @@ async def purge_deleted_accounts_task() -> None:
     # 아무도 가리키지 않는 사진 파일(바꾼·지운 사진의 옛 파일) 정리.
     async with factory.begin() as session:
         referenced = await UserRepository(session).avatar_keys()
-    for key in await asyncio.to_thread(storage.stale_keys, _ORPHAN_AVATAR_AGE_SECONDS):
+    for key in await storage.stale_keys(_ORPHAN_AVATAR_AGE_SECONDS):
         if key not in referenced:
             await storage.remove(key)

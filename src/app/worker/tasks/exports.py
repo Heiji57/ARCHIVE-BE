@@ -7,8 +7,10 @@
 """
 
 import json
+import tempfile
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -16,7 +18,7 @@ from redis.asyncio import Redis
 
 from app.data.domain.models.export import EXPORT_FILE_RETENTION
 from app.data.infrastructure.export.builder import build_export
-from app.data.infrastructure.export.storage import LocalExportStorage
+from app.data.infrastructure.export.storage import make_export_storage
 from app.data.infrastructure.persistence.repositories.export_repo import ExportRepository
 from app.notification.application.services.notifier import (
     STREAM_CHANNEL,
@@ -52,7 +54,7 @@ _VISIBILITY_RETRIES = 5
 @celery_app.task(name="worker.build_export", bind=True, max_retries=_VISIBILITY_RETRIES)
 async def build_export_task(self: Any, export_id: str) -> None:
     settings = get_settings()
-    storage = LocalExportStorage(settings.auth.export_dir)
+    storage = make_export_storage(settings)
     factory = get_worker_session_factory()
     async with factory.begin() as session:
         job = await ExportRepository(session).get(export_id)
@@ -67,13 +69,15 @@ async def build_export_task(self: Any, export_id: str) -> None:
     structlog.contextvars.bind_contextvars(user_id=job.user_id)
     key = f"{job.id}.zip"
     try:
-        async with factory.begin() as session:
-            await build_export(session, job, storage.prepare(key))
+        # 임시 디렉토리에 다 만든 뒤 저장소로 넘긴다 — 반쯤 만든 파일이 저장소에 보이지 않게.
+        with tempfile.TemporaryDirectory(prefix="export-") as tmp:
+            target = Path(tmp) / key
+            async with factory.begin() as session:
+                await build_export(session, job, target)
+            await storage.save(key, target)
     except Exception:
-        # 태스크 최상위 경계 — 반쯤 만든 파일을 지우고 failed 로 닫는다
-        # (pending 으로 남으면 새 요청을 막는다).
+        # 태스크 최상위 경계 — failed 로 닫는다(pending 으로 남으면 새 요청을 막는다).
         _log.exception("export.build_failed", export_id=export_id)
-        storage.remove(key)
         async with factory.begin() as session:
             await ExportRepository(session).save(replace(job, status="failed"))
         return
@@ -122,10 +126,10 @@ async def _notify_ready(user_id: str, export_id: str) -> None:
 
 @celery_app.task(name="worker.purge_exports")
 async def purge_exports_task() -> None:
-    storage = LocalExportStorage(get_settings().auth.export_dir)
+    storage = make_export_storage(get_settings())
     async with get_worker_session_factory().begin() as session:
         repo = ExportRepository(session)
         for job in await repo.find_files_expired(datetime.now(UTC)):
             if job.file_key:
-                storage.remove(job.file_key)
+                await storage.remove(job.file_key)
             await repo.save(replace(job, file_key=None))

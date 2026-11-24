@@ -123,6 +123,7 @@ from app.shared.domain.exceptions.external import (
     AIServiceUnavailableException,
     CacheUnavailableException,
     EmailDeliveryFailedException,
+    StorageUnavailableException,
 )
 from app.todo.domain.exceptions.exceptions import (
     TagNotFoundException,
@@ -278,6 +279,7 @@ _STATUS_MAP: dict[str, int] = {
     # ── 외부 연동 공통 (shared/domain/exceptions/external.py) ────────────────
     EmailDeliveryFailedException.code: 503,
     CacheUnavailableException.code: 503,
+    StorageUnavailableException.code: 503,  # 새 엔드포인트(사진·내보내기)에서만 — v1 되돌림 없음
     # AI 예외는 주로 워커에서만 발생 — HTTP 로 새는 경로(토픽 매칭 등)는 degrade 처리하므로
     # api.yaml 엔드포인트 계약에는 없다. 새어 나가더라도 올바른 상태로 응답하도록 등록만 한다.
     AIServiceException.code: 502,
