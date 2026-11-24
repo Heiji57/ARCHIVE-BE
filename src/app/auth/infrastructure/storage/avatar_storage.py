@@ -2,7 +2,7 @@
 
 - `local`(개발·테스트): `AVATAR_DIR`(기본 static/avatars), `/static` 마운트로 바로 서빙.
 - `s3`(운영, Cloudflare R2): 공개 사진 버킷. 자체 도메인(`STORAGE_AVATAR_PUBLIC_URL`)으로 서빙하고
-  키가 바뀌지 않는 내용이라 오래 캐시한다(immutable) — 대부분 CDN 캐시에서 응답.
+  1시간 캐시한다 — 대부분 CDN 캐시에서 응답하면서, 지운 사진이 오래 남지 않게.
 
 어느 쪽이든 `make_avatar_storage(settings)` 로 고른다(API DI·워커 같은 곳).
 """
@@ -25,7 +25,9 @@ AVATAR_SIZE = 256
 _FORMATS = {"PNG", "JPEG", "WEBP"}
 # 압축 폭탄 방지 — 2MB 안에 큰 픽셀 수를 담은 파일을 펼치지 않는다(16MP ≈ RGBA 64MB).
 _MAX_PIXELS = 16_000_000
-_CACHE_CONTROL = "public, max-age=31536000, immutable"
+# 짧게 — CDN 엣지 캐시는 객체를 지워도 남는다. 계정 삭제·사진 바꾸기 뒤 옛 사진이 길어야 1시간만
+# 보이게(키가 임의 값이라 내용은 안 바뀌지만 immutable·장기 캐시는 '바로 내린다'를 깬다).
+_CACHE_CONTROL = "public, max-age=3600"
 
 
 def prepare_avatar(raw: bytes) -> bytes:
@@ -70,7 +72,10 @@ class LocalAvatarStorage:
             raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
 
     async def stale_keys(self, older_than_seconds: float) -> list[str]:
-        return await asyncio.to_thread(self._stale_keys, time.time() - older_than_seconds)
+        try:
+            return await asyncio.to_thread(self._stale_keys, time.time() - older_than_seconds)
+        except OSError as e:
+            raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
 
     def _stale_keys(self, cutoff: float) -> list[str]:
         if not self._dir.is_dir():
@@ -112,7 +117,7 @@ class S3AvatarStorage:
 
 def make_avatar_storage(settings: AppConfig) -> SweepableAvatarStorage:
     if settings.storage.backend == "s3":
-        return S3AvatarStorage(s3.get_s3_client(), settings.storage.avatar_bucket)
+        return S3AvatarStorage(s3.get_s3_client(settings.storage), settings.storage.avatar_bucket)
     return LocalAvatarStorage(settings.auth.avatar_dir)
 
 

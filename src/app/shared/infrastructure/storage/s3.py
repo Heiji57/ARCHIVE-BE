@@ -1,7 +1,8 @@
 """S3 호환 객체 저장소 클라이언트 — 운영은 Cloudflare R2(`STORAGE_BACKEND=s3`).
 
 boto3 는 동기 라이브러리라 `asyncio.to_thread` 로 부른다. 클라이언트는 스레드 안전해서 프로세스에
-하나만 만든다(`get_s3_client`). 라이브러리 예외는 여기서 `StorageUnavailableException` 으로 바꾼다.
+접속 정보마다 하나만 만든다(`get_s3_client`). 라이브러리 예외는 여기서
+`StorageUnavailableException` 으로 바꾼다.
 """
 
 import asyncio
@@ -15,19 +16,37 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from app.shared.domain.exceptions.external import StorageUnavailableException
-from app.shared.infrastructure.config.settings import get_settings
 from app.shared.infrastructure.config.storage import StorageConfig
 
 _NOT_FOUND = {"404", "NoSuchKey", "NotFound"}
 
 
 def make_s3_client(cfg: StorageConfig) -> Any:
+    """새 클라이언트(테스트용) — 앱 코드는 `get_s3_client` 로 같이 쓴다."""
+    return _build(*_connection(cfg))
+
+
+def get_s3_client(cfg: StorageConfig) -> Any:
+    """넘긴 설정의 클라이언트 — 같은 접속 정보면 프로세스에서 하나를 같이 쓴다."""
+    return _cached(*_connection(cfg))
+
+
+def _connection(cfg: StorageConfig) -> tuple[str, str, str, str]:
+    return (
+        cfg.endpoint_url,
+        cfg.region,
+        cfg.access_key_id,
+        cfg.secret_access_key.get_secret_value(),
+    )
+
+
+def _build(endpoint_url: str, region: str, access_key_id: str, secret: str) -> Any:
     return boto3.session.Session().client(
         "s3",
-        endpoint_url=cfg.endpoint_url or None,
-        region_name=cfg.region,
-        aws_access_key_id=cfg.access_key_id,
-        aws_secret_access_key=cfg.secret_access_key.get_secret_value(),
+        endpoint_url=endpoint_url or None,
+        region_name=region,
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret,
         config=Config(
             signature_version="s3v4",
             s3={"addressing_style": "path"},
@@ -41,9 +60,7 @@ def make_s3_client(cfg: StorageConfig) -> Any:
     )
 
 
-@lru_cache(maxsize=1)
-def get_s3_client() -> Any:
-    return make_s3_client(get_settings().storage)
+_cached = lru_cache(maxsize=4)(_build)
 
 
 def _translate(e: Exception) -> StorageUnavailableException:

@@ -11,15 +11,21 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import ValidationError
 
 from app.auth.infrastructure.storage.avatar_storage import (
+    LocalAvatarStorage,
     S3AvatarStorage,
     avatar_public_base,
     avatar_url,
+    make_avatar_storage,
 )
 from app.data.application.ports import ExportFile
 from app.data.application.use_cases.exports import ExportDownload
 from app.data.domain.exceptions.exceptions import ExportNotFoundException
 from app.data.domain.models.export import ExportJob
-from app.data.infrastructure.export.storage import LocalExportStorage, S3ExportStorage
+from app.data.infrastructure.export.storage import (
+    LocalExportStorage,
+    S3ExportStorage,
+    make_export_storage,
+)
 from app.data.presentation.export_router import download_export
 from app.shared.domain.exceptions.external import StorageUnavailableException
 from app.shared.infrastructure.auth.jwt import create_export_download_token
@@ -70,6 +76,40 @@ def test_avatar_url_follows_backend() -> None:
     assert avatar_url(avatar_public_base(s3), None) is None
 
 
+def test_factories_build_client_from_given_settings() -> None:
+    # 전역 설정(로컬)이 아니라 넘긴 설정의 접속 정보로 — 같은 정보면 클라이언트 하나를 같이 쓴다.
+    settings = AppConfig(storage=StorageConfig(**_S3))  # type: ignore[arg-type]
+    exports, avatars = make_export_storage(settings), make_avatar_storage(settings)
+    assert isinstance(exports, S3ExportStorage) and isinstance(avatars, S3AvatarStorage)
+    assert exports._client is avatars._client
+    assert exports._client.meta.endpoint_url == "https://acct.r2.cloudflarestorage.com"
+    other = AppConfig(
+        storage=StorageConfig(**{**_S3, "endpoint_url": "https://other.example"})  # type: ignore[arg-type]
+    )
+    assert make_export_storage(other)._client.meta.endpoint_url == "https://other.example"  # type: ignore[attr-defined]
+
+
+async def test_local_listing_errors_become_storage_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(self: Path) -> bool:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "is_dir", broken)
+    with pytest.raises(StorageUnavailableException):
+        await LocalAvatarStorage(str(tmp_path)).stale_keys(0)
+    monkeypatch.setattr(Path, "is_file", broken)
+    with pytest.raises(StorageUnavailableException):
+        await LocalExportStorage(str(tmp_path)).locate("exp_1.zip", "x.zip")
+
+
+def test_download_route_documents_redirect() -> None:
+    from app.main import app
+
+    responses = app.openapi()["paths"]["/api/v1/exports/{export_id}/download"]["get"]["responses"]
+    assert "application/zip" in responses["200"]["content"] and "307" in responses
+
+
 # ── 프로필 사진(S3) ───────────────────────────────────────────────────────
 
 
@@ -84,7 +124,7 @@ async def test_s3_avatar_put_is_public_cacheable_webp(client: Any) -> None:
                 "Key": "abc.webp",
                 "Body": b"img",
                 "ContentType": "image/webp",
-                "CacheControl": "public, max-age=31536000, immutable",
+                "CacheControl": "public, max-age=3600",  # 지운 사진이 CDN 에 오래 남지 않게
             },
         )
         stub.add_response("delete_object", {}, {"Bucket": "avatars", "Key": "abc.webp"})

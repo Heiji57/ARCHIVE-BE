@@ -139,14 +139,17 @@ async def _notify_ready(user_id: str, export_id: str) -> None:
 @celery_app.task(name="worker.purge_exports")
 async def purge_exports_task() -> None:
     storage = make_export_storage(get_settings())
-    async with get_worker_session_factory().begin() as session:
-        repo = ExportRepository(session)
-        for job in await repo.find_files_expired(datetime.now(UTC)):
-            if job.file_key:
-                try:
-                    await storage.remove(job.file_key)
-                except StorageUnavailableException:
-                    # file_key 를 남겨 내일 다시 — 한 파일 때문에 나머지 정리가 멈추지 않게.
-                    _log.warning("export.purge_failed", export_id=job.id, exc_info=True)
-                    continue
-            await repo.save(replace(job, file_key=None))
+    factory = get_worker_session_factory()
+    async with factory.begin() as session:
+        expired = await ExportRepository(session).find_files_expired(datetime.now(UTC))
+    # 파일 삭제(네트워크)는 트랜잭션 밖에서 — 저장소가 느려도 DB 연결·행 잠금을 오래 쥐지 않게.
+    for job in expired:
+        if job.file_key:
+            try:
+                await storage.remove(job.file_key)
+            except StorageUnavailableException:
+                # file_key 를 남겨 내일 다시 — 한 파일 때문에 나머지 정리가 멈추지 않게.
+                _log.warning("export.purge_failed", export_id=job.id, exc_info=True)
+                continue
+        async with factory.begin() as session:
+            await ExportRepository(session).save(replace(job, file_key=None))

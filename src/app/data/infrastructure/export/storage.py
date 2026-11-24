@@ -55,7 +55,11 @@ class LocalExportStorage:
 
     async def locate(self, key: str, filename: str) -> ExportFile | None:
         path = self._path(key)
-        return ExportFile(path=path) if await asyncio.to_thread(path.is_file) else None
+        try:
+            found = await asyncio.to_thread(path.is_file)
+        except OSError as e:
+            raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
+        return ExportFile(path=path) if found else None
 
     def _path(self, key: str) -> Path:
         return self._dir / Path(key).name  # 경로 탈출 방지
@@ -98,5 +102,5 @@ class S3ExportStorage:
 
 def make_export_storage(settings: AppConfig) -> ExportStorage:
     if settings.storage.backend == "s3":
-        return S3ExportStorage(s3.get_s3_client(), settings.storage.export_bucket)
+        return S3ExportStorage(s3.get_s3_client(settings.storage), settings.storage.export_bucket)
     return LocalExportStorage(settings.auth.export_dir)

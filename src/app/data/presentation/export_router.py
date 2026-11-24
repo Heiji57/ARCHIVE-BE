@@ -71,7 +71,14 @@ async def get_export(
     return ApiResponse.ok(_view(await use_case.execute(current_user.id, export_id)))
 
 
-@router.get("/{export_id}/download", response_class=FileResponse)
+@router.get(
+    "/{export_id}/download",
+    response_class=Response,
+    responses={
+        200: {"description": "zip (로컬 저장)", "content": {"application/zip": {}}},
+        307: {"description": "객체 저장소의 서명 URL(5분)로 이동 — `Location`"},
+    },
+)
 async def download_export(
     export_id: str,
     use_case: FromDishka[GetExportUseCase],
