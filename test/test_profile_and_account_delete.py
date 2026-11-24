@@ -34,6 +34,7 @@ from app.auth.domain.models.value_objects import OAuthProvider, TokenType
 from app.auth.infrastructure.storage.avatar_storage import LocalAvatarStorage
 from app.auth.presentation.requests.requests import UpdateProfileRequest
 from app.shared.domain.context.user_context import UserContext
+from app.shared.domain.exceptions.external import StorageUnavailableException
 from app.shared.infrastructure.auth.jwt import _decode, create_access_token
 from app.user.domain.models.user import User
 from app.user.domain.models.value_objects import Email
@@ -225,6 +226,26 @@ async def test_delete_account_db_step_then_post_commit_lockout():
     )
     assert sessions.revoked == ["usr_p"] and marker.marked == ["usr_p"]
     assert storage.removed == ["old.webp"]
+
+
+async def test_finish_deletion_survives_avatar_storage_failure():
+    # 사진 삭제 실패가 예외로 새면 워커가 외부 토큰 철회를 넘기지 못한다 — 기록만 하고 끝낸다.
+    class _Down(_Storage):
+        async def remove(self, key):
+            raise StorageUnavailableException("r2 timeout")
+
+    sessions, marker = _Sessions(), _Marker()
+    await FinishAccountDeletionUseCase(sessions, marker, _Down()).execute(  # type: ignore[arg-type]
+        "usr_p", "old.webp"
+    )
+    assert sessions.revoked == ["usr_p"] and marker.marked == ["usr_p"]
+
+
+async def test_local_avatar_remove_translates_os_errors(tmp_path):
+    (tmp_path / "dir.webp").mkdir()  # 디렉토리는 unlink 가 OSError
+    with pytest.raises(StorageUnavailableException):
+        await LocalAvatarStorage(str(tmp_path)).remove("dir.webp")
+    await LocalAvatarStorage(str(tmp_path)).remove("missing.webp")  # 없는 것은 오류 아님
 
 
 async def test_refresh_refuses_deleted_account():

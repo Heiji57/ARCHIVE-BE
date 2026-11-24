@@ -10,6 +10,7 @@
 """
 
 import asyncio
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -30,13 +31,27 @@ class LocalExportStorage:
 
     async def save(self, key: str, source: Path) -> None:
         try:
-            await asyncio.to_thread(self._dir.mkdir, parents=True, exist_ok=True)
-            await asyncio.to_thread(shutil.move, source, self._path(key))
+            await asyncio.to_thread(self._save, self._path(key), source)
         except OSError as e:
             raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
 
+    def _save(self, target: Path, source: Path) -> None:
+        # 다른 파일시스템이면 move 가 복사라 중간에 실패할 수 있다 — 같은 디렉토리의 임시 이름에
+        # 다 옮긴 뒤 이름만 바꿔(원자적), 반쯤 쓴 파일이 키 이름으로 남지 않게 한다.
+        self._dir.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(f".{target.name}.partial")
+        try:
+            shutil.move(source, partial)
+            os.replace(partial, target)
+        except OSError:
+            partial.unlink(missing_ok=True)
+            raise
+
     async def remove(self, key: str) -> None:
-        await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
+        try:
+            await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
+        except OSError as e:
+            raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
 
     async def locate(self, key: str, filename: str) -> ExportFile | None:
         path = self._path(key)

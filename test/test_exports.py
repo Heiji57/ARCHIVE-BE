@@ -4,6 +4,7 @@ import json
 import os
 import zipfile
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -92,6 +93,14 @@ def _ready(job: ExportJob, now: datetime) -> ExportJob:
     )
 
 
+def test_download_date_is_users_local_day():
+    from app.data.application.use_cases.exports import _local_date
+
+    at = datetime(2026, 11, 24, 23, 30, tzinfo=UTC)  # 서울 11-25 08:30
+    assert _local_date(at, "Asia/Seoul").isoformat() == "2026-11-25"
+    assert _local_date(at, "Not/AZone").isoformat() == "2026-11-24"  # 잘못된 tz 는 UTC
+
+
 async def test_get_is_owner_only_and_410_after_seven_days(factory):
     now = datetime.now(UTC)
     async with factory.begin() as s:
@@ -103,7 +112,10 @@ async def test_get_is_owner_only_and_410_after_seven_days(factory):
             await get.execute(_OTHER, job.id, now)
         with pytest.raises(ExportExpiredException):
             await get.execute(_U, job.id, now + timedelta(days=7, seconds=1))
-        assert (await get.execute_by_id(job.id, now)).id == job.id
+        download = await get.execute_by_id(job.id, now)
+        assert download.job.id == job.id
+        # 파일 이름 날짜는 사용자 tz(Asia/Seoul) 기준
+        assert download.created_on == job.created_at.astimezone(ZoneInfo("Asia/Seoul")).date()
         # 지운 계정의 내려받기 링크는 막힌다
         await UserRepository(s).soft_delete(_U)
         with pytest.raises(ExportNotFoundException):

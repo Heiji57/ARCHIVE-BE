@@ -84,8 +84,9 @@ async def download_export(
     """
     if decode_export_download_token(token) != export_id:
         raise ExportNotFoundException()
-    job = await use_case.execute_by_id(export_id, datetime.now(UTC))
-    filename = f"archive-export-{job.created_at.date().isoformat()}.zip"
+    download = await use_case.execute_by_id(export_id, datetime.now(UTC))
+    job = download.job
+    filename = f"archive-export-{download.created_on.isoformat()}.zip"
     found = await storage.locate(job.file_key, filename) if job.file_key else None
     if found is None:
         raise ExportNotFoundException()

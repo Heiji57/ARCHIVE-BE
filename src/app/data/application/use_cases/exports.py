@@ -1,7 +1,8 @@
 """내보내기(12 §2) — 요청·상태 조회. 파일 만들기는 worker.build_export."""
 
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.data.domain.exceptions.exceptions import (
     ExportDailyLimitException,
@@ -58,6 +59,12 @@ class RequestExportUseCase:
         return job
 
 
+@dataclass(frozen=True)
+class ExportDownload:
+    job: ExportJob
+    created_on: date  # 요청한 날 — 사용자 tz 기준(파일 이름에 쓴다)
+
+
 class GetExportUseCase:
     def __init__(self, repo: IExportRepository, user_repo: IUserRepository) -> None:
         self._repo = repo
@@ -66,12 +73,20 @@ class GetExportUseCase:
     async def execute(self, user_id: str, export_id: str, now: datetime | None = None) -> ExportJob:
         return _check(await self._repo.get(export_id, user_id), now)
 
-    async def execute_by_id(self, export_id: str, now: datetime | None = None) -> ExportJob:
+    async def execute_by_id(self, export_id: str, now: datetime | None = None) -> ExportDownload:
         """서명 토큰으로 이미 소유가 확인된 내려받기 경로. 지운 계정의 링크는 막는다."""
         job = _check(await self._repo.get(export_id), now)
-        if await self._user_repo.find_by_id(job.user_id) is None:
+        user = await self._user_repo.find_by_id(job.user_id)
+        if user is None:
             raise ExportNotFoundException()
-        return job
+        return ExportDownload(job, _local_date(job.created_at, user.timezone))
+
+
+def _local_date(at: datetime, tz: str) -> date:
+    try:
+        return at.astimezone(ZoneInfo(tz)).date()
+    except (ZoneInfoNotFoundError, ValueError):
+        return at.astimezone(UTC).date()
 
 
 def _check(job: ExportJob | None, now: datetime | None) -> ExportJob:

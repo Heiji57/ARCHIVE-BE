@@ -16,6 +16,7 @@ from typing import Any
 import structlog
 from redis.asyncio import Redis
 
+from app.data.application.ports import ExportStorage
 from app.data.domain.models.export import EXPORT_FILE_RETENTION
 from app.data.infrastructure.export.builder import build_export
 from app.data.infrastructure.export.storage import make_export_storage
@@ -33,6 +34,7 @@ from app.notification.infrastructure.persistence.repositories.notification_repo 
 from app.settings.infrastructure.persistence.repositories.user_settings_repo import (
     UserSettingsRepository,
 )
+from app.shared.domain.exceptions.external import StorageUnavailableException
 from app.shared.infrastructure.config.settings import get_settings
 from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
 from app.worker.celery_app import celery_app
@@ -75,24 +77,34 @@ async def build_export_task(self: Any, export_id: str) -> None:
             async with factory.begin() as session:
                 await build_export(session, job, target)
             await storage.save(key, target)
+        now = datetime.now(UTC)
+        ready = replace(
+            job, status="ready", file_key=key, ready_at=now, expires_at=now + EXPORT_FILE_RETENTION
+        )
+        async with factory.begin() as session:
+            await ExportRepository(session).save(ready)
     except Exception:
-        # 태스크 최상위 경계 — failed 로 닫는다(pending 으로 남으면 새 요청을 막는다).
+        # 태스크 최상위 경계 — failed 로 닫는다(pending 으로 남으면 새 요청을 막는다). 올린 뒤
+        # ready 저장이 실패했으면 파일을 가리키는 행이 없어 정리되지 않으니 여기서 지운다.
         _log.exception("export.build_failed", export_id=export_id)
+        await _discard(storage, key)
         async with factory.begin() as session:
             await ExportRepository(session).save(replace(job, status="failed"))
         return
 
-    now = datetime.now(UTC)
-    ready = replace(
-        job, status="ready", file_key=key, ready_at=now, expires_at=now + EXPORT_FILE_RETENTION
-    )
-    async with factory.begin() as session:
-        await ExportRepository(session).save(ready)
     try:
         await _notify_ready(job.user_id, job.id)
     except Exception:
         # 알림 실패가 이미 끝난 내보내기를 되돌리지 않게 — 기록만(FE 는 GET 으로 상태를 본다).
         _log.exception("export.notify_failed", export_id=export_id)
+
+
+async def _discard(storage: ExportStorage, key: str) -> None:
+    try:
+        await storage.remove(key)  # 올리기 전이면 없는 키 — 오류 아님
+    except StorageUnavailableException:
+        # 지우지 못한 파일은 가리키는 행이 없다 — 객체 저장소는 버킷 수명 규칙이 지운다.
+        _log.warning("export.discard_failed", key=key, exc_info=True)
 
 
 async def _notify_ready(user_id: str, export_id: str) -> None:
@@ -131,5 +143,10 @@ async def purge_exports_task() -> None:
         repo = ExportRepository(session)
         for job in await repo.find_files_expired(datetime.now(UTC)):
             if job.file_key:
-                await storage.remove(job.file_key)
+                try:
+                    await storage.remove(job.file_key)
+                except StorageUnavailableException:
+                    # file_key 를 남겨 내일 다시 — 한 파일 때문에 나머지 정리가 멈추지 않게.
+                    _log.warning("export.purge_failed", export_id=job.id, exc_info=True)
+                    continue
             await repo.save(replace(job, file_key=None))

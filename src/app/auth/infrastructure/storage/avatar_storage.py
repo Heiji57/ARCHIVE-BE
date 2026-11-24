@@ -64,7 +64,10 @@ class LocalAvatarStorage:
             raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
 
     async def remove(self, key: str) -> None:
-        await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
+        try:
+            await asyncio.to_thread(self._path(key).unlink, missing_ok=True)
+        except OSError as e:
+            raise StorageUnavailableException(f"{type(e).__name__}: {e}") from e
 
     async def stale_keys(self, older_than_seconds: float) -> list[str]:
         return await asyncio.to_thread(self._stale_keys, time.time() - older_than_seconds)

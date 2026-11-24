@@ -1,6 +1,6 @@
 """파일 저장소 — S3 호환(R2)은 botocore Stubber 로 요청 모양을, 로컬은 실제 파일로 본다."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -16,6 +16,7 @@ from app.auth.infrastructure.storage.avatar_storage import (
     avatar_url,
 )
 from app.data.application.ports import ExportFile
+from app.data.application.use_cases.exports import ExportDownload
 from app.data.domain.exceptions.exceptions import ExportNotFoundException
 from app.data.domain.models.export import ExportJob
 from app.data.infrastructure.export.storage import LocalExportStorage, S3ExportStorage
@@ -181,6 +182,24 @@ async def test_local_export_save_locate_remove(tmp_path: Path) -> None:
     assert await storage.locate("exp_1.zip", "x.zip") is None
 
 
+async def test_local_export_save_leaves_nothing_when_move_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import app.data.infrastructure.export.storage as mod
+
+    def broken_move(src: Path, dst: Path) -> None:
+        Path(dst).write_bytes(b"PK half")  # 다른 파일시스템 복사 도중 디스크가 참
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(mod.shutil, "move", broken_move)
+    built = tmp_path / "exp_1.zip"
+    built.write_bytes(b"PK zip")
+    storage = LocalExportStorage(str(tmp_path / "exports"))
+    with pytest.raises(StorageUnavailableException):
+        await storage.save("exp_1.zip", built)
+    assert list((tmp_path / "exports").iterdir()) == []  # 반쯤 쓴 파일이 남지 않는다
+
+
 # ── 내려받기 응답 ─────────────────────────────────────────────────────────
 
 
@@ -188,8 +207,8 @@ class _Jobs:
     def __init__(self, job: ExportJob) -> None:
         self.job = job
 
-    async def execute_by_id(self, export_id: str, now: datetime | None = None) -> ExportJob:
-        return self.job
+    async def execute_by_id(self, export_id: str, now: datetime | None = None) -> ExportDownload:
+        return ExportDownload(self.job, date(2026, 11, 25))  # 사용자 tz 날짜
 
 
 class _Storage:
@@ -226,7 +245,8 @@ async def test_download_redirects_to_object_storage(tmp_path: Path) -> None:
     resp = await _download(_job(), storage)
     assert isinstance(resp, RedirectResponse) and resp.status_code == 307
     assert resp.headers["location"] == "https://acct.r2.cloudflarestorage.com/exports/x?sig"
-    assert storage.asked == [("exp_1.zip", "archive-export-2026-11-24.zip")]
+    # 파일 이름은 created_at(UTC 11-24)이 아니라 사용자 tz 날짜
+    assert storage.asked == [("exp_1.zip", "archive-export-2026-11-25.zip")]
 
 
 async def test_download_sends_local_file_or_404(tmp_path: Path) -> None:
