@@ -52,7 +52,7 @@ from app.auth.infrastructure.oauth.registry import OAuthClientRegistry
 from app.auth.infrastructure.persistence.repositories.oauth_connection_repo import (
     OAuthConnectionRepository,
 )
-from app.auth.infrastructure.storage.avatar_storage import LocalAvatarStorage
+from app.auth.infrastructure.storage.avatar_storage import make_avatar_storage
 from app.calendars.domain.repositories.repository import ICalendarRepository
 from app.github.application.use_cases.get_commits_by_date import GetCommitsByDateUseCase
 from app.github.application.use_cases.get_connection_status import GetConnectionStatusUseCase
@@ -297,7 +297,7 @@ class AppProvider(Provider):
 
     @provide
     def avatar_storage(self, config: AppConfig) -> AvatarStorage:
-        return LocalAvatarStorage(config.auth.avatar_dir)
+        return make_avatar_storage(config)
 
     @provide
     def account_deletion_dispatcher(self, config: AppConfig) -> AccountDeletionDispatcher:

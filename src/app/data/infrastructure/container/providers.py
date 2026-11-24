@@ -1,11 +1,14 @@
 from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.data.application.ports import ExportStorage
 from app.data.application.use_cases.exports import GetExportUseCase, RequestExportUseCase
 from app.data.application.use_cases.trash import TrashUseCase
 from app.data.domain.repositories.repository import IExportRepository
+from app.data.infrastructure.export.storage import make_export_storage
 from app.data.infrastructure.persistence.repositories.export_repo import ExportRepository
 from app.retrospective.application.use_cases.entry_trash import EntryTrashUseCase
+from app.shared.infrastructure.config.settings import AppConfig
 from app.todo.application.use_cases.trash import TodoTrashUseCase
 
 
@@ -20,6 +23,10 @@ class DataProvider(Provider):
     @provide
     def export_repo(self, session: AsyncSession) -> IExportRepository:
         return ExportRepository(session)
+
+    @provide(scope=Scope.APP)
+    def export_storage(self, config: AppConfig) -> ExportStorage:
+        return make_export_storage(config)
 
     request_export = provide(RequestExportUseCase)
     get_export = provide(GetExportUseCase)

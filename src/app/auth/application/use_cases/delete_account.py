@@ -14,6 +14,8 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime
 
+import structlog
+
 from app.auth.application.ports import (
     AvatarStorage,
     DeletedAccount,
@@ -30,8 +32,11 @@ from app.google_calendar.domain.repositories.repository import (
     IGoogleCalendarConnectionRepository,
 )
 from app.shared.domain.context.user_context import UserContext
+from app.shared.domain.exceptions.external import StorageUnavailableException
 from app.user.domain.exceptions.exceptions import UserNotFoundException
 from app.user.domain.repositories.repository import IUserRepository
+
+_log = structlog.get_logger(__name__)
 
 REAUTH_WINDOW_SECONDS = 600
 
@@ -97,4 +102,9 @@ class FinishAccountDeletionUseCase:
         await self._marker.mark(user_id)
         await self._sessions.revoke_all(user_id)
         if avatar_key:
-            await self._storage.remove(avatar_key)
+            try:
+                await self._storage.remove(avatar_key)
+            except StorageUnavailableException:
+                # 사진 파일 하나 때문에 뒤따르는 외부 토큰 철회가 막히지 않게 — 키는 이미 비웠으니
+                # 아무도 안 가리키는 파일로 남고, 하루 한 번 고아 정리가 지운다.
+                _log.warning("account.avatar_remove_failed", user_id=user_id, exc_info=True)

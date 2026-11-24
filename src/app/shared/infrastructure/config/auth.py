@@ -29,8 +29,9 @@ class AuthConfig(BaseSettings):
     # Session security
     session_grace_window_seconds: float = 5.0  # 동시 refresh race 흡수 윈도
 
-    # Profile avatar — 로컬 저장 디렉토리와 공개 경로(`/static` 마운트 아래)
+    # STORAGE_BACKEND=local 일 때만 — 프로필 사진 디렉토리와 공개 경로(`/static` 마운트 아래).
+    # 운영(s3)은 StorageConfig(config/storage.py).
     avatar_dir: str = "static/avatars"
     avatar_public_path: str = "/static/avatars"
-    # 내보내기 zip — 공개 경로(/static)가 아닌 비공개 디렉토리
+    # 내보내기 zip — 공개 경로(/static)가 아닌 비공개 디렉토리(STORAGE_BACKEND=local)
     export_dir: str = "exports"

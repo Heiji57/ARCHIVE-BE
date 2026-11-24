@@ -7,7 +7,6 @@
   않는 프로필 사진 파일도 정리한다.
 """
 
-import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,9 +22,10 @@ from app.auth.infrastructure.external.account_deletion import (
     REVOKE_TOKENS_KEY,
     RedisDeletedAccountMarker,
 )
-from app.auth.infrastructure.storage.avatar_storage import LocalAvatarStorage
-from app.data.infrastructure.export.storage import LocalExportStorage
+from app.auth.infrastructure.storage.avatar_storage import make_avatar_storage
+from app.data.infrastructure.export.storage import make_export_storage
 from app.data.infrastructure.persistence.repositories.export_repo import ExportRepository
+from app.shared.domain.exceptions.external import StorageUnavailableException
 from app.shared.infrastructure.config.settings import get_settings
 from app.user.infrastructure.persistence.account_purge import purge_unlinked_user_data
 from app.user.infrastructure.persistence.repositories.user_repo import UserRepository
@@ -86,7 +86,7 @@ async def finish_account_deletion_task(
         await FinishAccountDeletionUseCase(
             SessionService(AuthTokenCache(redis, settings.auth), settings.auth),
             RedisDeletedAccountMarker(redis, settings.auth.access_token_expire_minutes * 60),
-            LocalAvatarStorage(settings.auth.avatar_dir),
+            make_avatar_storage(settings),
         ).execute(user_id, avatar_key)
     finally:
         await redis.aclose()
@@ -130,22 +130,25 @@ async def revoke_account_tokens_task(self: Any, ref: str) -> None:
 @celery_app.task(name="worker.purge_deleted_accounts")
 async def purge_deleted_accounts_task() -> None:
     settings = get_settings()
-    storage = LocalAvatarStorage(settings.auth.avatar_dir)
-    exports = LocalExportStorage(settings.auth.export_dir)
+    storage = make_avatar_storage(settings)
+    exports = make_export_storage(settings)
     before = datetime.now(UTC) - ACCOUNT_RETENTION
     factory = get_worker_session_factory()
     async with factory.begin() as session:
         users = await UserRepository(session).find_deleted_before(before)
     for user in users:
         try:
+            # 파일 먼저 — 행을 지운 뒤 파일 삭제가 실패하면 가리키는 행이 없어 영영 남는다.
+            # 파일 삭제가 실패하면 계정은 그대로 두고 내일 다시 한다(지우기는 몇 번 해도 같다).
             async with factory.begin() as session:
                 export_files = await ExportRepository(session).file_keys_of(user.id)
-                await purge_unlinked_user_data(session, user.id)
-                await UserRepository(session).purge(user.id)
             for key in export_files:
-                exports.remove(key)
+                await exports.remove(key)
             if user.avatar_key:
                 await storage.remove(user.avatar_key)
+            async with factory.begin() as session:
+                await purge_unlinked_user_data(session, user.id)
+                await UserRepository(session).purge(user.id)
             _log.info("account.purged", user_id=user.id)
         except Exception:
             # 계정별 격리 경계 — 한 계정의 실패가 다른 계정 정리를 막지 않게.
@@ -154,6 +157,16 @@ async def purge_deleted_accounts_task() -> None:
     # 아무도 가리키지 않는 사진 파일(바꾼·지운 사진의 옛 파일) 정리.
     async with factory.begin() as session:
         referenced = await UserRepository(session).avatar_keys()
-    for key in await asyncio.to_thread(storage.stale_keys, _ORPHAN_AVATAR_AGE_SECONDS):
-        if key not in referenced:
+    try:
+        stale = await storage.stale_keys(_ORPHAN_AVATAR_AGE_SECONDS)
+    except StorageUnavailableException:
+        _log.warning("account.orphan_avatar_list_failed", exc_info=True)
+        return
+    for key in stale:
+        if key in referenced:
+            continue
+        try:
             await storage.remove(key)
+        except StorageUnavailableException:
+            # 파일별 격리 — 한 파일 때문에 나머지 정리가 멈추지 않게(남은 것은 내일 다시).
+            _log.warning("account.orphan_avatar_remove_failed", key=key, exc_info=True)

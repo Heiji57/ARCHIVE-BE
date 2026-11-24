@@ -1,6 +1,6 @@
-"""여러 모듈이 공유하는 외부 연동(메일·캐시·AI) 실패 예외.
+"""여러 모듈이 공유하는 외부 연동(메일·캐시·파일 저장소·AI) 실패 예외.
 
-외부 라이브러리 예외(aiosmtplib, redis, google-genai, httpx)는 infrastructure 경계에서
+외부 라이브러리 예외(aiosmtplib, redis, boto3, google-genai, httpx)는 infrastructure 경계에서
 이 예외들로 번역된다 — 상위 레이어는 라이브러리를 몰라도 실패 종류별로 대응할 수 있다.
 """
 from app.shared.domain.exceptions.base import BaseAppException
@@ -14,6 +14,11 @@ class EmailDeliveryFailedException(BaseAppException):
 class CacheUnavailableException(BaseAppException):
     """Redis 연결·타임아웃 등 캐시 계층 장애. 보안 기능(로그인 제한 등)은 fail-closed."""
     code = "CACHE_UNAVAILABLE"
+
+
+class StorageUnavailableException(BaseAppException):
+    """파일 저장소(로컬 디스크·S3 호환 객체 저장소) 연결·권한·타임아웃 장애."""
+    code = "STORAGE_UNAVAILABLE"
 
 
 # ── AI (Gemini) ────────────────────────────────────────────────────────────────

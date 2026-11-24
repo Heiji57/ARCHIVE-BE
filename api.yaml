@@ -492,7 +492,9 @@ paths:
     post:
       tags: [auth]
       summary: 프로필 사진 올리기
-      description: png/jpeg/webp, 2MB 이하. 서버가 256px 정사각형 webp 로 줄여 저장한다. 키는 사용자 id 가 드러나지 않는 임의 값.
+      description: |
+        png/jpeg/webp, 2MB 이하. 서버가 256px 정사각형 webp 로 줄여 저장한다. 키는 사용자 id 가 드러나지 않는 임의 값.
+        `avatarUrl` 은 운영에서 사진 CDN 의 절대 주소(`https://…`), 개발(로컬 저장)에서는 `/static/avatars/…` 상대 경로다 — 그대로 `<img src>` 에 쓴다.
       requestBody:
         required: true
         content:
@@ -502,7 +504,7 @@ paths:
               required: [file]
               properties:
                 file: { type: string, format: binary }
-      x-error-codes: [AVATAR_TOO_LARGE, AVATAR_UNSUPPORTED_TYPE]
+      x-error-codes: [AVATAR_TOO_LARGE, AVATAR_UNSUPPORTED_TYPE, STORAGE_UNAVAILABLE]
       responses:
         "200":
           description: OK — 바뀐 사용자(`avatarUrl`)
@@ -521,6 +523,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable_503"
     delete:
       tags: [auth]
       summary: 프로필 사진 지우기
@@ -1286,15 +1290,22 @@ paths:
     get:
       tags: [data]
       summary: 내보내기 내려받기 (서명 URL)
-      description: 로그인 헤더 없이 `downloadUrl` 의 서명 토큰으로 받는다. zip.
+      description: |
+        로그인 헤더 없이 `downloadUrl` 의 서명 토큰으로 받는다. zip.
+        운영(객체 저장소)에서는 **307** 로 저장소의 5분짜리 서명 URL 로 보낸다(`Content-Disposition: attachment`) —
+        브라우저 이동(`<a href>`·`window.location`)으로 열면 그대로 받아진다. 개발(로컬 저장)에서는 200 으로 바로 보낸다.
       security: []
-      x-error-codes: [EXPORT_NOT_FOUND, EXPORT_EXPIRED, AUTH_TOKEN_INVALID]
+      x-error-codes: [EXPORT_NOT_FOUND, EXPORT_EXPIRED, AUTH_TOKEN_INVALID, STORAGE_UNAVAILABLE]
       responses:
         "200":
-          description: zip
+          description: zip (로컬 저장)
           content:
             application/zip:
               schema: { type: string, format: binary }
+        "307":
+          description: 객체 저장소의 서명 URL(5분)로 이동
+          headers:
+            Location: { schema: { type: string } }
         "401":
           $ref: "#/components/responses/Unauthorized_401"
         "404":
@@ -1304,6 +1315,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable_503"
 
   /trash/{kind}/{item_id}/restore:
     parameters:
@@ -4841,6 +4854,7 @@ components:
         - `AUTH_OAUTH_PROVIDER_UNAVAILABLE` — [v2, OAuth callback] OAuth provider 일시 장애
         - `EMAIL_DELIVERY_FAILED` — [v2] 메일 서버 발송 실패 (v1: `500 INTERNAL_ERROR`)
         - `CACHE_UNAVAILABLE` — [v2] 캐시(Redis) 장애. 로그인 제한 등 보안 기능은 fail-closed (v1: `500 INTERNAL_ERROR`)
+        - `STORAGE_UNAVAILABLE` — 파일 저장소(객체 저장소·디스크) 장애 (프로필 사진 올리기·내보내기 내려받기)
       content:
         application/json:
           schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -5079,7 +5093,7 @@ components:
           example: Asia/Seoul
           description: IANA timezone identifier — AI 자동 요약은 이 tz 기준 "현지 새벽 1시"에 트리거됨
         displayName: { type: string, nullable: true, description: 없으면 FE 가 이메일 앞부분을 보인다 }
-        avatarUrl: { type: string, nullable: true, example: /static/avatars/k3J9x.webp }
+        avatarUrl: { type: string, nullable: true, example: https://cdn.example.com/k3J9x.webp, description: 운영은 사진 CDN 절대 주소, 로컬 저장은 `/static/avatars/…` }
 
     ApiResponseToken:
       allOf:
